@@ -140,6 +140,9 @@ with right:
     ):
         _go_to("pages/4_MFI_Drafter.py")
 
+if st.button("Seasonal Outlook Drafter", type="primary", key="nav_seasonal_outlook", use_container_width=True):
+    _go_to("pages/5_Seasonal_Outlook_Drafter.py")
+
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")

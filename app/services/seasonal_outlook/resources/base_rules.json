@@ -1,0 +1,487 @@
+{
+  "version": "1.0",
+  "status": "derived_not_yet_tested",
+  "rules": [
+    {
+      "rule_id": "E01",
+      "layer": "extraction",
+      "title": "Leggere il prodotto prima del colore",
+      "instruction_en": "For every image first identify observed, pure forecast, mixed observed+forecast or other; then variable, metric, units, baseline, valid period, issue date if shown, coverage and legend. Read the native title/legend; record uncertainty or a conflict instead of silently borrowing a caption's metadata.",
+      "applicability": "Ogni figura pubblicata",
+      "required_inputs": [
+        "title",
+        "legend",
+        "period"
+      ],
+      "examples": [
+        "2026-05__mena",
+        "2026-01__indonesia_pacific",
+        "2026-06__horn_of_africa"
+      ],
+      "counterexamples": [
+        "2025-12__central_asia: didascalia del prodotto misto lo chiama probabilità"
+      ],
+      "limitations": [
+        "L'emissione e gli anni della climatologia sono spesso assenti; restano null."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "E02",
+      "layer": "extraction",
+      "title": "Mantenere distinti rapporto, probabilità e indice",
+      "instruction_en": "Never interchange percent of mean rainfall, probability of exceeding median, temperature anomaly in Celsius, SPI, NDVI ratio, dry-run days or WAI. Extract each metric on its own scale; derive no millimetres, degree anomalies or area percentages from a probability/ratio map.",
+      "applicability": "Ogni figura",
+      "required_inputs": [
+        "variable",
+        "metric",
+        "legend"
+      ],
+      "examples": [
+        "2026-08__eastern_africa",
+        "2026-08__latin_america_caribbean",
+        "2026-06__horn_of_africa"
+      ],
+      "counterexamples": [
+        "2026-05__southern_africa: 120 mm non leggibili nelle figure disponibili"
+      ],
+      "limitations": [
+        "Nessun raster georeferenziato o griglia numerica in input."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "E03",
+      "layer": "extraction",
+      "title": "Rispettare finestre e granularità temporale",
+      "instruction_en": "Transcribe the full actual time window and precision. Do not call a rolling four-month accumulation March-to-date without supporting dates. One accumulation cannot identify onset timing, dry-spell length, individual extreme events or within-season improvement. Record missing time-series evidence explicitly.",
+      "applicability": "Prodotti con accumulo o affermazioni temporali",
+      "required_inputs": [
+        "period",
+        "aggregation"
+      ],
+      "examples": [
+        "2026-05__horn_of_africa: mesi osservati separati",
+        "2026-05__southern_africa: durata sequenza secca"
+      ],
+      "counterexamples": [
+        "2025-12__horn_of_africa: novembre non isolabile",
+        "2026-06__eastern_africa: giugno-settembre non è un trimestre"
+      ],
+      "limitations": [
+        "Lettura di pattern spaziali permessa; traiettoria temporale solo con finestre adeguate."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "E04",
+      "layer": "extraction",
+      "title": "Separare dati osservati e previsione nel prodotto misto",
+      "instruction_en": "Label observed+forecast products as mixed throughout. Do not infer which subinterval was observed unless explicitly given. A mixed month is neither a wholly observed month nor a pure ten-day forecast, and cannot validate an earlier observed event.",
+      "applicability": "Presenza di almeno un prodotto misto",
+      "required_inputs": [
+        "product_kind",
+        "period"
+      ],
+      "examples": [
+        "2026-05__horn_of_africa",
+        "2026-01__central_asia"
+      ],
+      "counterexamples": [
+        "2025-12__latin_america_caribbean: dicembre detto osservato",
+        "2026-02__southern_africa: siccità in finestra precedente"
+      ],
+      "limitations": [
+        "La separazione interna osservato/previsto è spesso non dichiarata."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "E05",
+      "layer": "extraction",
+      "title": "Localizzare alla scala effettivamente leggibile",
+      "instruction_en": "Describe country/subregional patterns with directional qualifiers and inspect all geographic insets. Preserve uncertainty for unlabeled boundaries; do not invent districts, exact country means, crop areas or population exposure. Use the finest geography that is legible, not the finest geography requested by an imagined narrative.",
+      "applicability": "Ogni mappa",
+      "required_inputs": [
+        "coverage",
+        "borders",
+        "readability"
+      ],
+      "examples": [
+        "2026-08__south_southeast_asia: inset Filippine",
+        "2026-06__south_southeast_asia"
+      ],
+      "counterexamples": [
+        "2026-06__horn_of_africa: Bay senza confini amministrativi"
+      ],
+      "limitations": [
+        "Sagome nazionali piccole o confini deboli richiedono scala più grossolana."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "E06",
+      "layer": "extraction",
+      "title": "Estrarre anche i segnali contrari al messaggio dominante",
+      "instruction_en": "Record the dominant spatial pattern and material wet/dry or warm/cool exceptions visible in each map, including evidence that could weaken a candidate headline. Do not select only pixels supporting a drought or flood story.",
+      "applicability": "Ogni mappa con variazione spaziale",
+      "required_inputs": [
+        "geographic_signals",
+        "legend"
+      ],
+      "examples": [
+        "2026-06__western_africa",
+        "2025-08__latin_america_caribbean"
+      ],
+      "counterexamples": [
+        "2025-12__central_asia: mappa di dicembre più umida omessa",
+        "2026-08__south_southeast_asia: NDVI prevalentemente verde"
+      ],
+      "limitations": [
+        "Un'omissione editoriale non dimostra che il segnale fosse irrilevante."
+      ],
+      "origin": "corpus_pattern"
+    },
+    {
+      "rule_id": "E07",
+      "layer": "extraction",
+      "title": "Limitare la precisione numerica",
+      "instruction_en": "When supported by a legible legend, report a class or range, with its geography. Preserve legend bounds exactly. Do not invent point values or regional averages from colors. If unreadable, retain qualitative direction only or mark the map unreadable and provide no signals.",
+      "applicability": "Ogni figura",
+      "required_inputs": [
+        "legend",
+        "readability"
+      ],
+      "examples": [
+        "2026-06__horn_of_africa: classi WAI",
+        "2026-08__eastern_africa: anomalia termica"
+      ],
+      "counterexamples": [
+        "2026-05__southern_africa: quantità assolute assenti"
+      ],
+      "limitations": [
+        "Le classi variano tra accumuli; non trasferire soglie da un'altra figura."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "A01",
+      "layer": "analysis",
+      "title": "Applicare il ciclo stagionale prima di costruire il messaggio",
+      "instruction_en": "Assign every claim to an eligible season_id. Use each supplied cycle mode. Past-only cycles admit no forecasts or mixed-map evidence, future-only cycles admit no retrospective claims, excluded cycles admit no claims. In a regional section with several cycles, keep scope separate.",
+      "applicability": "Ogni analisi",
+      "required_inputs": [
+        "calendar",
+        "cycle_mode"
+      ],
+      "examples": [
+        "2026-05__southern_africa",
+        "2026-06__horn_of_africa"
+      ],
+      "counterexamples": [
+        "2026-01__horn_of_africa: outlook MAM escluso dal prototipo"
+      ],
+      "limitations": [
+        "Vincolo concordato, non regola desunta come comportamento invariabile degli autori."
+      ],
+      "origin": "user_decision"
+    },
+    {
+      "rule_id": "A02",
+      "layer": "analysis",
+      "title": "Confrontare periodi e indicatori compatibili",
+      "instruction_en": "Compare maps only after checking geography, units, baseline, observed/mixed/forecast status and temporal overlap. For comparable observed periods identify improvement/deterioration; for future periods describe outlook consistency or divergence, not observed change. Different map windows can explain different signs.",
+      "applicability": "Almeno due mappe",
+      "required_inputs": [
+        "map_metadata",
+        "signals"
+      ],
+      "examples": [
+        "2026-05__horn_of_africa",
+        "2026-01__indonesia_pacific"
+      ],
+      "counterexamples": [
+        "2026-02__southern_africa: periodi non sovrapponibili",
+        "2026-01__latin_america_caribbean: pattern non identico fra orizzonti"
+      ],
+      "limitations": [
+        "Non sommare indici o probabilità per ottenere un punteggio climatico."
+      ],
+      "origin": "corpus_pattern"
+    },
+    {
+      "rule_id": "A03",
+      "layer": "analysis",
+      "title": "Leggere la probabilità come incertezza",
+      "instruction_en": "For an above-median probability near 50%, state little directional information, not expected normal totals or a 50% chance of near-normal tercile. A seasonal mean signal does not rule out short extremes. Avoid certain language for probabilistic outlooks and distinguish probability from magnitude.",
+      "applicability": "Presenza di previsione stagionale probabilistica",
+      "required_inputs": [
+        "probability",
+        "legend"
+      ],
+      "examples": [
+        "2026-01__horn_of_africa",
+        "2026-02__southern_africa"
+      ],
+      "counterexamples": [
+        "2025-12__mena: normalità non dimostrata",
+        "2025-08__latin_america_caribbean: recupero non garantito"
+      ],
+      "limitations": [
+        "Classi 40-60% non equivalgono a una stima della skill del modello."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "A04",
+      "layer": "analysis",
+      "title": "Dare priorità a contrasti geograficamente coerenti",
+      "instruction_en": "Group contiguous or climatically coherent areas with similar signals, state the regional pattern, then name important exceptions. Preserve distinct subregions/cycles, such as Sahel versus Gulf of Guinea or Central America versus South America; avoid one sign for the entire region.",
+      "applicability": "Ogni analisi regionale",
+      "required_inputs": [
+        "geographic_signals",
+        "calendar"
+      ],
+      "examples": [
+        "2026-06__western_africa",
+        "2026-02__latin_america_caribbean",
+        "2026-06__south_southeast_asia"
+      ],
+      "counterexamples": [
+        "2026-01__latin_america_caribbean: generalizzazione est-ovest eccessiva"
+      ],
+      "limitations": [
+        "La rilevanza agricola non si misura dalla sola superficie colorata."
+      ],
+      "origin": "corpus_pattern"
+    },
+    {
+      "rule_id": "A05",
+      "layer": "analysis",
+      "title": "Separare pericolo climatico, esposizione e impatto",
+      "instruction_en": "Rainfall deficits/excess and heat are climatic evidence. Crop loss, flooded population, food insecurity, field damage and irrigation failure require independent exposure/impact evidence. With maps and rainy calendars alone, give only bounded climate implications and list the specific missing contextual input; never assert observed losses from colors.",
+      "applicability": "Ogni interpretazione d'impatto",
+      "required_inputs": [
+        "climate_signals",
+        "context_provenance"
+      ],
+      "examples": [
+        "2026-02__central_asia",
+        "2026-06__horn_of_africa"
+      ],
+      "counterexamples": [
+        "2026-05__southern_africa: raccolti non misurati",
+        "2025-10__eastern_africa: stime OCHA/GEOGLAM"
+      ],
+      "limitations": [
+        "Il calendario delle piogge non identifica semine, fasi colturali o sistemi irrigui."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "A06",
+      "layer": "analysis",
+      "title": "Valutare persistenza, sollievo e recupero senza prometterli",
+      "instruction_en": "When observed deficits and eligible future maps overlap geographically, describe whether the outlook may prolong or ease the rainfall anomaly. Do not claim full soil, aquifer, vegetation or production recovery without their baselines and response information. A wetter outlook can coexist with antecedent stress.",
+      "applicability": "Osservazioni e previsioni nella stessa area",
+      "required_inputs": [
+        "observed_signals",
+        "future_signals",
+        "periods"
+      ],
+      "examples": [
+        "2026-01__central_asia",
+        "2026-01__indonesia_pacific",
+        "2026-06__latin_america_caribbean"
+      ],
+      "counterexamples": [
+        "2025-12__central_asia: sollievo a breve non discusso"
+      ],
+      "limitations": [
+        "La probabilità non quantifica quanta acqua è necessaria al recupero."
+      ],
+      "origin": "corpus_pattern"
+    },
+    {
+      "rule_id": "A07",
+      "layer": "analysis",
+      "title": "Usare temperatura e vegetazione per un contributo distinto",
+      "instruction_en": "If temperature or NDVI is supplied, extract it even when rainfall dominates. Use temperature in drafting when its legible spatial signal adds material climate information; discuss heat-related mechanisms only conditionally. NDVI indicates greenness, not crop yield; mismatch with rainfall may reflect different windows or land cover. Record why an indicator is unused.",
+      "applicability": "Presenza di temperatura, NDVI o WAI",
+      "required_inputs": [
+        "non_rainfall_indicator",
+        "period",
+        "spatial_overlap"
+      ],
+      "examples": [
+        "2026-08__eastern_africa",
+        "2026-02__central_asia",
+        "2026-08__south_southeast_asia"
+      ],
+      "counterexamples": [
+        "2026-06__south_southeast_asia: calore citato senza mappa"
+      ],
+      "limitations": [
+        "Criterio qualitativo candidato, nessuna soglia termica empiricamente validata nel campione."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "A08",
+      "layer": "analysis",
+      "title": "Non ricostruire driver o revisioni senza input",
+      "instruction_en": "Do not assert current ENSO/IOD state, teleconnection effects, cyclone activity, historical records or revisions of forecast confidence unless that information is supplied with provenance. A change between forecast target periods is not a revision for the same target.",
+      "applicability": "Driver, record o revisioni invocati",
+      "required_inputs": [
+        "dated_context",
+        "matching_forecast_issues"
+      ],
+      "examples": [
+        "2025-10__horn_of_africa: grafico IOD separato",
+        "2025-12__southern_africa"
+      ],
+      "counterexamples": [
+        "2026-02__southern_africa: record ciclone da fonte esterna"
+      ],
+      "limitations": [
+        "Le fonti contestuali sono censite ma non incluse nel benchmark basato sulle mappe."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "A09",
+      "layer": "analysis",
+      "title": "Esplicitare i vuoti informativi",
+      "instruction_en": "When an important regional question lacks a suitable observed window, forecast, indicator or context, name the missing input and narrow the analysis. Do not fill it from remembered reports, outside facts or a different product. A supplied calendar establishes seasonal timing only.",
+      "applicability": "Ogni analisi",
+      "required_inputs": [
+        "input_inventory",
+        "coverage_gaps"
+      ],
+      "examples": [
+        "2026-08__western_africa: breve termine non mostrato",
+        "2026-05__southern_africa: accumulo stagionale assente"
+      ],
+      "counterexamples": [
+        "2025-12__horn_of_africa: vegetazione non mostrata"
+      ],
+      "limitations": [
+        "Assenza nella pagina non implica assenza nei sistemi usati dall'analista WFP."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "W01",
+      "layer": "writing",
+      "title": "Titolo centrato sul segnale sostenibile principale",
+      "instruction_en": "Write a short informative English headline reflecting the most consequential map-supported regional pattern or contrast within the eligible cycle. Do not make unprovided harvest, humanitarian or disaster claims the headline. If evidence is inadequate, say so.",
+      "applicability": "Ogni bozza",
+      "required_inputs": [
+        "priorities",
+        "supported_claims"
+      ],
+      "examples": [
+        "2026-06__western_africa",
+        "2026-01__indonesia_pacific"
+      ],
+      "counterexamples": [
+        "2026-05__southern_africa: titolo sui raccolti richiede contesto"
+      ],
+      "limitations": [
+        "Conseguenze umanitarie possono cambiare la priorità editoriale quando disponibili."
+      ],
+      "origin": "corpus_pattern"
+    },
+    {
+      "rule_id": "W02",
+      "layer": "writing",
+      "title": "Ordinare stato, contrasto e prospettiva",
+      "instruction_en": "Within each eligible subregion/cycle, start with the current/observed seasonal situation when permitted, highlight the key geographic contrast, then describe short and seasonal outlooks and a bounded implication. Adapt to future-only or past-only mode; do not force absent sections.",
+      "applicability": "Ogni bozza",
+      "required_inputs": [
+        "calendar",
+        "claims"
+      ],
+      "examples": [
+        "2026-05__horn_of_africa",
+        "2026-01__central_asia",
+        "2026-06__western_africa"
+      ],
+      "counterexamples": [
+        "2026-01__horn_of_africa: ordine storico diverso dal vincolo prototipo"
+      ],
+      "limitations": [
+        "Un ordine flessibile, non un obbligo di tre paragrafi o di lunghezza costante."
+      ],
+      "origin": "corpus_pattern"
+    },
+    {
+      "rule_id": "W03",
+      "layer": "writing",
+      "title": "Collegare ogni affermazione all'evidenza",
+      "instruction_en": "Draft short paragraphs in English and list their atomic claim IDs. Each claim must cite evidence IDs and applicable rule IDs, identify its cycle, period and geography, and preserve certainty. Do not add new facts in headlines, priority reasons or paragraph transitions that are absent from the claim ledger.",
+      "applicability": "Ogni bozza",
+      "required_inputs": [
+        "evidence_ids",
+        "claim_ids",
+        "season_ids"
+      ],
+      "examples": [
+        "2026-08__eastern_africa: figure numerate",
+        "2026-06__horn_of_africa: WAI nominato"
+      ],
+      "counterexamples": [
+        "2026-05__southern_africa: diverse affermazioni senza figura corrispondente"
+      ],
+      "limitations": [
+        "Il controllo degli ID non garantisce che una figura sostenga semanticamente una frase; serve revisione."
+      ],
+      "origin": "semantic_constraint"
+    },
+    {
+      "rule_id": "W04",
+      "layer": "writing",
+      "title": "Mantenere qualificatori e incertezza",
+      "instruction_en": "Retain qualifiers such as parts of, northern, localized, likely or may. Distinguish observed conditions, forecast likelihood and interpretation in wording. Avoid turning local patches into whole-country conditions, weak probability into certainty, or climate risk into an observed event.",
+      "applicability": "Ogni bozza",
+      "required_inputs": [
+        "geography",
+        "certainty",
+        "product_kind"
+      ],
+      "examples": [
+        "2026-08__western_africa",
+        "2026-01__southern_africa"
+      ],
+      "counterexamples": [
+        "2026-01__latin_america_caribbean: much of the remainder oltre il segnale"
+      ],
+      "limitations": [
+        "Nessuna imitazione degli errori del riferimento editoriale."
+      ],
+      "origin": "corpus_pattern"
+    },
+    {
+      "rule_id": "W05",
+      "layer": "writing",
+      "title": "Selezionare e motivare senza inventare priorità operative",
+      "instruction_en": "Prefer a compact account of dominant supported signals and material exceptions over a catalogue of every pixel. Keep meaningful opposing evidence. Report unused indicators and missing context in structured fields. Do not invent action recommendations, crop calendars or beneficiary numbers to resemble a published report.",
+      "applicability": "Ogni bozza",
+      "required_inputs": [
+        "signal_inventory",
+        "missing_context"
+      ],
+      "examples": [
+        "2026-06__western_africa",
+        "2026-08__south_southeast_asia"
+      ],
+      "counterexamples": [
+        "2025-12__central_asia: omissione segnale opposto"
+      ],
+      "limitations": [
+        "Selezione editoriale proposta; va verificata con analisti e test, non misurata come accordo lessicale."
+      ],
+      "origin": "corpus_pattern"
+    }
+  ]
+}

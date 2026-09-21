@@ -1,0 +1,98 @@
+{
+  "profile_id": "glm_prompt_v2",
+  "applies_to_arm": "rules",
+  "source": "pattern_audit/prompt_candidates.md",
+  "source_sha256": "6084b61996e1702100551eeb40bbd7ed498f906565a0fd4ca145aad6f9793093",
+  "rules": [
+    {
+      "rule_id": "G2A01",
+      "layer": "analysis",
+      "title": "Stato del prodotto coerente nel JSON e nel testo",
+      "instruction_en": "Before drafting each claim, inspect product_kind for every linked map. In the current schema, a statement reporting a mixed observed-plus-forecast map as a whole must use claim_kind=\"interpretation\", never \"observation\", and certainty must not be \"observed\". Choose the remaining certainty value to match the supported interpretation. A mixed total is not a pure forecast either. If the observed and forecast subintervals are not supplied separately, do not reconstruct them or assign their contributions.\n\nIntroduce each mixed-product narrative passage as a combined observed-plus-forecast signal, then retain that frame in its statements and any headline based on it. Use wording such as \"the mixed product indicates\". Do not describe the full mixed interval as \"recorded\", \"received\", \"observed\" or a verified historical outcome. A caveat elsewhere does not repair an assertion of observed totals. Pure observed and pure forecast products retain their own status. If linked products have different status, preserve the distinction in an interpretation rather than collapsing them into an observed claim.",
+      "applicability": "Stesura regionale dalle evidenze Kimi",
+      "required_inputs": [
+        "evidence",
+        "calendar",
+        "scope"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata; efficacia da misurare in regressione."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "G2A02",
+      "layer": "analysis",
+      "title": "Conservazione di geografia, numeri, periodi e incertezza",
+      "instruction_en": "For every atomic claim, verify geography, valid period, product status, metric, units, class bounds, qualifiers and limitations against its linked evidence. Do not enlarge the area, strengthen certainty, change numbers, or drop an extreme that defines the signal. Preserve the distinction between a core and its surrounding classes. If precision cannot be carried faithfully into the sentence, use a less precise supported description instead of a different numerical range.\n\nPreserve disagreement and neutral exceptions within an area. Do not turn \"parts of\" into a whole-country condition or turn weak exceedance probability into expected normal rainfall totals. If the evidence is inconsistent or insufficient, narrow the claim and record the limitation; you do not have the images and must not repair geographic or numerical readings from general knowledge.\n\nCompare signals only for matching geographic scope and explicitly identified periods and metrics. A future or mixed map can support a conditional outlook or agreement in spatial pattern, not an observed trend. Two accumulated windows do not establish a continuous dry spell, onset date or persistence within either window. Temperature and rainfall windows that differ must keep their dates; geographic overlap alone does not establish temporal coincidence or an observed impact.",
+      "applicability": "Stesura regionale dalle evidenze Kimi",
+      "required_inputs": [
+        "evidence",
+        "calendar",
+        "scope"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata; efficacia da misurare in regressione."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "G2A03",
+      "layer": "analysis",
+      "title": "Selezione motivata dei segnali materiali",
+      "instruction_en": "Before selecting paragraphs, inspect all eligible supplied signals, including corrected or newly added signals. Give a signal priority when it materially changes the dominant message, qualifies a broad geographic statement, identifies a strong core, or changes the outlook for an in-scope area/cycle. Neutral and opposing signals can qualify a regional claim even if they are not the dominant colour.\n\nFor each material eligible signal, either represent it faithfully in a claim and paragraph or record its evidence_id and a specific exclusion reason in intentional_omissions. Do not say information is absent if a usable supplied signal contains it. Do not force every signal into the text: redundant details, unresolved readings and areas outside the analyst's scope can be excluded. Do not infer editorial scope solely from the map footprint. When scope is ambiguous, state that limitation rather than invent a seasonal assignment.\n\nUse the supplied rainy-season calendar to establish whether the eligible cycle is approaching, underway or at its last month, where this affects the message. Do not infer crop stages from rainy-season months. Preserve the supplied mode: the last rainy month is not automatically past_only. Keep the narrative concise by removing redundancy before dropping a contrast that would make a broad statement misleading.",
+      "applicability": "Stesura regionale dalle evidenze Kimi",
+      "required_inputs": [
+        "evidence",
+        "calendar",
+        "scope"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata; efficacia da misurare in regressione."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "G2W01",
+      "layer": "writing",
+      "title": "Coerenza di titolo, priorità e paragrafi",
+      "instruction_en": "After composing the narrative, check every factual assertion in the headline, priority reasons, paragraphs and limitations against the claim/evidence inventory. Check negations and exclusivity words such as only, throughout, all and persistent, as well as dates, place names, magnitudes and impacts. The headline must retain material uncertainty and must not broaden the dates or spatial scope of its linked claims. If compression changes the meaning, weaken or rewrite the headline.\n\nEvery factual addition in prose must have a supported atomic claim and exact supplied evidence IDs. Do not invent a data provider, crop zone, crop stage, climatic driver or impact to connect sentences. A rainy-season label is not a map of cropping exposure. A monthly warm anomaly does not establish observed heat stress or crop damage. Keep climate implications conditional and specific to the supplied evidence. Missing contextual information belongs in missing_context rather than in factual narrative.",
+      "applicability": "Stesura regionale dalle evidenze Kimi",
+      "required_inputs": [
+        "evidence",
+        "calendar",
+        "scope"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata; efficacia da misurare in regressione."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "G2W02",
+      "layer": "writing",
+      "title": "Output completo e riferimenti esatti",
+      "instruction_en": "Copy evidence IDs exactly as supplied; do not abbreviate or reconstruct them. Every paragraph claim ID, headline claim ID and priority evidence ID must resolve to an existing item. If eligible usable evidence supports a claim, return supported claims and at least one linked narrative paragraph. If none does, return the permitted empty analysis with a specific explanation. Do not return only a headline or priorities without their supporting claims and text. Preserve the requested JSON schema; do not invent fields to carry this check.",
+      "applicability": "Stesura regionale dalle evidenze Kimi",
+      "required_inputs": [
+        "evidence",
+        "calendar",
+        "scope"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata; efficacia da misurare in regressione."
+      ],
+      "origin": "candidate"
+    }
+  ]
+}

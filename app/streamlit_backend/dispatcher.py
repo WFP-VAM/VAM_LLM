@@ -2832,6 +2832,7 @@ def dispatch_request(
                     {"id": "price-validator", "name": "Price Data Validator", "endpoint": "/price-validator/validate-file"},
                     {"id": "market-monitor", "name": "Market Monitor Generator", "endpoint": "/market-monitor/generate"},
                     {"id": "mfi-drafter", "name": "MFI Report Generator", "endpoint": "/mfi-drafter/generate"},
+                    {"id": "seasonal-outlook", "name": "Seasonal Outlook Drafter", "endpoint": "/seasonal-outlook/info"},
                 ],
             }
         )
@@ -2843,6 +2844,15 @@ def dispatch_request(
     remainder = parts[1:]
 
     try:
+        if service == "seasonal-outlook":
+            from app.services.seasonal_outlook.api import handle
+            reply = handle(method, remainder, json_body if json_body is not None else data, merged_params, _extract_file(files, 'file'))
+            if reply.data is not None:
+                return _json_response(reply.data, status_code=reply.status)
+            headers = {'Content-Type': reply.mime}
+            if reply.filename:
+                headers['Content-Disposition'] = f'attachment; filename="{reply.filename}"'
+            return LocalResponse(status_code=reply.status, headers=headers, content=reply.content)
         if service == "mfi-validator":
             return _dispatch_mfi_validator(
                 method,

@@ -19,5 +19,6 @@ Babel
 python-docx
 google-cloud-firestore
 google-cloud-storage
+google-genai>=1.75.0,<2
 openpyxl
 streamlit

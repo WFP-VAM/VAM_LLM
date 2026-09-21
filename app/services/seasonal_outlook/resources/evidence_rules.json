@@ -1,0 +1,97 @@
+{
+  "profile_id": "kimi_prompt_v2",
+  "created_on": "2026-09-16",
+  "applies_to_arm": "rules",
+  "source": "pattern_audit/prompt_candidates.md",
+  "source_sha256": "6084b61996e1702100551eeb40bbd7ed498f906565a0fd4ca145aad6f9793093",
+  "stages": {
+    "extraction": [
+      "K2E01",
+      "K2E02"
+    ],
+    "review": [
+      "K2E01",
+      "K2E02",
+      "K2R01"
+    ],
+    "refinement": [
+      "K2E01",
+      "K2E02",
+      "K2R02"
+    ]
+  },
+  "rules": [
+    {
+      "rule_id": "K2E01",
+      "layer": "extraction",
+      "title": "Dominio, localizzazione e interpretazione del bianco",
+      "instruction_en": "For each figure, distinguish its data footprint from its background before assigning geographic signals. Country outlines can be visible outside the data footprint; an outline alone does not establish coverage. Read the legend for this figure. A white area can encode a valid neutral or weak-signal class inside the footprint; grey can encode lakes or background. Do not assign no-data, normal conditions, or a probability class from colour alone. If the footprint and legend cannot resolve the meaning, record the ambiguity rather than choose a default.\n\nFor each signal, anchor location_in_figure to visible borders, coastlines or identifiable map features in this same figure. Name a country/subregion only when the feature can be associated with it. Use a coarser identifiable area or an unassigned visual location when it cannot. Never transfer a country attribution from a neighbouring patch, another figure, or a familiar regional narrative. Approximate wording does not justify an unsupported country attribution. Do not invent coordinates, named districts or whole-country coverage.",
+      "applicability": "Ogni mappa nel passaggio Kimi pertinente",
+      "required_inputs": [
+        "map_images",
+        "legend",
+        "geographic_coverage"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata non ancora validata con nuove inferenze."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "K2E02",
+      "layer": "extraction",
+      "title": "Classi, estremi e contrasti materiali",
+      "instruction_en": "Read the legend independently for each figure. magnitude_as_read and legend_class must preserve the literal class boundaries, units, threshold direction and the associated geography. Distinguish the main class from an embedded extreme or neutral/opposite-sign patch; do not replace them with a single broad range that hides this distinction. A range spanning several classes is an envelope, not a measured regional average or a newly defined legend bin.\n\nInspect the visible footprint for the dominant signal and for exceptions that would change its direction, spatial extent, strength or relevant seasonal interpretation. Include neutral/weak-signal areas when they limit a broader claim, as well as wet/dry and warm/cool exceptions. Record these as separate located signals when legible. Do not create a country-by-country inventory of unsupported details or treat every small pixel as material. A probability of exceeding the median is not a rainfall amount, deficit magnitude, or probability of the near-normal tercile.",
+      "applicability": "Ogni mappa nel passaggio Kimi pertinente",
+      "required_inputs": [
+        "map_images",
+        "legend",
+        "geographic_coverage"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata non ancora validata con nuove inferenze."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "K2R01",
+      "layer": "extraction",
+      "title": "Base visiva delle obiezioni del revisore",
+      "instruction_en": "Compare each disputed assertion with the actual image. In visual_basis, identify the visible class and map location supporting the objection, and distinguish a confirmed mismatch from an unresolved reading. A request for more cautious wording is not evidence that a location or number has been corrected. New omissions require the same visual standard as existing signals. Do not label an area as normal, missing or outside coverage without checking both this figure's legend and footprint. It is valid to report no correction for a field or signal.",
+      "applicability": "Ogni mappa nel passaggio Kimi pertinente",
+      "required_inputs": [
+        "map_images",
+        "legend",
+        "geographic_coverage"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata non ancora validata con nuove inferenze."
+      ],
+      "origin": "candidate"
+    },
+    {
+      "rule_id": "K2R02",
+      "layer": "extraction",
+      "title": "Accettazione motivata o rifiuto della correzione",
+      "instruction_en": "Treat every proposed correction as a hypothesis. Check its geographic anchor, legend class and product status against the original image. In the existing issue-resolution rationale, briefly identify the disputed assertion, the replacement if any, and the visible basis for accepting or rejecting it. Mark corrected only when V2 implements a supported resolution of the specific issue. Adding approximately, possibly, or a general limitation does not resolve a wrong sign, class or country. Use declined when the proposal conflicts with the image; use unresolved when the image cannot decide. Do not create a plausible replacement merely to close an issue. Preserve correct signals and their IDs, and check that new signals do not contradict confirmed signals from the same figure.",
+      "applicability": "Ogni mappa nel passaggio Kimi pertinente",
+      "required_inputs": [
+        "map_images",
+        "legend",
+        "geographic_coverage"
+      ],
+      "examples": [],
+      "counterexamples": [],
+      "limitations": [
+        "Istruzione candidata non ancora validata con nuove inferenze."
+      ],
+      "origin": "candidate"
+    }
+  ]
+}

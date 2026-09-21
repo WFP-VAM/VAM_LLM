@@ -1,0 +1,449 @@
+{
+  "version": "0.1",
+  "status": "prototype calendar; one-month editorial windows specified by user; historical differences documented",
+  "report_date_is_availability_cutoff": true,
+  "postseason_mode": "past_only_no_exceptions",
+  "seasonal_input_variables": [
+    "rainfall",
+    "air_temperature"
+  ],
+  "observed_baseline_metric": "percent_of_average",
+  "seasonal_lead_selection": "earliest_available_quarter_in_latest_eligible_issue",
+  "regions": [
+    {
+      "region_id": "horn_of_africa",
+      "label": "Horn of Africa",
+      "map_codes": [
+        "HOA"
+      ],
+      "observed_prefixes": [
+        "maps/RBN/HOA/"
+      ],
+      "seasons": [
+        {
+          "season_id": "long_rains_belg",
+          "label": "Long Rains / Ethiopia Belg",
+          "rainy_months": [
+            3,
+            4,
+            5
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 5,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        },
+        {
+          "season_id": "short_rains",
+          "label": "Short Rains",
+          "rainy_months": [
+            10,
+            11,
+            12
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 5,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "eastern_africa",
+      "label": "Eastern Africa - Sudans and Ethiopia Meher",
+      "map_codes": [
+        "AFE"
+      ],
+      "optional_map_codes": [
+        "AFY"
+      ],
+      "observed_prefixes": [
+        "maps/RBN/AFE/"
+      ],
+      "seasons": [
+        {
+          "season_id": "sudans_meher",
+          "label": "Sudans / Ethiopia Meher",
+          "rainy_months": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 9,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "southern_africa",
+      "label": "Southern Africa",
+      "map_codes": [
+        "AFS"
+      ],
+      "observed_prefixes": [
+        "maps/RBJ/AFS/"
+      ],
+      "seasons": [
+        {
+          "season_id": "main",
+          "label": "Main rainy season",
+          "rainy_months": [
+            10,
+            11,
+            12,
+            1,
+            2,
+            3,
+            4
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 6,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "western_africa",
+      "label": "Western Africa",
+      "map_codes": [
+        "AFW"
+      ],
+      "observed_prefixes": [
+        "maps/RBD/AFW/"
+      ],
+      "seasons": [
+        {
+          "season_id": "sahel",
+          "label": "Sahel",
+          "rainy_months": [
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 10,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        },
+        {
+          "season_id": "gulf_of_guinea",
+          "label": "Gulf of Guinea",
+          "rainy_months": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 10,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "mena",
+      "label": "Middle East and Northern Africa",
+      "map_codes": [
+        "BCN"
+      ],
+      "observed_prefixes": [
+        "maps/RBC/BCN/"
+      ],
+      "seasons": [
+        {
+          "season_id": "winter",
+          "label": "Winter rainy season",
+          "rainy_months": [
+            10,
+            11,
+            12,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 8,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "central_asia",
+      "label": "Central Asia",
+      "map_codes": [
+        "ASC"
+      ],
+      "observed_prefixes": [
+        "maps/HQ/ASC/"
+      ],
+      "seasons": [
+        {
+          "season_id": "winter",
+          "label": "Winter precipitation season",
+          "rainy_months": [
+            10,
+            11,
+            12,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 7,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "south_southeast_asia",
+      "label": "South and Southeast Asia",
+      "map_codes": [
+        "ASE"
+      ],
+      "observed_prefixes": [
+        "maps/HQ/ASE/"
+      ],
+      "seasons": [
+        {
+          "season_id": "south_asia",
+          "label": "South Asia",
+          "rainy_months": [
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 12,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        },
+        {
+          "season_id": "southeast_asia",
+          "label": "Southeast Asia",
+          "rainy_months": [
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 12,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "indonesia_pacific",
+      "label": "Indonesia and the Pacific",
+      "map_codes": [
+        "ASP"
+      ],
+      "observed_prefixes": [
+        "maps/HQ/ASP/"
+      ],
+      "seasons": [
+        {
+          "season_id": "wet",
+          "label": "Wet season",
+          "rainy_months": [
+            10,
+            11,
+            12,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026-02.pdf",
+            "page": 7,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    },
+    {
+      "region_id": "latin_america_caribbean",
+      "label": "Latin America and the Caribbean",
+      "map_codes": [
+        "AMX",
+        "AMC",
+        "AMS"
+      ],
+      "map_selection_note": "Choose coverage for the active subregions; these codes are not interchangeable.",
+      "observed_prefixes": [
+        "maps/RBP/AMX/",
+        "maps/RBP/AMC/",
+        "maps/RBP/AMS/"
+      ],
+      "seasons": [
+        {
+          "season_id": "primera",
+          "label": "Central America Primera",
+          "rainy_months": [
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 11,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        },
+        {
+          "season_id": "postrera",
+          "label": "Central America Postrera",
+          "rainy_months": [
+            9,
+            10,
+            11,
+            12
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 11,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        },
+        {
+          "season_id": "south_america_northern",
+          "label": "South America Northern",
+          "rainy_months": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 11,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        },
+        {
+          "season_id": "south_america_southern",
+          "label": "South America Southern",
+          "rainy_months": [
+            11,
+            12,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "source": {
+            "file": "Reports/Global_Seasonal_Outlook_2026_05.pdf",
+            "page": 11,
+            "evidence": "highlighted calendar cells, visually inspected"
+          },
+          "preseason_lead_months": 1,
+          "closing_review_months": 1,
+          "editorial_window_status": "prototype rule specified by user; not a universally observed report convention"
+        }
+      ]
+    }
+  ],
+  "short_term_input_products": [
+    "pure_forecast_10_days_percent_of_average",
+    "observed_plus_forecast_1_month_percent_of_average"
+  ],
+  "seasonal_lead_selection_status": "explicitly confirmed prototype simplification, after review of historical exceptions",
+  "editorial_window_source": {
+    "type": "user_clarification",
+    "date": "2026-09-14",
+    "rule": "previous calendar month: future_only; season months inclusive: past_and_future; following calendar month: past_only; other months: excluded",
+    "historical_validation": "verifica_finestra_mensile.md"
+  }
+}
