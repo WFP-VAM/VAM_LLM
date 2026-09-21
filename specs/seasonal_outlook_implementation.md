@@ -8,6 +8,8 @@ Activation updated on 21 September 2026 at the user's request: Seasonal is **ena
 
 `app/services/seasonal_outlook` owns input preparation, contracts, prompts, provider, persistence, execution and exports. Both the `/seasonal-outlook` FastAPI router and the Streamlit dispatcher call `api.handle` and the same `Service`. `pages/5_Seasonal_Outlook_Drafter.py` is reachable from the home page and uses the existing branding and assistance links.
 
+The Input package tab accepts all maps in one selection and saves them with one **Save selected maps** action. Category, issue date and notes are optional, in collapsed per-map panels. Explicit filename prefixes can suggest a category; Gemini identifies unclassified products during image extraction. Calendar and checklist details are also collapsible. The UI validates the entire selection, including already saved maps, before sending the existing individual upload requests with successive expected revisions. An interrupted batch retains the selection and requires another explicit save; images already present are recognized by content hash and skipped, including when a persistence acknowledgement was lost. Extraction is unavailable while selected maps remain unsaved or invalid. This change requires only an application image update, with no new cloud resources or API routes.
+
 The explicit stage graph is extraction → visual review → refinement → analyst pause. Feedback produces another evidence version and another pause. Confirming the current version reserves drafting → textual review → complete redraft. Each stage constructs fresh input. Report requests contain only the confirmed evidence, calendar, scientific/editorial rules and, where needed, the first draft and textual review. They contain no images or original analyst comments. Using one model does not make its reviews independent verification.
 
 The port preserves prototype scientific rules and rule IDs, identifier normalization, dynamically constrained references, calendar modes, observed/forecast/mixed distinctions, editorial instructions and AFY scope. The bundled calendar includes the AFY Eastern Africa/Yemen extension separately from Horn of Africa. Rule metadata retains original experimental provenance; Kimi/GLM provider code and local filesystem workers are not imported. No runtime resource is read from the prototype or a Windows path.
@@ -86,6 +88,7 @@ Local verification commands:
 
 ```powershell
 .\venv\Scripts\python.exe -m pytest tests\test_seasonal_outlook.py -q
+.\venv\Scripts\python.exe -m pytest tests\test_seasonal_upload_ui.py -q
 .\venv\Scripts\python.exe -m pytest tests -q
 ```
 
@@ -112,6 +115,8 @@ Live GCP acceptance is deliberately separate from offline synthetic fixtures. In
 - Record analyst acceptance and GCP observations for the active deployment. Activation alone is not evidence that these checks passed. Prototype local-run import and automatic map retrieval remain out of scope.
 
 ## Local verification record
+
+Batch-upload update on 21 September 2026: **34 Seasonal tests passed** (48.36 seconds), including 11 new UI/upload cases. Covered optional per-map metadata, sequential revision checks, interruptions before persistence, lost acknowledgements after persistence, concurrent analysts, duplicate/corrupt/animated/oversized images, package limits, and reopening saved selections without uploading again. A subsequent focused run of all three interruption scenarios passed with an additional assertion that unsaved map notes survive recovery. These checks use the actual application service with an in-memory store and no cloud calls or live inference.
 
 Rechecked on 21 September 2026 after changing the activation default: **23 Seasonal tests passed** (30.45 seconds), including enabled-by-default behavior, explicit disablement and prevention of new runs without company configuration. No cloud calls were made.
 

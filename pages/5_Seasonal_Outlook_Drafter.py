@@ -7,8 +7,9 @@ import streamlit as st
 from streamlit_shared import (apply_wfp_theme, render_wfp_sidebar_logo, render_onboarding_sidebar_button,
     render_instructions_sidebar_button, render_bug_report_sidebar_link, render_bug_report_header_link,
     request_json, request_bytes, safe_show_error)
-from app.services.seasonal_outlook.inputs import calendar_for, checklist, region_option, suggested_product
+from app.services.seasonal_outlook.inputs import calendar_for, checklist, region_option
 from app.services.seasonal_outlook.ui import evidence_panel, differences, analysis_view, review_view
+from app.services.seasonal_outlook.upload_ui import map_upload_panel
 from app.services.seasonal_outlook.science.refinement_schemas import evidence_diff
 
 st.set_page_config(page_title='Seasonal Outlook Drafter', layout='wide')
@@ -156,32 +157,19 @@ evidence_tab, report_tab, input_tab = st.tabs(['Evidence and analyst review', 'R
 with input_tab:
     selected_region = next(r for r in info['regions'] if r['region_id'] == run['region_id'])
     calendar = calendar_for(selected_region, date.fromisoformat(run['report_date']))
-    st.dataframe(calendar, hide_index=True)
-    supplied = {m['product'] for m in run['maps']}
-    st.write('Product checklist')
-    for p in checklist(calendar):
-        st.write(('✓ ' if p in supplied else '○ ') + info['products'][p])
+    with st.expander('Seasonal calendar and expected products'):
+        st.dataframe(calendar, hide_index=True)
+        supplied = {m['product'] for m in run['maps']}
+        st.write('Product checklist')
+        for p in checklist(calendar):
+            st.write(('✓ ' if p in supplied else '○ ') + info['products'][p])
+        st.caption('This checklist reflects declared categories. Unclassified maps are identified during extraction.')
     st.caption('PNG, JPEG or static WebP. At most 12 maps, 30 MB per file, 50 MB combined and 45 million pixels per image.')
     for m in run['maps']:
         st.write(m['name'] + ' · ' + info['products'][m['product']])
     if run['status'] == 'preparing':
-        image = st.file_uploader('Add one original map', type=['png', 'jpg', 'jpeg', 'webp'], key=f'seasonal_upload_{len(run["maps"])}')
-        product_ids = list(info['products'])
-        suggested = suggested_product(image.name) if image else 'other'
-        with st.form('seasonal_map_metadata'):
-            product = st.selectbox('Product category', product_ids, index=product_ids.index(suggested), format_func=info['products'].get)
-            issue = st.date_input('Issue date if known', value=None, max_value=date.fromisoformat(run['report_date']))
-            note = st.text_area('Map note', max_chars=10000)
-            upload = st.form_submit_button('Save map', disabled=not enabled or image is None)
-        if upload:
-            data = dict(product=product, issue_date=issue.isoformat() if issue else '', note=note)
-            data.update(request_id=operation_id(run, 'map', dict(**data, sha256=hashlib.sha256(image.getvalue()).hexdigest())), expected_revision=run['revision'])
-            try:
-                request_json('POST', f'{BASE}/runs/{run_id}/maps', data=data, files={'file': (image.name, image.getvalue(), image.type)}, timeout=120)
-                st.rerun()
-            except Exception as exc:
-                safe_show_error(exc)
-        if st.button('Extract and review evidence', type='primary', disabled=not enabled or not run['maps']):
+        unsaved_maps = map_upload_panel(run, info, request_json)
+        if st.button('Extract and review evidence', type='primary', disabled=not enabled or not run['maps'] or unsaved_maps):
             act(run, 'extract')
     if run['maps']:
         with st.expander('Input manifest'):
