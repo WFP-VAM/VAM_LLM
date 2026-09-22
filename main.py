@@ -3,8 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
 
-from app.services.mfi_validator.router import router as mfi_validator_router
-from app.services.price_validator.router import router as price_validator_router
 from app.services.market_monitor.router import router as market_monitor_router
 from app.services.mfi_drafter.router import router as mfi_drafter_router
 from app.services.seasonal_outlook.router import router as seasonal_outlook_router
@@ -18,8 +16,8 @@ logging.getLogger().setLevel(logging.INFO)
 _fastapi_root_path = (os.getenv("FASTAPI_ROOT_PATH") or "").strip()
 
 app = FastAPI(
-    title="WFP Data Tools API",
-    description="Backend API per validazione dati e generazione report WFP",
+    title="VAM LLM Report Drafting API",
+    description="Backend API for WFP market and food security report drafting",
     version="1.0.0",
     root_path=_fastapi_root_path or "",
 )
@@ -44,8 +42,6 @@ app.add_middleware(
 )
 
 # 🚦 Smistamento ai servizi
-app.include_router(mfi_validator_router, prefix="/mfi-validator", tags=["MFI Validator"])
-app.include_router(price_validator_router, prefix="/price-validator", tags=["Price Validator"])
 app.include_router(market_monitor_router, prefix="/market-monitor", tags=["Market Monitor"])
 app.include_router(mfi_drafter_router, prefix="/mfi-drafter", tags=["MFI Drafter"])
 app.include_router(seasonal_outlook_router, prefix="/seasonal-outlook", tags=["Seasonal Outlook"])
@@ -55,8 +51,6 @@ def root():
     return {
         "status": "ok",
         "services": [
-            {"id": "mfi-validator", "name": "MFI Dataset Validator", "endpoint": "/mfi-validator/validate-file"},
-            {"id": "price-validator", "name": "Price Data Validator", "endpoint": "/price-validator/validate-file"},
             {"id": "market-monitor", "name": "Market Monitor Generator", "endpoint": "/market-monitor/generate"},
             {"id": "mfi-drafter", "name": "MFI Report Generator", "endpoint": "/mfi-drafter/generate"},
             {"id": "seasonal-outlook", "name": "Seasonal Outlook Drafter", "endpoint": "/seasonal-outlook/info"}
