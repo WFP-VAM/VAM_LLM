@@ -1,1 +1,1 @@
-"""WFP Data Tools API - Backend per validazione dati e generazione report."""
+"""VAM LLM - Backend per la generazione di report di mercato e sicurezza alimentare."""

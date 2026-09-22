@@ -151,7 +151,7 @@ def _upload_file_to_gcs(content: bytes, gcs_uri: str) -> None:
     """Deprecated compatibility shim for removed dataset upload endpoints."""
     raise RuntimeError(
         "Uploading processed Price Bulletin datasets is no longer supported. "
-        "Use the Price Data Validator to validate raw files before DataBridges upload."
+        "Use MarketAIssist to validate raw files before DataBridges upload."
     )
 
 

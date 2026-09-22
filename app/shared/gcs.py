@@ -1,11 +1,10 @@
-"""Small Google Cloud Storage helpers shared by validation tools."""
+"""Small Google Cloud Storage helpers shared by the drafting services."""
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +36,6 @@ def get_gcs_client() -> Any:
             logger.exception("Failed to initialize GCS client")
             _GCS_CLIENT = None
         return _GCS_CLIENT
-
-
-def get_market_names_gcs_uri() -> Optional[str]:
-    uri = (os.getenv("MARKET_NAMES_GCS_URI") or "").strip()
-    return uri or None
-
-
-def get_market_names_cache_path() -> Path:
-    cache_dir = (os.getenv("MARKET_NAMES_CACHE_DIR") or os.getenv("DATA_CACHE_DIR") or "").strip()
-    if not cache_dir:
-        cache_dir = str(Path.home() / ".cache" / "unified-app")
-    return Path(cache_dir) / "market_names.csv"
 
 
 def download_gcs_to_file(gcs_uri: str, destination: Path) -> None:
