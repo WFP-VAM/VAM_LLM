@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import uuid
 from collections.abc import Sequence
 from typing import Any, Optional
 
@@ -33,11 +34,33 @@ class DataBridgesAuth:
         max_retries: int = 3,
         session: Optional[requests.Session] = None,
     ) -> None:
+        api_key = str(api_key or "").strip()
+        api_secret = str(api_secret or "").strip()
         if not api_key or not api_secret:
             raise ValueError(
                 "Databridges credentials are not configured. Set WFP_V2_API_KEY "
                 "and WFP_V2_API_SECRET, or compatibility aliases DATA_BRIDGES_KEY "
                 "and DATA_BRIDGES_SECRET."
+            )
+        if _looks_like_secret_reference(api_key):
+            raise ValueError(
+                "WFP_V2_API_KEY looks like a Secret Manager reference instead of "
+                "the resolved Azure client ID. Configure Cloud Run with a secret "
+                "binding (--update-secrets), not an environment value containing "
+                "'<secret>:latest'."
+            )
+        try:
+            uuid.UUID(api_key)
+        except ValueError as exc:
+            raise ValueError(
+                "WFP_V2_API_KEY must resolve to the Azure application/client UUID. "
+                "Check the Cloud Run secret binding."
+            ) from exc
+        if _looks_like_secret_reference(api_secret):
+            raise ValueError(
+                "WFP_V2_API_SECRET looks like a Secret Manager reference instead "
+                "of the resolved client secret. Configure Cloud Run with a secret "
+                "binding (--update-secrets)."
             )
 
         self.api_key = api_key
@@ -362,6 +385,16 @@ def _env_first(*names: str, default: str = "") -> str:
         if value and value.strip():
             return value.strip()
     return default
+
+
+def _looks_like_secret_reference(value: str) -> bool:
+    lowered = str(value or "").strip().lower()
+    return (
+        ":latest" in lowered
+        or lowered.startswith("projects/")
+        or "/secrets/" in lowered
+        or lowered.startswith("sm://")
+    )
 
 
 def _safe_token_error(response: Optional[requests.Response]) -> str:

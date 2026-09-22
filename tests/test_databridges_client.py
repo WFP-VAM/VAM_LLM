@@ -7,6 +7,12 @@ import app.shared.databridges as databridges
 from app.shared.databridges import DataBridgesAuth, DataBridgesClient
 
 
+# The client id must be the resolved Azure application UUID (validated since the
+# MarketAIssist hardening was ported in). Secrets stay opaque strings.
+CLIENT_ID = "00000000-0000-4000-8000-000000000001"
+OTHER_CLIENT_ID = "00000000-0000-4000-8000-000000000002"
+
+
 class FakeResponse:
     def __init__(self, payload, status_code=200, text=""):
         self._payload = payload
@@ -66,7 +72,7 @@ def test_token_exchange_uses_azure_payload_and_scope_cache():
         ]
     )
     auth = DataBridgesAuth(
-        "client-id",
+        CLIENT_ID,
         "client-secret",
         token_url="https://login.test/token",
         session=session,
@@ -79,7 +85,7 @@ def test_token_exchange_uses_azure_payload_and_scope_cache():
     assert "auth" not in session.posts[0]
     assert session.posts[0]["data"] == {
         "grant_type": "client_credentials",
-        "client_id": "client-id",
+        "client_id": CLIENT_ID,
         "client_secret": "client-secret",
         "scope": "scope-a scope-b",
     }
@@ -98,7 +104,7 @@ def test_token_exchange_reports_sanitized_http_error():
             )
         ]
     )
-    auth = DataBridgesAuth("client-id", "client-secret", max_retries=1, session=session)
+    auth = DataBridgesAuth(CLIENT_ID, "client-secret", max_retries=1, session=session)
 
     with pytest.raises(RuntimeError) as exc_info:
         auth.get_token(["scope"])
@@ -123,7 +129,7 @@ def test_token_exchange_reports_missing_access_token_safely():
             )
         ]
     )
-    auth = DataBridgesAuth("client-id", "client-secret", session=session)
+    auth = DataBridgesAuth(CLIENT_ID, "client-secret", session=session)
 
     with pytest.raises(RuntimeError) as exc_info:
         auth.get_token(["scope"])
@@ -146,7 +152,7 @@ def test_pagination_accepts_items_items_capitalized_and_direct_lists():
         ]
     )
     client = DataBridgesClient(
-        "key",
+        CLIENT_ID,
         "secret",
         base_url="https://gateway.test",
         session=session,
@@ -172,7 +178,7 @@ def test_pagination_uses_first_total_when_later_totals_drift():
         ]
     )
     client = DataBridgesClient(
-        "key",
+        CLIENT_ID,
         "secret",
         base_url="https://example.test",
         session=session,
@@ -190,7 +196,7 @@ def test_monthly_prices_use_v2_params_and_gateway_url():
     auth = StubAuth()
     session = FakeSession(gets=[FakeResponse({"items": [{"row": 1}], "totalItems": 1})])
     client = DataBridgesClient(
-        "key",
+        CLIENT_ID,
         "secret",
         base_url="https://gateway.api.wfp.org/vam-data-bridges/v2",
         session=session,
@@ -234,7 +240,7 @@ def test_mfi_processed_pagination_stops_on_short_page():
         ]
     )
     client = DataBridgesClient(
-        "key",
+        CLIENT_ID,
         "secret",
         base_url="https://example.test",
         session=session,
@@ -251,7 +257,7 @@ def test_mfi_processed_pagination_stops_on_short_page():
 
 def test_timeout_and_http_errors_are_actionable():
     timeout_client = DataBridgesClient(
-        "key",
+        CLIENT_ID,
         "secret",
         base_url="https://example.test",
         session=FakeSession(gets=[requests.exceptions.Timeout("slow")]),
@@ -263,7 +269,7 @@ def test_timeout_and_http_errors_are_actionable():
     assert "after 7s" in str(timeout_exc.value)
 
     http_client = DataBridgesClient(
-        "key",
+        CLIENT_ID,
         "secret",
         base_url="https://example.test",
         session=FakeSession(gets=[FakeResponse({}, status_code=500, text="server failed")]),
@@ -293,13 +299,13 @@ def test_get_client_prefers_wfp_v2_environment(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
-    monkeypatch.setenv("DATA_BRIDGES_KEY", "old-key")
+    monkeypatch.setenv("DATA_BRIDGES_KEY", OTHER_CLIENT_ID)
     monkeypatch.setenv("DATA_BRIDGES_SECRET", "old-secret")
     monkeypatch.setenv("DATA_BRIDGES_API_BASE_URL", "https://old-base")
     monkeypatch.setenv("DATA_BRIDGES_TOKEN_URL", "https://old-token")
     monkeypatch.setenv("DATA_BRIDGES_SCOPE", "old-scope")
     monkeypatch.setenv("DATA_BRIDGES_ENV", "dev")
-    monkeypatch.setenv("WFP_V2_API_KEY", "new-key")
+    monkeypatch.setenv("WFP_V2_API_KEY", CLIENT_ID)
     monkeypatch.setenv("WFP_V2_API_SECRET", "new-secret")
     monkeypatch.setenv("WFP_V2_API_BASE_URL", "https://new-base")
     monkeypatch.setenv("WFP_V2_TOKEN_URL", "https://new-token")
@@ -311,7 +317,7 @@ def test_get_client_prefers_wfp_v2_environment(monkeypatch):
     assert client.base_url == "https://new-base"
     assert client.env == "prod"
     assert client.scope == "new-scope"
-    assert client.auth_provider.api_key == "new-key"
+    assert client.auth_provider.api_key == CLIENT_ID
     assert client.auth_provider.api_secret == "new-secret"
     assert client.auth_provider.token_url == "https://new-token"
     databridges.reset_databridges_client_for_tests()
@@ -329,7 +335,7 @@ def test_get_client_falls_back_to_data_bridges_environment(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
-    monkeypatch.setenv("DATA_BRIDGES_KEY", "old-key")
+    monkeypatch.setenv("DATA_BRIDGES_KEY", OTHER_CLIENT_ID)
     monkeypatch.setenv("DATA_BRIDGES_SECRET", "old-secret")
     monkeypatch.setenv("DATA_BRIDGES_API_BASE_URL", "https://old-base")
     monkeypatch.setenv("DATA_BRIDGES_TOKEN_URL", "https://old-token")
@@ -341,10 +347,57 @@ def test_get_client_falls_back_to_data_bridges_environment(monkeypatch):
     assert client.base_url == "https://old-base"
     assert client.env == "dev"
     assert client.scope == "old-scope"
-    assert client.auth_provider.api_key == "old-key"
+    assert client.auth_provider.api_key == OTHER_CLIENT_ID
     assert client.auth_provider.api_secret == "old-secret"
     assert client.auth_provider.token_url == "https://old-token"
     databridges.reset_databridges_client_for_tests()
+
+
+@pytest.mark.parametrize(
+    ("client_id", "client_secret", "message"),
+    [
+        (
+            "vam-p4-wfp-v2-api-key:latest",
+            "resolved-client-secret",
+            "Secret Manager reference",
+        ),
+        (
+            CLIENT_ID,
+            "projects/example/secrets/wfp-secret/versions/latest",
+            "Secret Manager reference",
+        ),
+        (
+            "not-an-azure-client-uuid",
+            "resolved-client-secret",
+            "Azure application/client UUID",
+        ),
+    ],
+)
+def test_invalid_or_unresolved_credentials_fail_before_network(
+    client_id,
+    client_secret,
+    message,
+):
+    session = FakeSession(posts=[])
+
+    with pytest.raises(ValueError, match=message):
+        DataBridgesAuth(
+            client_id,
+            client_secret,
+            session=session,
+            max_retries=1,
+        )
+
+
+def test_credentials_are_stripped_before_validation():
+    auth = DataBridgesAuth(
+        f"  {CLIENT_ID}  ",
+        "  resolved-client-secret  ",
+        session=FakeSession(posts=[]),
+    )
+
+    assert auth.api_key == CLIENT_ID
+    assert auth.api_secret == "resolved-client-secret"
 
 
 @pytest.mark.skipif(
