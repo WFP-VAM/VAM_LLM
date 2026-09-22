@@ -1,34 +1,26 @@
-# WFP Unified App -- Overview
+# VAM LLM -- Overview
 
 ## Mission
 
-The Unified App is the primary deliverable of two converging AI initiatives at the World Food Programme (WFP):
+VAM LLM is an LLM-powered solution that assists VAM (Vulnerability Analysis and Mapping) officers in Country Offices and Global HQ with data analysis and the drafting of analytical reports on market conditions and food security.
 
-1. **VAM LLM** -- an LLM-powered solution that assists VAM (Vulnerability Analysis and Mapping) officers in Country Offices and Global HQ with data analysis and the drafting of analytical reports on market conditions and food security.
+### Scope: this app drafts reports, it does not validate datasets
 
-2. **MarketAIssist** -- an LLM-powered solution that supports the cleaning and validation of large datasets on food security, prices, and market functionality, so the data can be processed and publicly shared on WFP's DataBridges platform.
+Dataset cleaning and validation before a DataBridges upload belongs to a separate project and a separate repository, **MarketAIssist** (<https://github.com/WFP-VAM/MarketAIssist>), which owns the MFI Dataset Validator and the Price Data Validator. Until September 2026 both applications shared this codebase; the validators were removed from it and are now maintained only in MarketAIssist.
 
-Together the two projects address opposite ends of the same data pipeline: MarketAIssist ensures that incoming data is correct and publication-ready, while VAM LLM turns validated data into actionable intelligence reports.
+The two projects still address opposite ends of the same data pipeline -- MarketAIssist makes incoming data correct and publication-ready, VAM LLM turns validated data into actionable intelligence reports -- but they are independent codebases with independent release cycles.
 
 ---
 
 ## What the App Does
 
-The application exposes **four services** through a Streamlit frontend (with a parallel FastAPI backend for programmatic access):
-
-### MarketAIssist Services (Data Validation)
+The application exposes **three services** through a Streamlit frontend (with a parallel FastAPI backend for programmatic access):
 
 | Service | Purpose |
 |---|---|
-| **MFI Dataset Validator** | Validates RAW Market Functionality Index CSV files against the WFP schema. Runs five progressive validation layers -- file format, structural integrity, schema conformance, business rules (UUIDs, dates, coordinates, survey completeness), and an LLM-generated diagnostic report. Supports fuzzy column-name matching to catch typos. |
-| **Price Data Validator** | Validates price-data XLSX workbooks against WFP templates. Checks file integrity, column structure and ordering, and uses an LLM to classify column types and verify content (commodity codes, market names, date formats). |
-
-### VAM LLM Services (Report Generation)
-
-| Service | Purpose |
-|---|---|
+| **Market Monitor Drafter** (Price Bulletin) | Produces a Market Monitor (Price Bulletin) report. Country Offices configure a required primary basket and an optional independently scoped secondary basket; immutable selections drive joint reportability, complete-component calculations, separate charts, basket-aware narratives, Red-Team QA, and DOCX export. Optional exchange-rate, fuel, livestock, and labour modules remain evidence-gated. |
 | **MFI Report Generator** | Produces a full Market Functionality Index report for a given country. Loads MFI survey data (from CSV upload or the DataBridges API), retrieves contextual news from Seerist and ReliefWeb, generates radar-chart visualisations, drafts a per-dimension analysis across the nine MFI dimensions, synthesises an executive summary, runs Red-Team QA, and exports the result as a branded DOCX document. |
-| **Market Monitor Drafter** | Produces a Market Monitor (Price Bulletin) report. Country Offices configure a required primary basket and an optional independently scoped secondary basket; immutable selections drive joint reportability, complete-component calculations, separate charts, basket-aware narratives, Red-Team QA, and DOCX export. Optional exchange-rate, fuel, livestock, and labour modules remain evidence-gated. |
+| **Seasonal Outlook Drafter** | Produces a Seasonal Outlook report for a region and report date from the climate forecast maps an analyst uploads. Extracts evidence from the maps with Gemini through Vertex, **pauses for analyst review and explicit confirmation**, then drafts, reviews and redrafts the report. Exports Word (with or without map appendix) and an artifact ZIP containing rules, inputs, original images, every evidence version and the model requests and responses. |
 
 ---
 
@@ -45,13 +37,13 @@ The application exposes **four services** through a Streamlit frontend (with a p
                        |   FastAPI API   |  (main.py)
                        +--------+--------+
                                 |
-          +----------+----------+----------+----------+
-          |          |                     |           |
-   MFI Validator  Price Validator   Market Monitor  MFI Drafter
-     (router +      (router +        (router +      (router +
-      graph)         graph)           graph)          graph)
-          |          |                     |           |
-          +----------+----------+----------+----------+
+          +----------------+----------------+
+          |                |                |
+   Market Monitor     MFI Drafter    Seasonal Outlook
+     (router +         (router +       (router +
+      graph)            graph)          service)
+          |                |                |
+          +----------------+----------------+
                                 |
                        +--------v--------+
                        |  Shared Layer   |
@@ -101,7 +93,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 | **Seerist** | Intelligence/news aggregation. Provides contextual documents on markets, prices, inflation, currency, and trade for a given country and time window. |
 | **ReliefWeb** | UN humanitarian reporting. Supplements Seerist with reports on food security and market conditions. |
 | **Trading Economics** | Exchange-rate data for 15+ currencies used in the Market Monitor. |
-| **Google Vertex AI** | LLM backend (Gemini 2.5 Pro). Powers fuzzy matching, schema validation, narrative generation, event extraction, trend analysis, and Red-Team QA. |
+| **Google Vertex AI** | LLM backend. Gemini 2.5 Pro for the Market Monitor and MFI drafters; Gemini 3.1 Pro through the Google Gen AI SDK for the Seasonal Outlook. Powers narrative generation, event extraction, trend analysis, map evidence extraction, and Red-Team QA. |
 | **Google Cloud Storage** | Stores run artifacts and cached reference data in production. |
 | **Google Firestore** | Persistent run-state tracking in production. |
 
@@ -115,7 +107,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 | Backend API | FastAPI, Uvicorn |
 | Workflow orchestration | LangGraph (state machines with conditional routing and correction loops) |
 | LLM integration | LangChain (langchain-core, langchain-google-vertexai) |
-| Data processing | Pandas, NumPy, OpenPyXL, chardet |
+| Data processing | Pandas, NumPy |
 | Visualisation | Matplotlib (charts exported as Base64 PNG) |
 | Report export | python-docx |
 | Cloud infrastructure | Google Cloud (Vertex AI, Firestore, GCS) |
@@ -149,14 +141,14 @@ UNIFIED APP/
       live_outputs.py          # Real-time run metadata formatting
 
     services/
-      mfi_validator/           # MFI CSV validation (MarketAIssist)
-        router.py, graph.py, schemas.py
-      price_validator/         # Price XLSX validation (MarketAIssist)
-        router.py, graph.py, schemas.py
-      mfi_drafter/             # MFI report generation (VAM LLM)
-        router.py, graph.py, schemas.py, data_loader.py, databridges_loader.py
-      market_monitor/          # Market Monitor generation (VAM LLM)
+      mfi_drafter/             # MFI report generation
+        router.py, graph.py, schemas.py, data_loader.py, light_service.py
+      market_monitor/          # Market Monitor generation
         router.py, graph.py, schemas.py, data_loader.py
+      price_cache/             # DataBridges price cache used by Market Monitor
+        config.py, sql_repository.py, refresh_worker.py, migrations/
+      seasonal_outlook/        # Seasonal Outlook drafting
+        router.py, api.py, service.py, provider.py, storage.py, science/
 
     streamlit_backend/
       dispatcher.py            # Local request dispatcher (bypasses HTTP)
@@ -164,10 +156,9 @@ UNIFIED APP/
   pages/
     0_Tester_Onboarding.py     # Onboarding guide for testers
     1_How_To_Use_The_Tools.py  # Usage instructions
-    1_MFI_Validator.py         # MFI Validator UI
-    2_Price_Validator.py       # Price Validator UI
     3_Price_Bulletin_Drafter.py # Market Monitor UI
     4_MFI_Drafter.py           # MFI Report Generator UI
+    5_Seasonal_Outlook_Drafter.py # Seasonal Outlook UI
 
   tests/                       # Integration and unit tests
 ```
@@ -176,18 +167,7 @@ UNIFIED APP/
 
 ## Processing Pipelines
 
-### Validation (MarketAIssist)
-
-```
-Upload file  -->  Layer 0: File format & encoding
-             -->  Layer 1: Structural parsing (delimiters, broken rows)
-             -->  Layer 2: Schema conformance (required columns, fuzzy match)
-             -->  Layer 3: Business rules (dates, UUIDs, coordinates, completeness)
-             -->  Layer 5: LLM-generated diagnostic report
-             -->  Structured JSON result with errors, warnings, suggestions
-```
-
-### Report Generation (VAM LLM)
+### Report Generation
 
 ```
 User input  -->  Data loading (CSV / DataBridges API / mock)
@@ -198,6 +178,17 @@ User input  -->  Data loading (CSV / DataBridges API / mock)
             -->  Executive summary / highlights (LLM)
             -->  Red-Team QA with correction loop (LLM)
             -->  DOCX export with embedded charts and WFP branding
+```
+
+### Seasonal Outlook
+
+```
+Map upload  -->  Input freeze (region, report date, 1-12 images)
+            -->  Evidence extraction from images (Gemini, structured output)
+            -->  Visual review and refinement
+            -->  ANALYST PAUSE: review, revise (new version) or confirm
+            -->  Report drafting, textual review, complete redraft
+            -->  Word export (with/without map appendix) + audit ZIP
 ```
 
 ---

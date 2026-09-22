@@ -31,11 +31,15 @@ Thank you for participating. Your feedback will directly shape how these tools a
 
 Before you start, please read the **[Instructions page]({INSTRUCTIONS_PAGE_URL})** to understand what each tool does and how to use it.
 
+This app drafts reports. Dataset validation before a DataBridges upload has
+moved to a separate app, **MarketAIssist** — bug reports about the MFI Dataset
+Validator or the Price Data Validator belong there, not here.
+
 ---
 
 ## What we ask you to do
 
-Use the tools as part of your normal work. Whenever you would normally validate a dataset or draft a report, try using the corresponding tool instead. Then tell us how it went.
+Use the tools as part of your normal work. Whenever you would normally draft a Price Bulletin, an MFI report or a Seasonal Outlook, try using the corresponding drafter instead. Then tell us how it went.
 
 There are **two ways** to give us feedback:
 
@@ -45,7 +49,7 @@ Every time the tool does not work as expected, submit a report through the **Bug
 
 Filling a bug report takes 3–5 minutes. The more specific you are, the more likely we are to identify and solve the problem. Here is what a useful report looks like:
 
-> *"I was validating an MFI dataset for Sudan (file: sudan_mfi_jan2025.csv, 450 rows). The validator flagged 'duplicate UUIDs' in rows 120–130, but I checked manually and the UUIDs are all different. This looks like a false positive. Run ID: abc123-def456"*
+> *"I generated an MFI report for Sudan (file: sudan_mfi_jan2025.csv, 450 rows). The executive summary says market functionality improved in Darfur, but the dimension table right below it shows a drop from 6.1 to 4.8. The two contradict each other. Run ID: abc123-def456"*
 
 Compare that with *"It does not work"* — the first one lets us find and fix the problem, the second does not.
 

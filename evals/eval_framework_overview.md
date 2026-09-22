@@ -1,5 +1,12 @@
 # VAM LLM Alpha Test - Evaluation Framework
 
+> **Note added September 2026.** This framework was written when the
+> application hosted four services, validators included. Since the repository
+> split, the MFI Dataset Validator and the Price Data Validator are evaluated
+> in the MarketAIssist context (<https://github.com/WFP-VAM/MarketAIssist>);
+> everything below applies to the three report drafters of this app. The text
+> itself is left unchanged as a dated record.
+
 ## Document for WFP Decision Makers
 
 ---

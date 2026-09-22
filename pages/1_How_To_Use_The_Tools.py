@@ -59,14 +59,15 @@ st.markdown(
     """
 ## About this application
 
-This application provides a suite of AI-powered tools designed to support WFP food security analysts in two key areas: **data validation** and **analytical report generation**.
+This application provides three AI-powered **report drafters** for WFP food security analysts. They generate complete analytical reports from WFP data, automating work that currently requires significant manual effort while maintaining the analytical standards expected in WFP publications.
 
-The tools are organized into two categories:
+- **Price Bulletin Drafter** — a Market Price Bulletin for a country and month, from the DataBridges price series.
+- **MFI Report Drafter** — a Market Functionality Index assessment from a processed MFI dataset.
+- **Seasonal Outlook Drafter** — a Seasonal Outlook report from the climate forecast maps you upload, with an analyst review step before drafting.
 
-- **Validators** (MFI Dataset Validator, Price Data Validator): These tools check raw datasets for errors before they are uploaded to DataBridges, preventing failed uploads and reducing the time spent on manual data cleaning.
-- **Report Drafters** (Price Bulletin Drafter, MFI Report Drafter): These tools generate complete analytical reports from WFP data, automating tasks that currently require significant manual effort while maintaining the analytical standards expected in WFP publications.
+**Looking for the dataset validators?** The MFI Dataset Validator and the Price Data Validator are no longer part of this application. They live in **MarketAIssist**, a separate app dedicated to cleaning and validating datasets before they are uploaded to DataBridges. Use MarketAIssist first, this app afterwards.
 
-This application is currently in **ALPHA** (an early internal testing phase with a limited number of users) and is being developed under two complementary projects: **VAM LLM** and **MarketAIssist**. The tools you see here are prototypes undergoing active testing and refinement. Your feedback during this phase is essential to improve their accuracy, usability, and relevance to real-world workflows.
+This application is currently in **ALPHA** (an early internal testing phase with a limited number of users). The tools you see here are prototypes undergoing active testing and refinement. Your feedback during this phase is essential to improve their accuracy, usability, and relevance to real-world workflows.
     """
 )
 
@@ -75,10 +76,9 @@ st.markdown(
     """
     <div class="jump-links">
         <ul>
-            <li><a href="#mfi-dataset-validator">MFI Dataset Validator</a></li>
-            <li><a href="#price-data-validator">Price Data Validator</a></li>
             <li><a href="#price-bulletin-drafter">Price Bulletin Drafter</a></li>
             <li><a href="#mfi-report-drafter">MFI Report Drafter</a></li>
+            <li><a href="#seasonal-outlook-drafter">Seasonal Outlook Drafter</a></li>
         </ul>
     </div>
     """,
@@ -100,87 +100,10 @@ def _render_tool_image(filename: str, caption: str) -> None:
     st.image(str(image_path), caption=caption, width="stretch")
 
 
-st.markdown('<a id="mfi-dataset-validator"></a>', unsafe_allow_html=True)
-st.header("1. MFI Dataset Validator")
-
-st.subheader("What it does")
-st.markdown(
-    """
-The MFI Dataset Validator checks your **raw (non-processed) MFI dataset** for errors before you upload it to DataBridges. DataBridges will reject files that contain structural or formatting issues — this tool catches those problems in advance, saving you time and failed uploads.
-    """
-)
-
-st.subheader("When to use it")
-st.markdown(
-    """
-Use this tool **before uploading your raw MFI data to DataBridges**. It is designed exclusively for non-processed datasets — do not use it with data that has already been processed by DataBridges.
-    """
-)
-
-st.subheader("How to use it")
-left, right = st.columns([1.35, 1])
-with left:
-    st.markdown(
-        """
-1. **Upload your file**: Drag and drop (or browse) your raw MFI dataset in **CSV format**.
-2. **Select the survey type**: Choose the type of MFI survey the dataset refers to (Full MFI, Reduced MFI, or MFI-N). *Note: in this ALPHA version, only Full MFI is available.*
-3. **Click "Validate"**.
-        """
-    )
-with right:
-    _render_tool_image("mfidata_validator.jpeg", "MFI Dataset Validator")
-
-st.subheader("Output")
-st.markdown(
-    """
-If the validator detects issues, it will generate a report listing each problem found, including its location in the dataset and a brief explanation of how to fix it. If no issues are found, the dataset is ready for DataBridges upload.
-    """
-)
-
-st.markdown("---")
-
-st.markdown('<a id="price-data-validator"></a>', unsafe_allow_html=True)
-st.header("2. Price Data Validator")
-
-st.subheader("What it does")
-st.markdown(
-    """
-The Price Data Validator checks your **raw price dataset** for errors before you upload it to DataBridges. Just like the MFI Validator, it catches problems that would cause DataBridges to reject your file.
-    """
-)
-
-st.subheader("When to use it")
-st.markdown(
-    """
-Use this tool **before uploading your raw price data to DataBridges**.
-    """
-)
-
-st.subheader("How to use it")
-left, right = st.columns([1.35, 1])
-with left:
-    st.markdown(
-        """
-1. **Select the country**: Choose the country the dataset refers to. The validator uses it to fetch the official list of market names for that country directly from DataBridges.
-2. **Upload your price data file**: Drag and drop (or browse) your raw price dataset in **CSV, XLSX, or XLS format**.
-3. **Upload the DataBridges template**: Upload the same template you previously registered on DataBridges for this dataset. The validator needs it because DataBridges uses this template to assess compatibility with the uploaded data — the validator performs the same check.
-4. **Click "Validate"**.
-        """
-    )
-with right:
-    _render_tool_image("pricedata_validator.jpeg", "Price Data Validator")
-
-st.subheader("Output")
-st.markdown(
-    """
-Same as the MFI Dataset Validator: a report listing any issues found, their location, and suggested fixes. If the dataset passes all checks, it is ready for DataBridges upload.
-    """
-)
-
 st.markdown("---")
 
 st.markdown('<a id="price-bulletin-drafter"></a>', unsafe_allow_html=True)
-st.header("3. Price Bulletin Drafter")
+st.header("1. Price Bulletin Drafter")
 
 st.subheader("What it does")
 st.markdown(
@@ -220,7 +143,7 @@ The agent takes approximately **10 minutes** to complete. When the report is rea
 st.markdown("---")
 
 st.markdown('<a id="mfi-report-drafter"></a>', unsafe_allow_html=True)
-st.header("4. MFI Report Drafter")
+st.header("2. MFI Report Drafter")
 
 st.subheader("What it does")
 st.markdown(
@@ -253,5 +176,46 @@ st.subheader("Output")
 st.markdown(
     """
 The agent takes approximately **20 minutes** to complete. When it is ready, use the large **Download report (.docx)** button first. To read it without downloading, click **View report on this page** underneath. The report preview stays closed until requested.
+    """
+)
+st.markdown("---")
+
+st.markdown('<a id="seasonal-outlook-drafter"></a>', unsafe_allow_html=True)
+st.header("3. Seasonal Outlook Drafter")
+
+st.subheader("What it does")
+st.markdown(
+    """
+The Seasonal Outlook Drafter turns the seasonal climate forecast maps you already consult into a drafted Seasonal Outlook report for a region and report date. It reads the maps, extracts the evidence they contain, **pauses for your review**, and only drafts the report once you have confirmed that evidence.
+
+The analyst review in the middle is the point of the tool: the model never publishes a claim you have not seen. Reviewing evidence and comparing it with the original maps is part of the workflow, not an optional check.
+    """
+)
+
+st.subheader("When to use it")
+st.markdown(
+    """
+Use it when you have the forecast maps for the season and you want a first draft that is traceable to them. It does not fetch forecasts itself: whatever you upload is the entire evidence base. Corrections to the region, the report date or the maps themselves require a new analysis — inputs freeze once extraction starts.
+    """
+)
+
+st.subheader("How to use it")
+st.markdown(
+    """
+1. **Select a region and a report date**, then start an input package. The analysis gets its own URL that you and your colleagues can reopen.
+2. **Upload the maps** in the *Input package* tab and press **Save selected maps**. Between 1 and 12 static PNG, JPEG or WebP images; at most 30 MB per file and 50 MB in total. Category, issue date and notes are optional — unclassified maps are identified during extraction. The product checklist next to the uploader shows what the seasonal calendar expects for that region and date.
+3. **Click "Extract and review evidence".** Processing continues in the cloud even if you close the page; reopen the URL later.
+4. **Review the extracted evidence** in the *Evidence and analyst review* tab, side by side with the original map it came from. Compare versions if you have asked for revisions before.
+5. **Either revise or confirm.** Writing comments and clicking **Revise evidence** produces a new evidence version and another pause. **Confirm evidence and draft report** locks the version you are looking at and starts the drafting phases.
+6. **Collect the report** in the *Report and downloads* tab.
+    """
+)
+
+st.subheader("Output")
+st.markdown(
+    """
+A Seasonal Outlook report, downloadable as Word with or without the map appendix, plus an artifact ZIP containing the scientific rules, the frozen inputs, the original images byte-for-byte, every evidence version, your review decisions and the model requests and responses — enough to reconstruct how any sentence came to be.
+
+Each phase can take several minutes, and a full run has two waits: extraction, then drafting after your confirmation. Earlier reports stay available under their own operation even after new feedback supersedes them.
     """
 )
