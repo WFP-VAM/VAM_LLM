@@ -108,14 +108,6 @@ left, right = st.columns(2)
 
 with left:
     if st.button(
-        "MFI Dataset Validator",
-        type="primary",
-        key="nav_mfi_validator",
-        use_container_width=True,
-    ):
-        _go_to("pages/1_MFI_Validator.py")
-
-    if st.button(
         "Price Bulletin Drafter",
         type="primary",
         key="nav_price_bulletin",
@@ -124,14 +116,6 @@ with left:
         _go_to("pages/3_Price_Bulletin_Drafter.py")
 
 with right:
-    if st.button(
-        "Price Data Validator",
-        type="primary",
-        key="nav_price_validator",
-        use_container_width=True,
-    ):
-        _go_to("pages/2_Price_Validator.py")
-
     if st.button(
         "MFI Report Generator",
         type="primary",
