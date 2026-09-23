@@ -390,7 +390,7 @@ def test_ui_refresh_and_tabs_never_start_inference(service, monkeypatch):
     app.query_params['seasonal_run'] = run['id']
     app.run(timeout=20)
     assert not app.exception
-    assert [t.label for t in app.tabs] == ['Evidence and analyst review', 'Report and downloads', 'Input package']
+    assert [t.label for t in app.tabs] == ['Input package', 'Evidence and analyst review', 'Report and downloads']
     assert next(x for x in app.selectbox if x.label == 'Region').value is None
     confirm = next(b for b in app.button if b.label == 'Confirm evidence and draft report')
     assert confirm.disabled

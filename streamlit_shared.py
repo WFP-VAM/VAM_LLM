@@ -23,7 +23,7 @@ WFP_NAVY = "#003A5D"
 WFP_LIGHT = "#E6F1FA"
 WFP_BG = "#EEF4FA"
 WFP_TEXT = "#0C1E2E"
-INSTRUCTIONS_PAGE_URL = "https://vam-llm-marketaissist-977145147401.europe-west1.run.app/How_To_Use_The_Tools"
+INSTRUCTIONS_PAGE_URL = "/How_To_Use_The_Tools"
 BUG_REPORT_MESSAGE = "The second testing phase is going to start soon"
 INSTRUCTIONS_PAGE_PATH = "pages/1_How_To_Use_The_Tools.py"
 ONBOARDING_PAGE_PATH = "pages/0_Tester_Onboarding.py"
@@ -252,8 +252,26 @@ def apply_wfp_theme() -> None:
             background: var(--wfp-primary-dark) !important;
             color: #FFFFFF !important;
         }
-        .stTabs [data-baseweb="tab"] {
+        /* Semantic tab roles cover both BaseWeb and React Aria Streamlit tabs. */
+        .stTabs [role="tab"] {
+            color: var(--wfp-text) !important;
             font-weight: 600;
+        }
+        .stTabs [role="tab"] [data-testid="stMarkdownContainer"],
+        .stTabs [role="tab"] p {
+            color: inherit !important;
+        }
+        .stTabs [role="tab"]:hover,
+        .stTabs [role="tab"][aria-selected="true"] {
+            color: var(--wfp-primary-dark) !important;
+        }
+        .stTabs [role="tab"]:focus-visible {
+            outline: 2px solid var(--wfp-primary-dark);
+            outline-offset: -2px;
+        }
+        .stTabs [data-baseweb="tab-highlight"],
+        .stTabs .react-aria-SelectionIndicator {
+            background-color: var(--wfp-primary-dark) !important;
         }
         .wfp-sidebar-logo {
             display: block;

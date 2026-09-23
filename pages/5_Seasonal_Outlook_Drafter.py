@@ -20,7 +20,6 @@ st.markdown('''<style>
 [data-testid="stExpander"] summary * {color:var(--wfp-text)!important;}
 .stSelectbox [data-baseweb="select"] * {color:var(--wfp-text)!important;}
 [data-baseweb="popover"] [role="listbox"], [role="option"] {background:var(--wfp-surface)!important;color:var(--wfp-text)!important;}
-.stTabs [data-baseweb="tab"] {color:var(--wfp-text)!important;}
 .bug-report-button {white-space:normal!important;max-width:100%;box-sizing:border-box;text-align:center;}
 </style>''', unsafe_allow_html=True)
 BASE = '/seasonal-outlook'
@@ -153,7 +152,7 @@ def progress():
         st.rerun()
 progress()
 
-evidence_tab, report_tab, input_tab = st.tabs(['Evidence and analyst review', 'Report and downloads', 'Input package'])
+input_tab, evidence_tab, report_tab = st.tabs(['Input package', 'Evidence and analyst review', 'Report and downloads'])
 with input_tab:
     selected_region = next(r for r in info['regions'] if r['region_id'] == run['region_id'])
     calendar = calendar_for(selected_region, date.fromisoformat(run['report_date']))
