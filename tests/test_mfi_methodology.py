@@ -7,15 +7,21 @@ import pytest
 from app.services.mfi_drafter.methodology import (
     ALL_METRIC_DEFINITIONS,
     DRIVER_DEFINITIONS,
-    METRIC_REGISTRY,
+    METRIC_DEFINITIONS_BY_ID,
     OFFICIAL_SCORE_DEFINITIONS,
     SCORE_VALIDATION_ABS_TOLERANCE,
     SUBSECTION_DEFINITIONS,
     calculate_current_databridge_mfi,
     calculate_dimension_score,
-    lookup_metric,
     within_score_tolerance,
 )
+
+# The loader matches CSV rows on these exact (level, dimension, variable) keys.
+_BY_KEY = {definition.key: definition for definition in ALL_METRIC_DEFINITIONS}
+
+
+def definition_for(level_id, dimension_name, variable_name):
+    return _BY_KEY.get((level_id, dimension_name, variable_name))
 
 
 def test_registry_has_authoritative_counts_and_unique_exact_keys():
@@ -23,7 +29,7 @@ def test_registry_has_authoritative_counts_and_unique_exact_keys():
     assert len(SUBSECTION_DEFINITIONS) == 18
     assert len(DRIVER_DEFINITIONS) == 187
     assert len(ALL_METRIC_DEFINITIONS) == 215
-    assert len(METRIC_REGISTRY) == len(ALL_METRIC_DEFINITIONS)
+    assert len(_BY_KEY) == len(ALL_METRIC_DEFINITIONS)
     assert len({definition.metric_id for definition in ALL_METRIC_DEFINITIONS}) == 215
     assert all(definition.source_level_name for definition in ALL_METRIC_DEFINITIONS)
 
@@ -31,25 +37,14 @@ def test_registry_has_authoritative_counts_and_unique_exact_keys():
 def test_registry_and_definitions_are_immutable():
     definition = ALL_METRIC_DEFINITIONS[0]
     with pytest.raises(TypeError):
-        METRIC_REGISTRY[definition.key] = definition
+        METRIC_DEFINITIONS_BY_ID[definition.metric_id] = definition
     with pytest.raises(FrozenInstanceError):
         definition.display_name = "Changed"
 
 
-def test_lookup_trims_once_then_requires_case_sensitive_equality():
-    expected = lookup_metric(5, " Availability ", " AvailabilityScarcity_FCer ")
-
-    assert expected is not None
-    assert expected.metric_id == "availability.scarcity.category.cereal_food"
-    assert lookup_metric(5, "availability", "AvailabilityScarcity_FCer") is None
-    assert lookup_metric(5, "Availability", "availabilityscarcity_fcer") is None
-    assert lookup_metric(5, "Availability", "AvailabilityScarcity") is None
-    assert lookup_metric(5, "Availability", "AvailabilityScarcity_FCerBarleyExtra") is None
-
-
 def test_substring_collision_between_category_and_item_is_impossible():
-    category = lookup_metric(5, "Availability", "AvailabilityScarcity_FCer")
-    item = lookup_metric(5, "Availability", "AvailabilityScarcity_FCerBarley")
+    category = definition_for(5, "Availability", "AvailabilityScarcity_FCer")
+    item = definition_for(5, "Availability", "AvailabilityScarcity_FCerBarley")
 
     assert category is not None and item is not None
     assert category.metric_id == "availability.scarcity.category.cereal_food"
@@ -70,15 +65,15 @@ def test_registered_levels_ranges_and_polarities_are_explicit():
     }
     assert all(definition.raw_min <= definition.raw_max for definition in ALL_METRIC_DEFINITIONS)
 
-    availability_category = lookup_metric(
+    availability_category = definition_for(
         5, "Availability", "AvailabilityScarcity_FCer"
     )
-    availability_item = lookup_metric(
+    availability_item = definition_for(
         5, "Availability", "AvailabilityScarcity_FCerBarley"
     )
-    price_category = lookup_metric(5, "Price", "PriceIncrease_FCer")
-    price_item = lookup_metric(5, "Price", "PriceIncrease_FCerBarley")
-    competition = lookup_metric(6, "Competition", "CompetitionLess_FCer")
+    price_category = definition_for(5, "Price", "PriceIncrease_FCer")
+    price_item = definition_for(5, "Price", "PriceIncrease_FCerBarley")
+    competition = definition_for(6, "Competition", "CompetitionLess_FCer")
 
     assert availability_category.orientation == "higher_is_better"
     assert availability_item.orientation == "higher_is_worse"

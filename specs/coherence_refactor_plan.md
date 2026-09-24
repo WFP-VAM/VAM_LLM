@@ -226,6 +226,22 @@ Tests were classified one by one, not by file. A test was removed when it import
 - Full suite: **1,001 tests: 997 passed, 4 skipped, 0 failed (1 min 52 s)**. Against the Phase 2 run: 318 tests removed and 12 added across 3.1 and 3.2 (one of the 12 is the Phase 2 page test written after that run). No retained test changed outcome. The 5 skips of `test_mfi_r0_artifact` went with the file; the remaining 4 are the DataBridges and Postgres ones.
 - MFI output snapshot identical to the baseline on all three benchmarks and the misc checks (mock data excluded, since it is gone). Every page renders; page 5 shows its usual storage-configuration message.
 - Left for 3.3: the D4 readers in `report_blocks.py`, `docx_export.py`, `compatibility.py`, page 4 and `schemas.py`, and live-module symbols that only deleted code used (candidates: `claim_identity`, `evidence_notes`, `wording`, `reconcile_context_status` and the LLM-classification branch of `resolve_context_status`). Their remaining tests go with them.
+
+**Done 3.3, 2026-09-24.**
+- Historical readers removed (D4):
+  - `resolve_mfi_report_blocks` returns stored blocks only. The claim-based builder and its QA and claim helpers are gone from `report_blocks.py` (1,751 → 592 lines), which no longer imports any MFI module.
+  - `ReportBlock` accepts 7 block types; the 4 claim and QA types are gone. The DOCX and Streamlit renderers drop their branches and the `mfi_overview`/`mfi_deterministic` tables.
+  - Page 4 and `streamlit_shared.py` drop the claim-QA views and the old diagnostics counters.
+  - `/result` and `/export-docx` return 410 for a result of the previous workflow, in both the router and the dispatcher.
+- Symbols that only the deleted code used:
+  - `wording.py` and `evidence_notes.py` deleted; `claim_identity.py` reduced to two tokenizers and renamed `identity.py`;
+  - dead parts removed from `table_projection`, `facts`, `reliable_contracts`, `context_status`, `methodology`, `schemas` (39 models, including `GenerateMFIReportOutput`), `coverage`, `compatibility` and four small modules;
+  - `__init__` exports only live names.
+  A reachability scan (entry points, then references) finds nothing else unreachable in the MFI package except `synthetic_fixtures.py`, which is test infrastructure.
+- Output: `coverage.missing_dimensions`, which was always empty, is gone. Nothing else changes. The MFI snapshot matches the baseline except for that key and the four narrative aliases in the compatibility helper's own output, which `public_output` always overwrote. Report blocks, DOCX text, figures and prompts are identical, and a stored Benin report renders in Streamlit without errors.
+- Full suite: **858 tests: 854 passed, 4 skipped, 0 failed (1 min 48 s)**. Against 3.2: 148 tests removed (87 of them are cases of the deleted wording detectors) and 5 added; no retained test changed outcome. Tests of live code were retargeted: metric-definition invariants, map-callout geometry, context tokens, coverage and the light result view.
+- Phase 3 as a whole removed about 33,000 lines. The suite went from 1,307 tests (9 min) to 858 (2 min).
+- **Found (not changed here):** `resolve_context_status` and `MFIContextStatus` still model the old statement classification. The light graph drops those fields from its output, but its "no accepted statements" status still comes from there. Simplifying it would change the context status the report shows, so it is left for a separate change.
 - **Found (not changed here):** on each phase, the router and dispatcher run-metadata helpers write `release_control: {}` and `context_status: {}` when the phase output lacks them, overwriting the stored values. The page reads both from the result, so nothing visible breaks. This matters when the router becomes the backend.
 
 ### Phase 4 — Seasonal: LangGraph phase graph, no checkpoint layer

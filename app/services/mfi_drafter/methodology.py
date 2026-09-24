@@ -14,7 +14,6 @@ from typing import Iterable, Literal, Mapping, Optional
 
 METHODOLOGY_VERSION = "databridge-current"
 ANALYSIS_SCHEMA_VERSION = "2.1"
-NARRATIVE_SCHEMA_VERSION = "2.1"
 SCORE_AUTHORITY = "databridge_level_1"
 SCORE_VALIDATION_ABS_TOLERANCE = 1e-6
 CURRENT_DATABRIDGE_ALPHA = 0.5
@@ -131,89 +130,6 @@ DIMENSION_DESCRIPTIONS: Mapping[str, str] = MappingProxyType(
             "general security affecting access to assessed markets."
         ),
     }
-)
-
-# Deterministic, dimension-specific review language for fallback narratives and for
-# replacing repeated LLM boilerplate. These statements intentionally stay within the
-# MFI evidence boundary: they request verification or monitoring and never prescribe a
-# transfer modality or infer an operational outcome.
-DIMENSION_REVIEW_GUIDANCE: Mapping[str, str] = MappingProxyType(
-    {
-        "Assortment": (
-            "Review the cited breadth and SKU-depth evidence to identify which "
-            "essential-goods groups require additional market verification."
-        ),
-        "Availability": (
-            "Review the cited category-availability and stock-out evidence to target "
-            "follow-up checks on the represented product groups."
-        ),
-        "Price": (
-            "Use the cited price-increase and price-stability evidence to target "
-            "additional price monitoring; the MFI result alone does not establish "
-            "affordability."
-        ),
-        "Resilience": (
-            "Review the cited replenishment, stock-duration, and supplier evidence to "
-            "target further verification of market resilience."
-        ),
-        "Competition": (
-            "Review the cited trader-competition and supply-control evidence to target "
-            "further verification of competitive conditions."
-        ),
-        "Infrastructure": (
-            "Review the cited market-condition and facility evidence to target "
-            "site-specific infrastructure verification."
-        ),
-        "Service": (
-            "Review the cited shopping and checkout-practice evidence to target "
-            "follow-up observation of the weakest retail practices."
-        ),
-        "Food Quality": (
-            "Review the cited applicable food-handling and protection questions to "
-            "target further quality-condition verification."
-        ),
-        "Access & Protection": (
-            "Review the cited access-barrier, threat, and security evidence to target "
-            "location-specific access and protection verification."
-        ),
-    }
-)
-
-NARRATIVE_PROMPT_CONSTRAINTS = (
-    "Use only values and identifiers in the supplied deterministic claim catalog.",
-    "Do not calculate, average, normalize, invert, rank, or transform values.",
-    "Every quantitative statement must cite one or more supplied metric IDs.",
-    "Do not present assessed-market summaries as nationally representative.",
-    "Do not use undocumented MFI risk classes or critical-market terminology.",
-    "Do not infer causality from contextual documents.",
-    "Do not infer absolute affordability or inflation from the Price dimension.",
-    "Do not describe supply-chain complexity itself as harmful.",
-    "Do not mention courtesy or consumer satisfaction under Service.",
-    "Do not mention operating hours under Access & Protection.",
-    "Do not equate a failed Food Quality condition with a share of goods affected.",
-    "Do not determine transfer modality from MFI evidence alone.",
-)
-
-# Content prohibitions, kept separate from the evidence contract above because they have a
-# different audience: the review step receives these but has no use for catalog rules.
-NARRATIVE_PROHIBITIONS = (
-    "Do not recommend, reject, compare, or predict the effectiveness of cash, vouchers, "
-    "in-kind assistance, hybrid approaches, or any transfer modality.",
-    "Do not infer affordability, inflation, purchasing power, beneficiary outcomes, or "
-    "programme feasibility from MFI evidence.",
-    "Do not assert that any value caused, drove, led to, exacerbated, eroded, diminished, "
-    "or resulted in any other outcome. Describe patterns, not mechanisms.",
-    "A conditional or hedged form of a prohibited conclusion is still a prohibited "
-    "conclusion. 'could be viable' and 'may be constrained' are not permitted.",
-    "You may state what the evidence does not establish, for example that the Price "
-    "dimension does not by itself measure affordability or purchasing power.",
-    "Recommendations may request further verification, monitoring, consultation, or "
-    "feasibility assessment, and nothing more.",
-    "Describe an unweighted mean of market-level rates using the supplied "
-    "permitted_subject_phrase. Never describe it as a share of traders, respondents, or "
-    "responses.",
-    "Write plain text only. Do not use Markdown delimiters: no backticks, asterisks, "
-    "headings, links, or code fences.",
 )
 
 
@@ -1148,7 +1064,6 @@ for _entry in ALL_METRIC_DEFINITIONS:
     if _entry.key in _registry:
         raise RuntimeError(f"Duplicate MFI methodology key: {_entry.key!r}")
     _registry[_entry.key] = _entry
-METRIC_REGISTRY: Mapping[tuple[int, str, str], MetricDefinition] = MappingProxyType(_registry)
 
 METRIC_DEFINITIONS_BY_ID: Mapping[str, MetricDefinition] = MappingProxyType(
     {definition.metric_id: definition for definition in ALL_METRIC_DEFINITIONS}
@@ -1157,14 +1072,6 @@ METRIC_DEFINITIONS_BY_ID: Mapping[str, MetricDefinition] = MappingProxyType(
 OFFICIAL_FULL_SCORE_VARIABLES = tuple(
     definition.variable_name for definition in OFFICIAL_SCORE_DEFINITIONS
 )
-OFFICIAL_DIMENSION_SCORE_VARIABLES: Mapping[str, str] = MappingProxyType(
-    {
-        definition.csv_dimension: definition.variable_name
-        for definition in OFFICIAL_SCORE_DEFINITIONS
-        if definition.csv_dimension != "MFI"
-    }
-)
-OVERALL_SCORE_VARIABLE = "MFIScoreMFI"
 MFIR_SCORE_VARIABLE = "MFIScoreMFIr"
 
 SUBSECTIONS_BY_DIMENSION: Mapping[str, tuple[MetricDefinition, ...]] = MappingProxyType(
@@ -1187,11 +1094,6 @@ DRIVERS_BY_DIMENSION: Mapping[str, tuple[MetricDefinition, ...]] = MappingProxyT
         for dimension in DISPLAY_DIMENSIONS
     }
 )
-
-
-def lookup_metric(level_id: int, dimension_name: str, variable_name: str) -> Optional[MetricDefinition]:
-    """Look up one metric using equality after fixed-width whitespace trimming."""
-    return METRIC_REGISTRY.get((int(level_id), str(dimension_name).strip(), str(variable_name).strip()))
 
 
 def calculate_dimension_score(

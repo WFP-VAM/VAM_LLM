@@ -2,21 +2,10 @@
 
 from importlib import import_module
 
-__all__ = [
-    "router",
-    "run_mfi_report_generation",
-    "build_graph",
-    "DIMENSION_DESCRIPTIONS",
+_SCHEMA_EXPORTS = (
     "MFI_DIMENSIONS",
-    "RISK_COLORS",
     "get_risk_level",
-    "Document",
-    "MFIMarketData",
-    "MFIDimensionScore",
-    "DimensionFinding",
-    "SkepticFlag",
-    "SurveyMetadata",
-    "GenerateMFIReportOutput",
+    "LightMFIReportOutput",
     "MFIReportStatusOutput",
     "MFIMetric",
     "MFIMetricSummary",
@@ -33,10 +22,17 @@ __all__ = [
     "MFIDeterministicTables",
     "MFIAssessmentProfile",
     "MFIReleaseControl",
-    "MFIGenerationDiagnostics",
     "MFIContextRetrieverStatus",
     "MFIContextStatus",
+)
+
+__all__ = [
+    "router",
+    "run_mfi_report_generation",
+    "build_graph",
+    "DIMENSION_DESCRIPTIONS",
     "build_assessment_profile",
+    *_SCHEMA_EXPORTS,
 ]
 
 
@@ -53,36 +49,6 @@ def __getattr__(name: str):
         return getattr(import_module(".methodology", __name__), name)
     if name == "build_assessment_profile":
         return getattr(import_module(".analysis", __name__), name)
-    if name in {
-        "MFI_DIMENSIONS",
-        "RISK_COLORS",
-        "get_risk_level",
-        "Document",
-        "MFIMarketData",
-        "MFIDimensionScore",
-        "DimensionFinding",
-        "SkepticFlag",
-        "SurveyMetadata",
-        "GenerateMFIReportOutput",
-        "MFIReportStatusOutput",
-        "MFIMetric",
-        "MFIMetricSummary",
-        "MFIMethodologyWarning",
-        "MFIExcludedMarketRecord",
-        "MFIAnalysisConfig",
-        "MFICoverageSummary",
-        "MFIStatisticalSummary",
-        "MFIAnalyzedMetric",
-        "MFILocalizedPatterns",
-        "MFIDimensionProfile",
-        "MFIMarketProfile",
-        "MFIMetricLedgerEntry",
-        "MFIDeterministicTables",
-        "MFIAssessmentProfile",
-        "MFIReleaseControl",
-        "MFIGenerationDiagnostics",
-        "MFIContextRetrieverStatus",
-        "MFIContextStatus",
-    }:
+    if name in _SCHEMA_EXPORTS:
         return getattr(import_module(".schemas", __name__), name)
     raise AttributeError(name)

@@ -118,6 +118,14 @@ def test_charts_render_alongside_the_drafts(args, monkeypatch):
     assert light_service.run_mfi_report_generation(**args, client=Drafting())["success"]
 
 
+def test_report_blocks_come_only_from_the_stored_result():
+    from app.shared.report_blocks import ReportBlock, resolve_mfi_report_blocks
+    stored = [ReportBlock(type="heading", text="Validated", level=1).model_dump()]
+    assert [block.text for block in resolve_mfi_report_blocks({"report_blocks": stored})] == ["Validated"]
+    with pytest.raises(ValueError, match="previous workflow"):
+        resolve_mfi_report_blocks({"assessment_profile": {}, "dimension_narratives": {}})
+
+
 def test_disabled_release_stops_before_the_graph_is_built(args, monkeypatch):
     from app.services.mfi_drafter.features import MFIAnalysisVersionDisabled, MFI_DRAFTER_ANALYSIS_VERSION_ENV
     def forbidden(*_args, **_kwargs):
@@ -177,6 +185,19 @@ def test_http_and_streamlit_share_results_and_recovery_endpoints_are_gone(args, 
     text = "\n".join(p.text for p in Document(BytesIO(response.content)).paragraphs)
     assert "Analytical annex" in text and "INCOMPLETE" not in text
     assert all(d in text for d in result["light_narrative"]["dimensions"])
+
+
+def test_results_of_the_previous_workflow_are_gone_from_both_backends(api):
+    from app.streamlit_backend import dispatcher
+    from app.shared import async_runs
+    async_runs.create_run("previous-workflow")
+    async_runs.set_run_completed("previous-workflow", result={"country": "Testland", "dimension_narratives": {},
+        "report_blocks": [{"type": "claim_warning", "text": "Old claim-level notice."}]})
+    for method, path in (("GET", "result"), ("POST", "export-docx")):
+        reply = api.request(method, f"/mfi-drafter/{path}/previous-workflow", json={} if method == "POST" else None)
+        local = dispatcher.dispatch_request(method, f"/mfi-drafter/{path}/previous-workflow", json_body={})
+        assert reply.status_code == local.status_code == 410
+        assert "previous MFI workflow" in reply.json()["detail"] and "previous MFI workflow" in local.json()["detail"]
 
 
 def test_failed_async_run_is_reported_without_a_result(args, api, monkeypatch):

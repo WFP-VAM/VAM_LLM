@@ -97,8 +97,3 @@ def preflight_maps(loaded):
     # No map is requested if no assessed markets can be located.
     if loaded is None or any(valid_location(m) for m in loaded.get('markets_data', [])):
         verified_manifest()
-
-
-def chart_dependencies(base):
-    return {'base': base, 'cartography': map_contract() if any(
-        valid_location(m) for m in base.get('markets_data', [])) else None}

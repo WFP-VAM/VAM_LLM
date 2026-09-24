@@ -220,15 +220,21 @@ def test_methodology_warning_is_prominent_in_result_view(monkeypatch):
     )
 
 
-def test_phase3_mean_priorities_limitations_and_qa_are_visible(monkeypatch):
+def test_mean_priorities_limitations_and_review_outcome_are_visible(monkeypatch):
     backend = FakeMFIBackend(
         upload=FakeUpload(),
         result={
             "run_id": "mfi-run-1",
+            "workflow_revision": "mfi-light-v1",
             "country": "South Sudan",
             "mean_mfi_across_assessed_markets": 6.234,
-            "llm_calls": 1,
+            "llm_calls": 6,
             "report_blocks": [],
+            "review_status": "completed",
+            "review_reports": {
+                "dimensions": {"needs_revision": True, "review_markdown": "Tighten the Price section."},
+                "markets": {"needs_revision": False, "review_markdown": "No changes needed."},
+            },
             "assessment_profile": {
                 "assessed_market_count": 12,
                 "priority_dimension_names": ["Service", "Infrastructure"],
@@ -236,26 +242,7 @@ def test_phase3_mean_priorities_limitations_and_qa_are_visible(monkeypatch):
                     {"message": "Regional coverage is incomplete."}
                 ],
             },
-            "qa_review": {
-                "status": "completed_with_warnings",
-                "flags": [
-                    {
-                        "severity": "high",
-                        "message": "One claim remains unverified.",
-                    }
-                ],
-            },
-                "generation_diagnostics": {
-                    "draft_batches_total": 8,
-                    "draft_batches_completed": 8,
-                    "draft_batches_failed": 0,
-                    "semantic_reviews_total": 3,
-                    "semantic_reviews_completed": 3,
-                    "semantic_reviews_failed": 0,
-                    "consolidated_correction_status": "completed",
-                    "consolidated_correction_field_count": 2,
-                    "corrected_claim_verification_status": "completed",
-                },
+            "generation_diagnostics": {"phases": [], "progress_pct": 100},
         },
     )
     app = _app(monkeypatch, backend)
@@ -263,11 +250,12 @@ def test_phase3_mean_priorities_limitations_and_qa_are_visible(monkeypatch):
     app = _element(app.button, "Generate report").click().run(timeout=20)
 
     assert not app.exception
-    assert any(
-        metric.label == "Mean MFI across assessed markets"
-        and metric.value == "6.23/10"
-        for metric in app.metric
-    )
+    metrics = {metric.label: metric.value for metric in app.metric}
+    assert metrics["Mean MFI across assessed markets"] == "6.23/10"
+    assert metrics["Narrative QA"] == "Completed"
+    assert metrics["Dimensions review"] == "Corrected"
+    assert metrics["Markets review"] == "No changes requested"
+    assert metrics["Model calls"] == "6"
     assert any(
         "Priority dimensions: Service, Infrastructure" in info.value
         for info in app.info
@@ -275,85 +263,6 @@ def test_phase3_mean_priorities_limitations_and_qa_are_visible(monkeypatch):
     assert any(
         "Regional coverage is incomplete" in warning.value
         for warning in app.warning
-    )
-    assert any(
-        "unresolved material issues" in error.value for error in app.error
-    )
-    assert any(
-        metric.label == "Draft batches" and metric.value == "8/8"
-        for metric in app.metric
-    )
-    assert any(
-        metric.label == "Semantic reviews" and metric.value == "3/3"
-        for metric in app.metric
-    )
-    assert any(
-        metric.label == "Corrected fields" and metric.value == "2"
-        for metric in app.metric
-    )
-
-
-def test_unverified_figures_are_delivered_as_warning_not_application_error(monkeypatch):
-    backend = FakeMFIBackend(
-        upload=FakeUpload(),
-        result={
-            "run_id": "mfi-run-figure-warning",
-            "country": "Gaza",
-            "mean_mfi_across_assessed_markets": 5.4,
-            "llm_calls": 14,
-            "report_blocks": [
-                {
-                    "type": "claim_warning",
-                    "text": "Figure to be checked.",
-                    "meta": {"claim_id": "dimension.price.geography.2"},
-                }
-            ],
-            "assessment_profile": {
-                "assessed_market_count": 27,
-                "priority_dimension_names": ["Price"],
-                "limitations": [],
-            },
-            "qa_review": {
-                "status": "delivered_with_unverified_figures",
-                "correction_attempts": 1,
-                "flags": [
-                    {
-                        "severity": "high",
-                        "code": "numeric_value_mismatch",
-                        "claim_id": "dimension.price.geography.2",
-                        "delivery_disposition": (
-                            "retained_unverified_figure_for_delivery"
-                        ),
-                    }
-                ],
-            },
-            "generation_diagnostics": {
-                "unverified_figure_claim_count": 1,
-                "unverified_figure_flag_count": 1,
-                "delivery_qa_status": "delivered_with_unverified_figures",
-            },
-        },
-    )
-    app = _app(monkeypatch, backend)
-
-    app = _element(app.button, "Generate report").click().run(timeout=20)
-
-    assert not app.exception
-    assert any(
-        metric.label == "Narrative QA"
-        and metric.value == "Delivered With Unverified Figures"
-        for metric in app.metric
-    )
-    assert any(
-        metric.label == "Figures to check" and metric.value == "1"
-        for metric in app.metric
-    )
-    assert any(
-        "Delivered with unverified figures" in warning.value
-        for warning in app.warning
-    )
-    assert not any(
-        "unresolved material issues" in error.value for error in app.error
     )
 
 

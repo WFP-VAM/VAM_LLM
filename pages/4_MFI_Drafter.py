@@ -174,8 +174,6 @@ if isinstance(result, dict):
     excluded_records = result.get("excluded_market_records") or []
     assessment_profile = result.get("assessment_profile") or {}
     limitations = assessment_profile.get("limitations") or []
-    is_light = result.get("workflow_revision") == "mfi-light-v1"
-    qa_review = result.get("qa_review") or {}
     context_status = result.get("context_status") or {}
 
     overview_columns = st.columns(3)
@@ -192,7 +190,7 @@ if isinstance(result, dict):
     )
     overview_columns[2].metric(
         "Narrative QA",
-        str((result.get("review_status") if is_light else qa_review.get("status")) or "not recorded").replace("_", " ").title(),
+        str(result.get("review_status") or "not recorded").replace("_", " ").title(),
     )
     if priority_dimensions:
         st.info("Priority dimensions: " + ", ".join(priority_dimensions))
@@ -219,63 +217,12 @@ if isinstance(result, dict):
             )
             if message:
                 st.warning(str(message))
-    material_qa_flags = [
-        flag
-        for flag in qa_review.get("flags", []) or []
-        if isinstance(flag, dict) and flag.get("severity") in {"high", "medium"}
-    ]
-    all_qa_flags = [
-        flag
-        for flag in qa_review.get("flags", []) or []
-        if isinstance(flag, dict)
-    ]
-    severity_counts = {
-        severity: sum(flag.get("severity") == severity for flag in all_qa_flags)
-        for severity in ("high", "medium", "low")
-    }
     diagnostics = result.get("generation_diagnostics") or {}
-    substitutions = diagnostics.get("claim_substitutions", []) or []
-    unverified_figure_claim_count = int(
-        diagnostics.get("unverified_figure_claim_count", 0) or 0
-    )
-    if is_light:
-        review_columns = st.columns(3)
-        for index, family in enumerate(("dimensions", "markets")):
-            review = (result.get("review_reports") or {}).get(family, {})
-            review_columns[index].metric(f"{family.title()} review", "Corrected" if review.get("needs_revision") else "No changes requested")
-        review_columns[2].metric("Model calls", str(result.get("llm_calls", 0)))
-    else:
-        qa_columns = st.columns(6)
-        qa_columns[0].metric("High QA findings", str(severity_counts["high"]))
-        qa_columns[1].metric("Medium QA findings", str(severity_counts["medium"]))
-        qa_columns[2].metric("Low QA findings", str(severity_counts["low"]))
-        qa_columns[3].metric(
-            "Correction cycles", str(qa_review.get("correction_attempts") or 0)
-        )
-        qa_columns[4].metric("Withdrawn drafts", str(len(substitutions)))
-        qa_columns[5].metric(
-            "Figures to check", str(unverified_figure_claim_count)
-        )
-    if material_qa_flags:
-        claim_scoped = any(
-            isinstance(block, dict) and block.get("type") == "claim_warning"
-            for block in result.get("report_blocks", []) or []
-        )
-        qa_location = (
-            "Review the claim-level notices and final QA findings table."
-            if claim_scoped
-            else "Review the process-level notices and final QA findings table."
-        )
-        if qa_review.get("status") == "delivered_with_unverified_figures":
-            st.warning(
-                "Delivered with unverified figures. Check every marked figure "
-                f"against the source data before operational use. {qa_location}"
-            )
-        else:
-            st.error(
-                "Narrative QA completed with unresolved material issues. "
-                + qa_location
-            )
+    review_columns = st.columns(3)
+    for index, family in enumerate(("dimensions", "markets")):
+        review = (result.get("review_reports") or {}).get(family, {})
+        review_columns[index].metric(f"{family.title()} review", "Corrected" if review.get("needs_revision") else "No changes requested")
+    review_columns[2].metric("Model calls", str(result.get("llm_calls", 0)))
 
     def _preview() -> None:
         render_report_blocks(result.get("report_blocks"), visualizations=result.get("visualizations"))
@@ -292,90 +239,10 @@ if isinstance(result, dict):
         st.markdown("**Release control**")
         st.json(result.get("release_control") or release_control)
         st.markdown("**Generation diagnostics**")
-        if is_light:
-            st.dataframe(diagnostics.get("phases", []), hide_index=True)
-            for family, review in (result.get("review_reports") or {}).items():
-                st.markdown(f"**{family.title()} review report**")
-                st.markdown(review.get("review_markdown", ""))
-        else:
-            task_columns = st.columns(4)
-            task_columns[0].metric(
-                "Draft batches",
-                (
-                    f"{diagnostics.get('draft_batches_completed', 0)}/"
-                    f"{diagnostics.get('draft_batches_total', 0)}"
-                ),
-            )
-            task_columns[1].metric(
-                "Semantic reviews",
-                (
-                    f"{diagnostics.get('semantic_reviews_completed', 0)}/"
-                    f"{diagnostics.get('semantic_reviews_total', 0)}"
-                ),
-            )
-            task_columns[2].metric(
-                "Consolidated correction",
-                str(diagnostics.get("consolidated_correction_status", "not_needed")),
-            )
-            task_columns[3].metric(
-                "Corrected-claim verification",
-                str(
-                    diagnostics.get(
-                        "corrected_claim_verification_status", "not_needed"
-                    )
-                ),
-            )
-            batch_columns = st.columns(3)
-            batch_columns[0].metric(
-                "Corrected fields",
-                str(diagnostics.get("consolidated_correction_field_count", 0)),
-            )
-            batch_columns[1].metric(
-                "Failed draft batches",
-                str(diagnostics.get("draft_batches_failed", 0)),
-            )
-            batch_columns[2].metric(
-                "Failed semantic reviews",
-                str(diagnostics.get("semantic_reviews_failed", 0)),
-            )
-            prompt_columns = st.columns(5)
-            prompt_columns[0].metric(
-                "Largest market prompt",
-                (
-                    f"{int(diagnostics.get('market_draft_max_observed_prompt_characters', 0) or 0):,} "
-                    "characters"
-                ),
-            )
-            prompt_columns[1].metric(
-                "Market prompt limit",
-                (
-                    f"{int(diagnostics.get('market_draft_prompt_max_characters', 0) or 0):,} "
-                    "characters"
-                ),
-            )
-            prompt_columns[2].metric(
-                "Market call deadline",
-                (
-                    f"{float(diagnostics.get('market_draft_timeout_seconds', 0) or 0):g} "
-                    "seconds"
-                ),
-            )
-            semantic_prompt_sizes = [
-                int(item.get("prompt_character_count") or 0)
-                for item in diagnostics.get("semantic_reviews", []) or []
-                if isinstance(item, dict)
-            ]
-            prompt_columns[3].metric(
-                "Largest semantic-review prompt",
-                f"{max(semantic_prompt_sizes, default=0):,} characters",
-            )
-            prompt_columns[4].metric(
-                "Semantic-review prompt limit",
-                (
-                    f"{int(diagnostics.get('red_team_package_target_characters', 0) or 0):,} "
-                    "characters"
-                ),
-            )
+        st.dataframe(diagnostics.get("phases", []), hide_index=True)
+        for family, review in (result.get("review_reports") or {}).items():
+            st.markdown(f"**{family.title()} review report**")
+            st.markdown(review.get("review_markdown", ""))
         st.json(result.get("generation_diagnostics") or {})
         st.markdown("**LLM call diagnostics**")
         render_llm_diagnostics(result.get("llm_diagnostics") or {})
@@ -402,11 +269,6 @@ if isinstance(result, dict):
         )
         st.markdown("**Deterministic assessment profile**")
         st.json(assessment_profile)
-        if not is_light:
-            st.markdown("**Claim validation**")
-            st.json(result.get("claim_validation") or {})
-            st.markdown("**QA review**")
-            st.json(qa_review)
 
     if run_id:
         render_report_delivery(

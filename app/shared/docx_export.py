@@ -24,9 +24,6 @@ _MFI_STYLE_NAMES = {
     "subsection": "MFI Subsection Heading",
     "minor_heading": "MFI Minor Heading",
     "body": "MFI Body",
-    "claim": "MFI Claim",
-    "evidence_note": "MFI Evidence Note",
-    "definition": "MFI Definition",
     "notice": "MFI Notice",
     "caption": "MFI Caption",
     "header": "MFI Header",
@@ -107,9 +104,6 @@ def _configure_mfi_styles(doc: Document) -> None:
     _ensure_mfi_style(doc, "subsection", size=11, color="1F4D78", bold=True, before=8, after=4, keep_with_next=True, outline_level=2)
     _ensure_mfi_style(doc, "minor_heading", size=9.5, color="1F4D78", bold=True, before=6, after=3, keep_with_next=True, outline_level=3)
     _ensure_mfi_style(doc, "body", size=9, after=3, line_spacing=1.05)
-    _ensure_mfi_style(doc, "claim", size=9, after=2, line_spacing=1.05, keep_together=True)
-    _ensure_mfi_style(doc, "evidence_note", size=8, color="505050", italic=True, after=2, keep_together=True)
-    _ensure_mfi_style(doc, "definition", size=8.5, after=2, line_spacing=1.05, keep_with_next=True, keep_together=True)
     _ensure_mfi_style(doc, "notice", size=8.5, after=2, line_spacing=1.05, keep_together=True)
     _ensure_mfi_style(doc, "caption", size=8, color="505050", italic=True, after=4, keep_together=True)
     _ensure_mfi_style(doc, "header", size=8, color="666666", after=0)
@@ -208,155 +202,10 @@ def _add_text_lines(
         _apply_mfi_paragraph_layout(paragraph, layout or {})
 
 
-def _get_continuous_score_rgb(score: float) -> tuple[int, int, int]:
-    """Map a 0-10 score continuously from near-white to WFP blue."""
-    ratio = max(0.0, min(float(score), 10.0)) / 10.0
-    start = (239, 246, 255)
-    end = (0, 114, 188)
-    return tuple(
-        round(start[index] + (end[index] - start[index]) * ratio)
-        for index in range(3)
-    )
-
-
 def _set_cell_background(cell: Any, rgb_tuple: tuple[int, int, int]) -> None:
     r, g, b = rgb_tuple
     shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{r:02x}{g:02x}{b:02x}"/>')
     cell._tc.get_or_add_tcPr().append(shading_elm)
-
-
-def _add_overview_table_to_document(doc: Document, *, meta: Dict[str, Any]) -> None:
-    dims = meta.get("dimensions") or []
-    rows = meta.get("rows") or []
-    if not isinstance(dims, list) or not isinstance(rows, list) or not dims or not rows:
-        return
-
-    sorted_rows = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        sorted_rows.append(r)
-    sorted_rows = sorted(sorted_rows, key=lambda x: float(x.get("overall_mfi", 0) or 0))
-
-    n_rows = len(sorted_rows) + 1
-    n_cols = len(dims) + 3
-
-    table = doc.add_table(rows=n_rows, cols=n_cols)
-    table.style = "Table Grid"
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    headers = ["Market", "Region"] + [str(d) for d in dims] + ["MFI"]
-    header_row = table.rows[0]
-    for idx, header in enumerate(headers):
-        cell = header_row.cells[idx]
-        cell.text = str(header)
-        _set_cell_background(cell, (0, 114, 188))
-        for paragraph in cell.paragraphs:
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for run in paragraph.runs:
-                run.bold = True
-                run.font.size = Pt(8)
-                run.font.color.rgb = RGBColor(255, 255, 255)
-
-    for row_idx, market in enumerate(sorted_rows, start=1):
-        row = table.rows[row_idx]
-
-        market_name = str(market.get("market_name", "") or "").strip()
-        row.cells[0].text = market_name
-
-        region = str(market.get("region", "") or "").strip()
-        row.cells[1].text = region
-
-        dim_scores = market.get("dimension_scores")
-        if not isinstance(dim_scores, dict):
-            dim_scores = {}
-
-        for dim_idx, dim in enumerate(dims):
-            cell = row.cells[dim_idx + 2]
-            try:
-                raw_score = dim_scores.get(dim)
-                score = float(raw_score) if raw_score is not None else None
-            except (TypeError, ValueError):
-                score = None
-            cell.text = f"{score:.2f}" if score is not None else "—"
-            if score is not None:
-                _set_cell_background(cell, _get_continuous_score_rgb(score))
-            text_color = (
-                RGBColor(255, 255, 255)
-                if score is not None and score >= 6.5
-                else RGBColor(0, 0, 0)
-            )
-            for paragraph in cell.paragraphs:
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                for run in paragraph.runs:
-                    run.font.size = Pt(8)
-                    run.font.color.rgb = text_color
-
-        mfi_cell = row.cells[-1]
-        try:
-            raw_mfi = market.get("overall_mfi")
-            mfi_score = float(raw_mfi) if raw_mfi is not None else None
-        except (TypeError, ValueError):
-            mfi_score = None
-        mfi_cell.text = f"{mfi_score:.2f}" if mfi_score is not None else "—"
-        if mfi_score is not None:
-            _set_cell_background(mfi_cell, _get_continuous_score_rgb(mfi_score))
-        mfi_text_color = (
-            RGBColor(255, 255, 255)
-            if mfi_score is not None and mfi_score >= 6.5
-            else RGBColor(0, 0, 0)
-        )
-        for paragraph in mfi_cell.paragraphs:
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for run in paragraph.runs:
-                run.font.size = Pt(8)
-                run.font.color.rgb = mfi_text_color
-                run.bold = True
-
-        for cell_idx in [0, 1]:
-            cell = row.cells[cell_idx]
-            for paragraph in cell.paragraphs:
-                for run in paragraph.runs:
-                    run.font.size = Pt(8)
-
-    doc.add_paragraph()
-
-
-def _add_definition_box(
-    doc: Document,
-    text: str,
-    *,
-    mfi: bool = False,
-    layout: Optional[Dict[str, Any]] = None,
-) -> None:
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return
-
-    table = doc.add_table(rows=1, cols=1)
-    table.style = "Table Grid"
-    _set_table_row_cant_split(table.rows[0])
-
-    cell = table.rows[0].cells[0]
-    header_para = cell.paragraphs[0]
-    if mfi:
-        header_para.style = _MFI_STYLE_NAMES["definition"]
-        _apply_mfi_paragraph_layout(header_para, layout or {})
-
-    header_run = header_para.add_run("Definition: ")
-    header_run.bold = True
-    header_run.font.size = Pt(9)
-    header_run.font.color.rgb = RGBColor(0, 114, 188)
-
-    def_run = header_para.add_run(cleaned)
-    def_run.italic = True
-    def_run.font.size = Pt(9)
-
-    shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="E6F3FF"/>')
-    cell._tc.get_or_add_tcPr().append(shading)
-
-    if not mfi:
-        doc.add_paragraph()
 
 
 def _add_basket_definitions_table_to_document(doc: Document, *, meta: Dict[str, Any]) -> None:
@@ -567,12 +416,7 @@ def build_docx_bytes_from_report_blocks(
             continue
 
         if block.type == "paragraph":
-            role = str(layout.get("role") or "body")
-            style = (
-                _MFI_STYLE_NAMES["claim" if role == "claim" else "body"]
-                if mfi_document and layout
-                else None
-            )
+            style = _MFI_STYLE_NAMES["body"] if mfi_document and layout else None
             _add_text_lines(
                 doc,
                 block.text or "",
@@ -672,38 +516,10 @@ def build_docx_bytes_from_report_blocks(
 
         if block.type == "table":
             meta = block.meta or {}
-            if isinstance(meta, dict) and meta.get("table_kind") == "mfi_overview":
-                _add_overview_table_to_document(doc, meta=meta)
-            elif isinstance(meta, dict) and meta.get("table_kind") == "basket_definitions":
+            if isinstance(meta, dict) and meta.get("table_kind") == "basket_definitions":
                 _add_basket_definitions_table_to_document(doc, meta=meta)
             elif isinstance(meta, dict) and meta.get("table_kind") == "mfi_presentation":
                 _add_mfi_presentation_table(doc, meta=meta, layout=layout)
-            elif isinstance(meta, dict) and meta.get("table_kind") == "mfi_deterministic":
-                raise ValueError(
-                    "Unprojected canonical MFI tables cannot be rendered in DOCX"
-                )
-            continue
-
-        if block.type == "definition_box":
-            _add_definition_box(
-                doc,
-                block.text or "",
-                mfi=mfi_document,
-                layout=layout,
-            )
-            continue
-
-        if block.type == "evidence_note":
-            paragraph = doc.add_paragraph(
-                style=(
-                    _MFI_STYLE_NAMES["evidence_note"] if mfi_document else None
-                )
-            )
-            run = paragraph.add_run(f"Evidence: {block.text or ''}")
-            run.italic = True
-            run.font.size = Pt(8)
-            run.font.color.rgb = RGBColor(80, 80, 80)
-            _apply_mfi_paragraph_layout(paragraph, layout)
             continue
 
         if block.type == "limitation_box":
@@ -725,36 +541,6 @@ def build_docx_bytes_from_report_blocks(
                 label="Methodology",
                 fill="E6F3FF",
                 color=(0, 114, 188),
-                mfi=mfi_document,
-                layout=layout,
-            )
-            continue
-
-        if block.type == "qa_warning":
-            _add_notice_box(
-                doc,
-                block.text or "",
-                label="QA warning",
-                fill="FDE8E8",
-                color=(176, 0, 32),
-                mfi=mfi_document,
-                layout=layout,
-            )
-            continue
-
-        if block.type == "claim_warning":
-            meta = block.meta or {}
-            is_withdrawn = (
-                isinstance(meta, dict)
-                and meta.get("disposition")
-                == "replaced_by_deterministic_fallback"
-            )
-            _add_notice_box(
-                doc,
-                block.text or "",
-                label="Claim warning",
-                fill="FDE8E8" if is_withdrawn else "FFF4CC",
-                color=(176, 0, 32) if is_withdrawn else (145, 94, 0),
                 mfi=mfi_document,
                 layout=layout,
             )

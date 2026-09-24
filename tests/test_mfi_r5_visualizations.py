@@ -15,13 +15,17 @@ from app.services.mfi_drafter.visualization import (
     MAP_LABEL_MAX,
     MFIMapLabelInput,
     MFIVisualizationContractError,
-    boxes_overlap,
     format_market_coverage,
     place_map_callouts,
     select_map_label_inputs,
     validate_dimension_chart_coverage,
 )
-from app.shared.report_blocks import build_mfi_report_blocks
+
+
+def boxes_overlap(left, right) -> bool:
+    """The geometry a placement result promises: no two callout boxes intersect."""
+    return visualization_contract._boxes_overlap(left.bbox_pixels, right.bbox_pixels, 0.0)
+
 
 @pytest.mark.parametrize(
     ("value", "plotted", "expected"),
@@ -241,29 +245,3 @@ def test_map_callouts_use_deterministic_edge_lane_when_offsets_are_exhausted(
         plt.close(figure)
 
 
-def test_geographic_report_caption_explains_numbered_callouts() -> None:
-    blocks = build_mfi_report_blocks(
-        {
-            "visualizations": {"geographic_map": "image"},
-            "assessment_profile": {
-                "dimensions": [],
-                "markets": [],
-                "priority_dimension_names": [],
-                "metric_ledger": {},
-                "tables": {
-                    "dimension_rows": [],
-                    "regional_rows": [],
-                    "subsection_rows": [],
-                    "driver_rows": [],
-                    "relevant_item_rows": [],
-                    "priority_market_rows": [],
-                },
-            },
-        }
-    )
-    map_block = next(
-        block
-        for block in blocks
-        if block.type == "figure" and block.figure_id == "geographic_map"
-    )
-    assert "numbered callouts identify selected review markets" in map_block.caption

@@ -13,7 +13,6 @@ from app.services.mfi_drafter.features import (
     mfi_release_control,
     require_mfi_analysis_v2,
 )
-from app.services.mfi_drafter.schemas import GenerateMFIReportOutput
 from app.streamlit_backend import dispatcher
 
 
@@ -223,11 +222,3 @@ def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch):
     assert captured["control"]["deployment_revision"] == "pilot-revision"
 
 
-def test_public_schema_marks_phase4_aliases_deprecated():
-    properties = GenerateMFIReportOutput.model_json_schema()["properties"]
-
-    assert properties["national_mfi"]["deprecated"] is True
-    assert properties["risk_distribution"]["deprecated"] is True
-    assert properties["dimension_scores"]["deprecated"] is True
-    assert "release_control" in properties
-    assert "generation_diagnostics" in properties

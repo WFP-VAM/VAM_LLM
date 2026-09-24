@@ -120,11 +120,15 @@ def _require_enabled_release_control():
     return control
 
 
-def _build_mfi_output(result: Dict[str, Any]) -> LightMFIReportOutput:
-    from .light_report import public_output
+def _require_light_result(result: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("workflow_revision") != "mfi-light-v1":
         raise HTTPException(status_code=410, detail="Reports produced by the previous MFI workflow are no longer supported")
-    return LightMFIReportOutput.model_validate(public_output(result))
+    return result
+
+
+def _build_mfi_output(result: Dict[str, Any]) -> LightMFIReportOutput:
+    from .light_report import public_output
+    return LightMFIReportOutput.model_validate(public_output(_require_light_result(result)))
 
 
 def _run_mfi_from_structured_data(
@@ -410,7 +414,7 @@ async def export_mfi_docx(
     if run.status != "completed":
         raise HTTPException(status_code=409, detail=f"Run not completed. Current status: {run.status}")
 
-    result = run.result or {}
+    result = _require_light_result(run.result or {})
     try:
         report_blocks = resolve_mfi_report_blocks(result)
         docx_bytes = build_docx_bytes_from_report_blocks(

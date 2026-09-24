@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TypedDict
 from copy import deepcopy
 from langgraph.graph import StateGraph, START, END
-from .light_contracts import WORKFLOW, NODES
+from .light_contracts import WORKFLOW
 from .light_evidence import evidence, section_specs, source_map
 from .light_runtime import ModelRuntime, Oversized, public_diagnostics
 

@@ -406,11 +406,15 @@ def _require_enabled_mfi_release_control():
     return control
 
 
-def _build_mfi_report_output(result: Dict[str, Any]) -> Dict[str, Any]:
-    from app.services.mfi_drafter.light_report import public_output
+def _require_light_mfi_result(result: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("workflow_revision") != "mfi-light-v1":
         raise LocalHTTPException(410, "Reports produced by the previous MFI workflow are no longer supported")
-    return public_output(result)
+    return result
+
+
+def _build_mfi_report_output(result: Dict[str, Any]) -> Dict[str, Any]:
+    from app.services.mfi_drafter.light_report import public_output
+    return public_output(_require_light_mfi_result(result))
 
 
 def _build_market_monitor_output(
@@ -764,7 +768,7 @@ def _mfi_drafter_export_docx(run_id: str, *, json_body: Any) -> LocalResponse:
     include_sources = bool(options.get("include_sources", True))
     include_visualizations = bool(options.get("include_visualizations", True))
 
-    result = run.result or {}
+    result = _require_light_mfi_result(run.result or {})
     try:
         report_blocks = resolve_mfi_report_blocks(result)
         docx_bytes = build_docx_bytes_from_report_blocks(

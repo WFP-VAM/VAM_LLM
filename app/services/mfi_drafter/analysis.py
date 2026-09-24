@@ -15,7 +15,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from pydantic import BaseModel
 
-from .claim_identity import context_token as _context_token
+from .identity import context_token as _context_token
 from .methodology import (
     ANALYSIS_SCHEMA_VERSION,
     DISPLAY_DIMENSIONS,

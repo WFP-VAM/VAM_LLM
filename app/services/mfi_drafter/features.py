@@ -94,12 +94,3 @@ def require_mfi_analysis_v2(
     if not resolved.enabled or resolved.analysis_version != "2":
         raise MFIAnalysisVersionDisabled(resolved)
     return resolved
-
-
-def mfi_release_feature_metadata(
-    control: Optional[MFIReleaseControl] = None,
-) -> dict[str, object]:
-    """Return submission metadata shared by FastAPI and in-process paths."""
-
-    resolved = control or mfi_release_control()
-    return {"release_control": resolved.model_dump()}

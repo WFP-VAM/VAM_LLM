@@ -82,25 +82,6 @@ def accepted_context_statements(
     return accepted
 
 
-def cited_context_document_ids(
-    statements: Sequence[Mapping[str, Any]],
-    documents: Sequence[Mapping[str, Any]],
-) -> list[str]:
-    """Return document IDs used by accepted statements in stable statement order."""
-    known = {
-        str(document.get("doc_id"))
-        for document in documents
-        if isinstance(document, Mapping) and document.get("doc_id")
-    }
-    ids: list[str] = []
-    for statement in accepted_context_statements(statements, documents):
-        for document_id in statement.get("document_ids", []) or []:
-            value = str(document_id)
-            if value in known and value not in ids:
-                ids.append(value)
-    return ids
-
-
 def not_attempted_context_status(
     sources: Iterable[str] = DEFAULT_CONTEXT_SOURCES,
 ) -> MFIContextStatus:
@@ -195,28 +176,4 @@ def resolve_context_status(
         limitation_code=limitation_code,
         classification_outcome="degraded" if unresolved_statement_count else "failed" if classification_failed else "completed" if total and mode == "llm" else "not_started",
         unresolved_statement_count=unresolved_statement_count,
-    )
-
-
-def reconcile_context_status(
-    current_status: Mapping[str, Any] | MFIContextStatus,
-    *,
-    documents: Sequence[Mapping[str, Any]],
-    statements: Sequence[Mapping[str, Any]],
-) -> MFIContextStatus:
-    """Recompute accepted-statement counts after final QA substitutions."""
-    current = (
-        current_status
-        if isinstance(current_status, MFIContextStatus)
-        else MFIContextStatus.model_validate(current_status)
-    )
-    if current.status == "not_attempted":
-        return current
-    return resolve_context_status(
-        retriever_statuses=current.retrievers,
-        documents=documents,
-        statements=statements,
-        extraction_mode=current.extraction_mode,
-        classification_failed=current.status == "classification_failed",
-        unresolved_statement_count=current.unresolved_statement_count,
     )

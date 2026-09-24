@@ -1,16 +1,6 @@
-"""Visible analytical coverage and lossless body/annex projection."""
+"""The analytical annex and the check that every required evidence table is visible."""
 from __future__ import annotations
 from copy import deepcopy
-
-BODY_LIMITS = {"key_findings": 3, "subdimension_analysis": 2, "geographic_patterns": 2}
-
-
-def body_projection(narratives):
-    result = deepcopy(narratives)
-    for narrative in result.values():
-        for field, limit in BODY_LIMITS.items():
-            narrative[field] = narrative.get(field, [])[:limit]
-    return result
 
 
 def table_block(title, rows, columns, *, requirements=()):
@@ -23,8 +13,8 @@ def table_block(title, rows, columns, *, requirements=()):
 
 
 def annex_blocks(result):
-    from app.shared.report_blocks import ReportBlock, _append_mfi_claim, _mfi_qa_context
-    profile, narratives = result["assessment_profile"], result.get("dimension_narratives", {})
+    from app.shared.report_blocks import ReportBlock
+    profile = result["assessment_profile"]
     requirements = profile.get("coverage_manifest", [])
     blocks = [ReportBlock(type="heading", text="Analytical annex: complete dimension evidence", level=2)]
     def formatted(value):
@@ -33,12 +23,6 @@ def annex_blocks(result):
         name = dimension["dimension"]
         blocks.append(ReportBlock(type="heading", text=name, level=3,
                                   meta={"section": "analytical_annex", "dimension": name}))
-        for field, limit in BODY_LIMITS.items():
-            for item in narratives.get(name, {}).get(field, [])[limit:]:
-                claim = item.get("interpretation") if field == "subdimension_analysis" else item
-                _append_mfi_claim(blocks, claim, catalog=result.get("claim_catalog", {}),
-                    documents={doc["doc_id"]: doc for doc in result.get("contextual_documents", [])},
-                    qa_context=_mfi_qa_context(result), include_evidence_notes=False)
         own = [r for r in requirements if r["dimension"] == name]
         by_kind = {r["kind"]: r["requirement_id"] for r in own}
         stats = dimension.get("statistics", {})
@@ -94,7 +78,7 @@ def annex_blocks(result):
     return blocks
 
 
-def evaluate_coverage(profile, blocks, narratives=None):
+def evaluate_coverage(profile, blocks):
     visible = {}
     for index, block in enumerate(blocks):
         value = block.model_dump() if hasattr(block, "model_dump") else block
@@ -104,6 +88,5 @@ def evaluate_coverage(profile, blocks, narratives=None):
     for requirement in manifest:
         requirement["satisfied_by"] = visible.get(requirement["requirement_id"], [])
         requirement["status"] = "covered" if requirement["satisfied_by"] else "pending"
-    missing_dimensions = [d["dimension"] for d in profile.get("dimensions", []) if narratives is not None and not narratives.get(d["dimension"], {}).get("summary")]
-    return {"requirements": manifest, "complete": not missing_dimensions and all(r["status"] != "pending" for r in manifest),
-            "missing_dimensions": missing_dimensions, "covered": sum(r["status"] == "covered" for r in manifest), "total": len(manifest)}
+    return {"requirements": manifest, "complete": all(r["status"] != "pending" for r in manifest),
+            "covered": sum(r["status"] == "covered" for r in manifest), "total": len(manifest)}

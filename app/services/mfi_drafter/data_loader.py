@@ -586,10 +586,6 @@ def _extract_evidence_group(
     return metrics, warnings
 
 
-def _missing_applicability(definition: MetricDefinition) -> str:
-    return "missing"
-
-
 def _evidence_warning(
     market_name: str,
     definition: MetricDefinition,
@@ -927,10 +923,3 @@ def _nullable_int(value: Any) -> Optional[int]:
         return int(number) if math.isfinite(number) and number >= 0 and number.is_integer() else None
     except (TypeError, ValueError):
         return None
-
-
-def _first_numeric(values: Optional[pd.Series]) -> Optional[float]:
-    if values is None:
-        return None
-    value = _first_non_null(values)
-    return float(value) if value is not None else None

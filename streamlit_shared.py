@@ -859,18 +859,7 @@ def render_llm_diagnostics(diagnostics: Any, *, live: bool = False) -> None:
             f"operation={failure.get('operation') or 'unknown'}; "
             f"call_id={failure.get('call_id') or 'unknown'}."
         )
-        optional_mfi_context_failure = (
-            str(diagnostics.get("service") or "") == "mfi-drafter"
-            and failure.get("node") == "context_extractor"
-        )
-        if optional_mfi_context_failure:
-            st.warning(
-                "Optional context classification was unavailable; generation "
-                "continues using only the MFI assessment. Technical trace: "
-                + message
-            )
-        else:
-            st.error(message)
+        st.error(message)
 
     if not live and calls:
         rows = []
@@ -930,35 +919,6 @@ def render_run_status(
         llm_diagnostics = metadata.get("llm_diagnostics")
         if isinstance(llm_diagnostics, dict) and llm_diagnostics:
             render_llm_diagnostics(llm_diagnostics, live=True)
-
-        generation_diagnostics = metadata.get("generation_diagnostics")
-        if (
-            isinstance(generation_diagnostics, dict)
-            and generation_diagnostics.get("fallback_policy") == "disabled_live"
-        ):
-            workflow_columns = st.columns(3)
-            workflow_columns[0].metric(
-                "MFI draft batches",
-                (
-                    f"{generation_diagnostics.get('draft_batches_completed', 0)}/"
-                    f"{generation_diagnostics.get('draft_batches_total', 0)}"
-                ),
-            )
-            workflow_columns[1].metric(
-                "MFI semantic reviews",
-                (
-                    f"{generation_diagnostics.get('semantic_reviews_completed', 0)}/"
-                    f"{generation_diagnostics.get('semantic_reviews_total', 0)}"
-                ),
-            )
-            workflow_columns[2].metric(
-                "MFI correction",
-                str(
-                    generation_diagnostics.get(
-                        "consolidated_correction_status", "not_needed"
-                    )
-                ),
-            )
 
         live_outputs = metadata.get("live_outputs")
         if isinstance(live_outputs, dict) and live_outputs:
@@ -1183,20 +1143,6 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
                         st.markdown(f"- {r}")
             continue
 
-        if btype == "definition_box":
-            text = block.get("text")
-            if isinstance(text, str) and text.strip():
-                st.info(text)
-            else:
-                st.write(block)
-            continue
-
-        if btype == "evidence_note":
-            text = str(block.get("text") or "").strip()
-            if text:
-                st.caption(f"Evidence: {text}")
-            continue
-
         if btype == "limitation_box":
             text = str(block.get("text") or "").strip()
             if text:
@@ -1209,26 +1155,6 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
                 st.info(text)
             continue
 
-        if btype == "qa_warning":
-            text = str(block.get("text") or "").strip()
-            if text:
-                st.error(text)
-            continue
-
-        if btype == "claim_warning":
-            text = str(block.get("text") or "").strip()
-            meta = block.get("meta") or {}
-            if text:
-                if (
-                    isinstance(meta, dict)
-                    and meta.get("disposition")
-                    == "replaced_by_deterministic_fallback"
-                ):
-                    st.error(text)
-                else:
-                    st.warning(text)
-            continue
-
         if btype == "table":
             if isinstance(meta, dict) and meta.get("table_kind") == "basket_definitions":
                 headers, rows = basket_definition_table_display(meta)
@@ -1239,47 +1165,6 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
                         hide_index=True,
                     )
                 continue
-            if isinstance(meta, dict) and meta.get("table_kind") == "mfi_overview":
-                dims = meta.get("dimensions") or []
-                rows = meta.get("rows") or []
-
-                if isinstance(dims, list) and isinstance(rows, list) and rows:
-                    flat_rows = []
-                    for r in rows:
-                        if not isinstance(r, dict):
-                            continue
-                        dim_scores = r.get("dimension_scores")
-                        if not isinstance(dim_scores, dict):
-                            dim_scores = {}
-                        flat = {
-                            "market_name": r.get("market_name", ""),
-                            "region": r.get("region", ""),
-                            "overall_mfi": r.get("overall_mfi", 0),
-                        }
-                        for d in dims:
-                            if isinstance(d, str):
-                                flat[d] = dim_scores.get(d, 0)
-                        flat_rows.append(flat)
-
-                    df = pd.DataFrame(flat_rows)
-                    edited = st.data_editor(
-                        df,
-                        width="stretch",
-                        key=f"report_table_{idx}",
-                    )
-                    try:
-                        csv_bytes = edited.to_csv(index=False).encode("utf-8")
-                    except Exception:
-                        csv_bytes = df.to_csv(index=False).encode("utf-8")
-
-                    st.download_button(
-                        "Download CSV",
-                        data=csv_bytes,
-                        file_name="mfi_overview.csv",
-                        mime="text/csv",
-                        key=f"report_table_download_{idx}",
-                    )
-                    continue
             if isinstance(meta, dict) and meta.get("table_kind") == "mfi_presentation":
                 rows = meta.get("rows") or []
                 columns = [str(column) for column in meta.get("columns", []) or []]
@@ -1311,10 +1196,6 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
                     dataframe = pd.DataFrame(display_rows, columns=labels)
                     st.dataframe(dataframe, width="stretch", hide_index=True)
                 continue
-            if isinstance(meta, dict) and meta.get("table_kind") == "mfi_deterministic":
-                raise ValueError(
-                    "Unprojected canonical MFI tables cannot be rendered in Streamlit"
-                )
 
             if isinstance(meta, dict):
                 st.json(meta)

@@ -1,4 +1,4 @@
-"""Section-level presentation; historical claim-based reports retain their readers."""
+"""Section-level report blocks and the public output of the light workflow."""
 from __future__ import annotations
 import re
 from .coverage import annex_blocks, evaluate_coverage, table_block

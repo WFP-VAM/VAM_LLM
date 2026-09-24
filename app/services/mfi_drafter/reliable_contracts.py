@@ -6,11 +6,9 @@ import json
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 
 WORKFLOW_REVISION = "mfi-reliable-v1"
-CONTRACT_BUNDLE = "mfi-reliable-contracts-v2"
-MAX_PACKAGE_CHARACTERS = 160_000
 
 
 def fingerprint(value: Any) -> str:
@@ -85,50 +83,3 @@ class CoverageRequirement(BaseModel):
     metric_ids: list[str] = Field(default_factory=list)
     satisfied_by: list[str] = Field(default_factory=list)
     status: Literal["pending", "covered", "limitation"] = "pending"
-
-
-class NarrativeSegment(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["text", "fact", "source_passage"]
-    text: str | None = None
-    fact_id: str | None = None
-    passage_id: str | None = None
-
-
-class SourcePassage(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    document_id: str
-    text: str
-
-
-class RunExecutionRecord(BaseModel):
-    task_id: str
-    kind: str
-    input_fingerprint: str
-    status: Literal["planned", "running", "succeeded", "failed"] = "planned"
-    attempt: int = 0
-    epoch: int = 1
-    call_ids: list[str] = Field(default_factory=list)
-    output_ref: str | None = None
-    error: dict[str, Any] | None = None
-
-
-class RunCheckpoint(BaseModel):
-    workflow_revision: str = WORKFLOW_REVISION
-    contract_bundle: str = CONTRACT_BUNDLE
-    run_id: str
-    run_revision: int = 0
-    input_fingerprint: str
-    runtime_fingerprint: str
-    epoch: int = 1
-    owner: str | None = None
-    fence: int = 0
-    lease_until: float = 0
-    execution_state: str = "pending"
-    resumable: bool = False
-    resume_block_reason: str | None = None
-    tasks: dict[str, RunExecutionRecord] = Field(default_factory=dict)
-    input_ref: str | None = None
-    snapshot_ref: str | None = None
-    draft_revision: int | None = None
-    requests: dict[str, Any] = Field(default_factory=dict)

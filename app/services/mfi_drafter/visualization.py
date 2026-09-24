@@ -267,15 +267,6 @@ def place_map_callouts(
     return tuple(placements)
 
 
-def boxes_overlap(
-    left: MFIMapCalloutPlacement,
-    right: MFIMapCalloutPlacement,
-) -> bool:
-    """Public test helper for the geometry promised by a placement result."""
-
-    return _boxes_overlap(left.bbox_pixels, right.bbox_pixels, 0.0)
-
-
 def _candidate_offsets() -> tuple[tuple[float, float], ...]:
     return tuple(
         (radius * direction_x, radius * direction_y)
