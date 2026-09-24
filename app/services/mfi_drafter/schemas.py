@@ -1368,23 +1368,6 @@ class MFIMarketScoreDistributionEntry(BaseModel):
 # PYDANTIC MODELS (API)
 # ============================================================================
 
-class GenerateMFIReportInput(BaseModel):
-    """Input for generating MFI report."""
-    country: str = Field(..., description="Country name")
-    data_collection_start: str = Field(..., description="Data collection start date (YYYY-MM-DD)")
-    data_collection_end: str = Field(..., description="Data collection end date (YYYY-MM-DD)")
-    markets: List[str] = Field(..., description="List of surveyed markets")
-    use_mock_data: bool = Field(False, description="Required: this JSON input carries no survey data, "
-                                "so the report is built on synthetic demonstration data")
-
-
-class GenerateMFIReportFromCSVInput(BaseModel):
-    """Input for generating MFI report from uploaded CSV."""
-    country_override: Optional[str] = Field(None, description="Override country name from CSV")
-    data_collection_start_override: Optional[str] = Field(None, description="Override start date")
-    data_collection_end_override: Optional[str] = Field(None, description="Override end date")
-
-
 class LightMFIReportOutput(BaseModel):
     """Section-level reports do not claim legacy per-claim QA certification."""
     model_config = ConfigDict(extra="allow")

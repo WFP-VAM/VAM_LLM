@@ -7,9 +7,6 @@ from .errors import MFIRunError
 from .light_contracts import WORKFLOW, BUNDLE, MODEL, MAX_CHARACTERS, MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS, NODES
 from .light_runtime import RunLedger, public_diagnostics
 
-MOCK_DATA_REQUIRED = ("No processed MFI CSV was supplied. Upload the CSV, or set use_mock_data=true "
-                      "to generate a demonstration report on synthetic data.")
-
 
 def effective_contract():
     from .light_contracts import instructions, response_schema
@@ -31,7 +28,7 @@ def runtime_status():
 def inputs_for(**kwargs):
     bound = inspect.signature(run_mfi_report_generation).bind(**kwargs)
     bound.apply_defaults()
-    return {k:v for k,v in bound.arguments.items() if k not in {"on_step", "llm_trace_sink", "release_control", "client", "use_mock_data"}}
+    return {k:v for k,v in bound.arguments.items() if k not in {"on_step", "llm_trace_sink", "release_control", "client"}}
 
 
 def validate_submission(csv_data):
@@ -44,14 +41,12 @@ def validate_submission(csv_data):
         raise MFIRunError(str(exc), 503) from exc
 
 
-def run_mfi_report_generation(country, data_collection_start, data_collection_end, markets, csv_data=None,
-        on_step=None, release_control=None, run_id=None, llm_trace_sink=None, *, client=None, use_mock_data=False):
+def run_mfi_report_generation(country, data_collection_start, data_collection_end, markets, csv_data,
+        on_step=None, release_control=None, run_id=None, llm_trace_sink=None, *, client=None):
     from .features import require_mfi_analysis_v2
     from .light_graph import build_graph
     from .map_basemap import preflight_maps
     control = require_mfi_analysis_v2(release_control)
-    if csv_data is None and not use_mock_data:
-        raise MFIRunError(MOCK_DATA_REQUIRED, 400)
     preflight_maps(csv_data)
     run_id = run_id or "mfi_"+uuid.uuid4().hex[:8]
     inputs = inputs_for(country=country, data_collection_start=data_collection_start, data_collection_end=data_collection_end,

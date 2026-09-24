@@ -171,22 +171,12 @@ def test_failed_async_run_is_reported_without_a_result(args, api, monkeypatch):
     assert api.get(f"/mfi-drafter/result/{run_id}").status_code == 400
 
 
-def test_json_generation_requires_explicit_mock_data(args, api):
-    from app.services.mfi_drafter.errors import MFIRunError
+def test_json_generation_endpoints_are_removed(args, api):
     from app.streamlit_backend import dispatcher
     body = {k: args[k] for k in ("country", "data_collection_start", "data_collection_end", "markets")}
     for path in ("/mfi-drafter/generate", "/mfi-drafter/generate-async"):
-        reply = api.post(path, json=body)
-        assert reply.status_code == 400 and "use_mock_data" in reply.json()["detail"]
-        assert dispatcher.dispatch_request("POST", path, json_body=body).status_code == 400
-    with pytest.raises(MFIRunError) as error:
-        light_service.run_mfi_report_generation(**{**args, "csv_data": None}, client=Client())
-    assert error.value.status_code == 400
-    # With the flag, synthetic data feeds the analysis. (The full synthetic report already failed
-    # before this refactor while building the annex; see the plan's Phase 2 notes.)
-    inputs = {**{k: args[k] for k in ("country", "markets", "data_collection_start", "data_collection_end", "run_id")},
-              "csv_data": None, "release_control": RELEASE.model_dump()}
-    assert light_graph.prepare_analysis(inputs)["score_authority"] == "synthetic_mock"
+        assert api.post(path, json={**body, "use_mock_data": True}).status_code == 404
+        assert dispatcher.dispatch_request("POST", path, json_body=body).status_code == 404
 
 
 @pytest.mark.parametrize("entrypoint", ["api", "streamlit"])

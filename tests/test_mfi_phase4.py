@@ -155,28 +155,6 @@ def fastapi_client():
     ("path", "kwargs"),
     [
         (
-            "/mfi-drafter/generate",
-            {
-                "json": {
-                    "country": "Testland",
-                    "data_collection_start": "2026-01-01",
-                    "data_collection_end": "2026-01-31",
-                    "markets": ["Central"],
-                }
-            },
-        ),
-        (
-            "/mfi-drafter/generate-async",
-            {
-                "json": {
-                    "country": "Testland",
-                    "data_collection_start": "2026-01-01",
-                    "data_collection_end": "2026-01-31",
-                    "markets": ["Central"],
-                }
-            },
-        ),
-        (
             "/mfi-drafter/generate-from-csv",
             {"files": {"file": ("mfi.csv", b"invalid", "text/csv")}},
         ),
@@ -246,26 +224,6 @@ def test_fastapi_validation_info_health_and_artifacts_remain_available(
     ("path", "json_body", "files"),
     [
         (
-            "/mfi-drafter/generate",
-            {
-                "country": "Testland",
-                "data_collection_start": "2026-01-01",
-                "data_collection_end": "2026-01-31",
-                "markets": ["Central"],
-            },
-            None,
-        ),
-        (
-            "/mfi-drafter/generate-async",
-            {
-                "country": "Testland",
-                "data_collection_start": "2026-01-01",
-                "data_collection_end": "2026-01-31",
-                "markets": ["Central"],
-            },
-            None,
-        ),
-        (
             "/mfi-drafter/generate-from-csv",
             None,
             {"file": ("mfi.csv", b"invalid", "text/csv")},
@@ -332,16 +290,13 @@ def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch):
         return {"warnings": []}
 
     monkeypatch.setattr(dispatcher, "run_mfi_report_generation", fake_run)
+    monkeypatch.setattr(dispatcher, "_extract_file",
+                        lambda *args: SimpleNamespace(filename="mfi.csv", content=b"csv"))
+    monkeypatch.setattr(dispatcher, "load_mfi_from_csv", lambda **kwargs: {
+        "country": "Testland", "data_collection_start": "2026-01-01", "data_collection_end": "2026-01-31",
+        "markets": ["Central"], "survey_metadata": {}})
 
-    response = dispatcher._mfi_drafter_generate_async(
-        json_body={
-            "country": "Testland",
-            "data_collection_start": "2026-01-01",
-            "data_collection_end": "2026-01-31",
-            "markets": ["Central"],
-            "use_mock_data": True,
-        }
-    )
+    response = dispatcher._mfi_drafter_generate_from_csv_async(data={}, files={}, params={})
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "invalid")
     targets[0]()
 

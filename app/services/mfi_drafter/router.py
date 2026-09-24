@@ -15,7 +15,7 @@ from .graph import (
     reconcile_generation_diagnostics_for_blocked_failure,
     reconcile_generation_diagnostics_for_llm_failure,
 )
-from .light_service import MOCK_DATA_REQUIRED, run_mfi_report_generation, runtime_status as light_runtime_status
+from .light_service import run_mfi_report_generation, runtime_status as light_runtime_status
 from .errors import MFIGenerationBlockedError, MFIRunError
 from .data_loader import load_mfi_from_csv, validate_csv_structure
 from .compatibility import canonical_and_legacy_response_fields
@@ -26,7 +26,6 @@ from .features import (
     require_mfi_analysis_v2,
 )
 from .schemas import (
-    GenerateMFIReportInput,
     GenerateMFIReportOutput,
     LightMFIReportOutput,
     MFIReportStatusOutput,
@@ -260,64 +259,6 @@ def _run_mfi_from_structured_data(
         data_collection_start=data_collection_start,
         data_collection_end=data_collection_end,
     )
-
-@router.post("/generate", response_model=GenerateMFIReportOutput | LightMFIReportOutput)
-async def generate_mfi_report(input_data: GenerateMFIReportInput):
-    """
-    Generates a full MFI report.
-
-    The process includes:
-    1. MFI Data Agent: Retrieves/generates MFI data for markets
-    2. Context Retrieval: Retrieves contextual news
-    3. Context Extractor: Extracts context with the LLM
-    4. Graph Designer: Generates visualizations (radar, heatmap, etc.)
-    5. Dimension Drafter: Drafts findings for each dimension
-    6. Market Recommendations Drafter: Drafts recommendations by market
-    7. Executive Summary Drafter: Drafts the executive summary
-    8. Red Team: Quality assurance with possible correction loop
-
-    Returns:
-        GenerateMFIReportOutput with all report sections
-    """
-    release_control = _require_enabled_release_control()
-    if not input_data.use_mock_data:
-        raise HTTPException(status_code=400, detail=MOCK_DATA_REQUIRED)
-    try:
-        logger.info(f"Starting MFI report generation for {input_data.country}")
-
-        result = run_mfi_report_generation(
-            country=input_data.country,
-            data_collection_start=input_data.data_collection_start,
-            data_collection_end=input_data.data_collection_end,
-            markets=input_data.markets,
-            release_control=release_control,
-            use_mock_data=True,
-        )
-        
-        output = _build_mfi_output(
-            result=result,
-            country=input_data.country,
-            data_collection_start=input_data.data_collection_start,
-            data_collection_end=input_data.data_collection_end,
-        )
-        
-        logger.info(f"MFI report generation completed: {output.run_id}")
-        
-        return output
-        
-    except LLMCallError as e:
-        logger.error("MFI report generation stopped: %s", e)
-        raise HTTPException(status_code=502, detail=e.to_public_dict())
-    except MFIGenerationBlockedError as e:
-        logger.error("MFI report generation blocked: %s", e)
-        raise HTTPException(status_code=e.status_code, detail=e.to_public_dict())
-    except MFIRunError as e:
-        logger.error("MFI report generation stopped: %s", e)
-        raise HTTPException(status_code=e.status_code, detail=str(e))
-    except Exception as e:
-        logger.error(f"MFI report generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/generate-from-csv", response_model=GenerateMFIReportOutput | LightMFIReportOutput)
 async def generate_mfi_report_from_csv(
@@ -559,108 +500,6 @@ async def generate_mfi_report_from_csv_async(
             "collection_period": csv_data["survey_metadata"]["collection_period"],
         },
     }
-
-
-@router.post("/generate-async")
-async def generate_mfi_report_async(
-    input_data: GenerateMFIReportInput,
-    background_tasks: BackgroundTasks
-):
-    """
-    Starts report generation in the background.
-
-    Returns:
-        run_id for polling status
-    """
-    import uuid
-    release_control = _require_enabled_release_control()
-    if not input_data.use_mock_data:
-        raise HTTPException(status_code=400, detail=MOCK_DATA_REQUIRED)
-    run_id = f"mfi_{uuid.uuid4().hex[:8]}"
-
-    create_run(run_id)
-    update_run(
-        run_id,
-        metadata={"release_control": release_control.model_dump()},
-    )
-
-    progress_map = {
-        "mfi_data_agent": 10,
-        "mfi_analysis": 18,
-        "context_retrieval": 25,
-        "context_extractor": 40,
-        "mfi_graph_designer": 55,
-        "dimension_drafter": 72,
-        "market_recommendations_drafter": 82,
-        "executive_summary_drafter": 88,
-        "deterministic_claim_validator": 92,
-        "semantic_review": 94,
-        "consolidated_correction": 95,
-        "post_correction_validator": 96,
-        "corrected_claim_verification": 96,
-        "finalize_qa": 97,
-        "finalize_delivery": 99,
-    }
-    
-    def run_in_background():
-        try:
-            update_run(run_id, status="running", error=None, traceback=None)
-
-            def on_llm_trace(diagnostics: Dict[str, Any]) -> None:
-                update_run(run_id, metadata={"llm_diagnostics": diagnostics})
-
-            def on_step(node_name: str, _state: dict):
-                progress = (_state.get("generation_diagnostics") or {}).get("progress_pct", progress_map.get(node_name))
-                if progress is not None:
-                    update_run_progress(run_id, current_node=node_name, progress_pct=progress)
-                else:
-                    update_run(run_id, current_node=node_name)
-
-                meta_update = _analysis_run_metadata(_state)
-                context_counts = _state.get("context_counts")
-                if isinstance(context_counts, dict):
-                    meta_update["context_counts"] = context_counts
-                retriever_traces = _state.get("retriever_traces")
-                if isinstance(retriever_traces, list):
-                    meta_update["retriever_traces"] = retriever_traces
-                if meta_update:
-                    update_run(run_id, metadata=meta_update)
-            
-            result = run_mfi_report_generation(
-                country=input_data.country,
-                data_collection_start=input_data.data_collection_start,
-                data_collection_end=input_data.data_collection_end,
-                markets=input_data.markets,
-                on_step=on_step,
-                release_control=release_control,
-                run_id=run_id,
-                llm_trace_sink=on_llm_trace,
-                use_mock_data=True,
-            )
-            
-            update_run(run_id, warnings=result.get("warnings", []))
-            set_run_completed(run_id, result=result)
-            
-        except Exception as e:
-            import traceback
-
-            if isinstance(e, LLMCallError):
-                _record_llm_failure_metadata(run_id, e)
-            elif isinstance(e, MFIGenerationBlockedError):
-                _record_blocked_failure_metadata(run_id, e)
-            public_failure = isinstance(e, (LLMCallError, MFIGenerationBlockedError))
-            tb_str = None if public_failure else traceback.format_exc()
-            current_node = (
-                e.node
-                if public_failure
-                else (get_run(run_id).current_node if get_run(run_id) is not None else None)
-            )
-            error = json.dumps(e.to_public_dict(), sort_keys=True) if public_failure else str(e)
-            set_run_failed(run_id, error=error, traceback=tb_str, current_node=current_node)
-    
-    background_tasks.add_task(run_in_background)
-    
-    return {"run_id": run_id, "status": "pending"}
 
 
 @router.get("/status/{run_id}", response_model=MFIReportStatusOutput)
