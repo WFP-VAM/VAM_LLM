@@ -129,18 +129,25 @@ Every phase ends with the full test suite (~17 min) and a Streamlit smoke test o
 2. Baseline: `python -m pytest tests -q` and `python scripts/check_mfi_reliable.py`; record the counts in this document.
 3. Baseline MFI outputs on the local benchmark CSVs (Benin, Haiti, Gaza in `MFI Test Databases/`) with the fake model client the tests use: deterministic analysis, tables and figures, saved for comparison after Phases 1–3.
 
+**Baseline recorded 2026-09-24** on `refactor/gcp-coherence` @ `ac2bdb0` (same code as `eb667ab`), with the repository venv (Python 3.12.4, langgraph 1.0.5):
+
+- Full suite: **1,303 tests: 1,294 passed, 9 skipped, 0 failed** (8 min 25 s). Skipped: 2 live DataBridges smoke tests (no live credentials), 5 `test_mfi_r0_artifact` tests (no generated report on disk), 2 Postgres tests (`TEST_POSTGRES_DATABASE_URL` unset).
+- MFI gate subset (`test_mfi*` plus the 6 shared files of `scripts/check_mfi_reliable.py`), counted from the same run: 973 tests, 5 skipped.
+- MFI output snapshot: Benin, Haiti and Gaza run through the live workflow with a fake model and fake retrievers (7 calls each; 159/162/161 report blocks; 18/20/20 figures rendered for real), plus mock data, context retrieval and the `/dimensions` endpoint. It captures analysis, exact model prompts and schemas, report blocks, DOCX text and figure hashes. Two runs are identical.
+- Tooling and outputs are in `.tmp/coherence-baseline/` (git-ignored): `snapshot_mfi.py`, `compare_snapshots.py`, `mfi-A/`, `junit-full.xml`, `baseline-per-file.txt`.
+
 ### Phase 1 — MFI: move live code out of dead modules (no behaviour change)
 
 | From | To | Used by |
 |---|---|---|
-| `graph.node_context_retrieval` (`graph.py:1622`, ~100 lines, plus its small diagnostics helper) | new `mfi_drafter/context.py` | `light_graph.retrieve_context`, `test_seerist_retrieval` |
+| `graph.node_context_retrieval` (`graph.py:1622`, ~100 lines) | new `mfi_drafter/context.py`, as a copy without the old workflow's diagnostics bookkeeping (same documents, traces and context status). `graph.py` keeps its own version until Phase 3. | `light_graph.retrieve_context` |
 | `graph.generate_mock_mfi_data` (`graph.py:1285`) | new `mfi_drafter/mock_data.py` | `light_graph.prepare_analysis` (D5) |
 | `DIMENSION_DESCRIPTIONS` imported via `graph` | import from `methodology.py:87`, where it is defined | `router.py:923`, `dispatcher.py:62` |
 | `simple_orchestration.build_market_prompt_projection` | `light_evidence.py` | `light_evidence.py:75` |
 | `response_contracts.provider_schema` | `light_contracts.py` | `light_contracts.py:44` |
 | `narrative.legacy_narrative_aliases` (`narrative.py:2547`) | `compatibility.py` for now; dropped in Phase 3 if only historical results need it (D4) | `compatibility.py:12` |
 
-Also update the tests that reach these through `graph`: `test_seerist_retrieval`, `test_llm_runtime_config`, `test_mfi_analysis`.
+The old modules re-export what moved (`graph.py` from `mock_data.py`, `simple_orchestration.py` and `response_contracts.py` from their new homes), so the old workflow and its tests keep working until Phase 3 deletes them. New tests cover `context.py` and `mock_data.py` directly, so the live path keeps its coverage when Phase 3 removes the old tests. (`test_seerist_retrieval`, `test_llm_runtime_config` and `test_mfi_analysis` reach *old-workflow* functions through `graph`; they are handled in Phase 3.)
 
 **Verify:** full suite green; MFI outputs identical to the Phase 0 baseline.
 
