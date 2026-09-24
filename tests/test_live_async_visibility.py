@@ -616,14 +616,17 @@ def test_mfi_dispatcher_removed_survey_endpoints_return_404():
     assert "Unknown MFI drafter endpoint" in surveys_response.json()["detail"]
 
 
-def test_mfi_dispatcher_info_advertises_csv_upload_support():
-    info = dispatcher._mfi_drafter_info()
+def test_mfi_dispatcher_info_advertises_csv_upload_and_the_light_workflow():
+    from app.services.mfi_drafter.light_contracts import NODES
+
+    info = dispatcher.dispatch_request("GET", "/mfi-drafter/info").json()
 
     assert info["supports_csv_upload"] is True
     assert info["data_source"] == "Uploaded processed MFI CSV"
     assert info["csv_upload"]["endpoint"] == "/generate-from-csv"
     assert "inputs" not in info
     assert "databridges" not in info
+    assert [node["id"] for node in info["workflow_nodes"]] == list(NODES)
 
 
 def test_run_async_and_poll_enables_downloads_only_for_final_status(monkeypatch):

@@ -25,6 +25,74 @@ def runtime_status():
             "access_validation": "performed_on_invocation"}
 
 
+PHASE_DESCRIPTIONS = {
+    "prepare_analysis": "Builds the deterministic assessment profile from the CSV",
+    "context_retrieval": "Retrieves ReliefWeb and Seerist context documents",
+    "charts": "Renders the charts and maps",
+    "draft_dimensions": "Drafts the dimension sections",
+    "draft_markets": "Drafts the market sections",
+    "review_dimensions": "Reviews the dimension drafts",
+    "review_markets": "Reviews the market drafts",
+    "correct_dimensions": "Revises the dimension drafts when the review asks for it",
+    "correct_markets": "Revises the market drafts when the review asks for it",
+    "executive_summary": "Drafts the executive summary and country context",
+    "assemble_report": "Assembles the report blocks",
+}
+
+
+def service_info():
+    """Service metadata shared by the HTTP router and the in-process dispatcher."""
+    from app.shared.llm_observability import observability_config
+    from .features import mfi_release_control
+    from .schemas import MFI_DIMENSIONS
+    release_control = mfi_release_control()
+    return {
+        "id": "mfi-drafter",
+        "name": "MFI Report Generator",
+        "description": "Generates full Market Functionality Index (MFI) reports. "
+                       "Analyzes 9 market functionality dimensions and generates "
+                       "visualizations, an executive summary, and recommendations.",
+        "version": "2.0.0",
+        "release_control": release_control.model_dump(),
+        "generation_enabled": release_control.enabled,
+        "llm_observability": observability_config().model_dump(),
+        "llm_runtime": runtime_status(),
+        "supports_csv_upload": True,
+        "data_source": "Uploaded processed MFI CSV",
+        "csv_upload": {
+            "endpoint": "/generate-from-csv",
+            "async_endpoint": "/generate-from-csv-async",
+            "validate_endpoint": "/validate-csv",
+            "required_columns": ["MarketName", "Adm0Name", "Adm1Name", "LevelID", "DimensionName",
+                                 "VariableName", "OutputValue", "TradersSampleSize"],
+            "optional_columns": ["MarketLatitude", "MarketLongitude", "Adm2Name", "StartDate", "EndDate"],
+            "description": "Upload the final processed or elaborated MFI CSV to generate the report.",
+        },
+        "outputs": {
+            "run_id": "Unique generation identifier",
+            "workflow_revision": "Workflow that produced the report",
+            "release_control": "Deployment-control snapshot",
+            "assessment_profile": "Deterministic scores, rankings, limitations and tables",
+            "mean_mfi_across_assessed_markets": "Unweighted mean MFI across the assessed markets",
+            "market_score_distribution": "Assessed-market scores in order",
+            "light_narrative": "Final dimension, market and summary sections",
+            "review_reports": "Reviews of the dimension and market drafts",
+            "report_blocks": "Reader-facing report content, also used for the DOCX export",
+            "visualizations": "Charts and maps in Base64 format",
+            "context_status": "Context retrieval status",
+            "document_references": "Context documents available to the report",
+            "generation_diagnostics": "Phase status, progress and model attempts",
+            "llm_diagnostics": "Model call trace summary",
+            "success": "True if generation is completed",
+        },
+        "workflow_nodes": [
+            {"id": node, "name": node.replace("_", " ").capitalize(), "description": PHASE_DESCRIPTIONS[node]}
+            for node in NODES
+        ],
+        "mfi_dimensions": MFI_DIMENSIONS,
+    }
+
+
 def inputs_for(**kwargs):
     bound = inspect.signature(run_mfi_report_generation).bind(**kwargs)
     bound.apply_defaults()

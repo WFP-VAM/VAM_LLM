@@ -240,22 +240,5 @@ class RenderWorker:
                     raise
 
 
-def render_node(state):
-    from .execution import current_execution
-    from .execution_service import save_partial
-    execution = current_execution()
-    worker = RenderWorker()
-    visualizations, metadata = {}, {}
-    try:
-        for job in figure_jobs(state):
-            result = execution.execute_once(f"figure:{job['figure_id']}", job, lambda: worker.run(job), kind="figure") if execution else worker.run(job)
-            visualizations[job["figure_id"]] = result["image"]
-            metadata[job["figure_id"]] = result["metadata"]
-            save_partial(state, visualizations=visualizations)
-    finally:
-        worker.close()
-    return {"visualizations": visualizations, "figure_metadata": metadata, "current_node": "mfi_graph_designer"}
-
-
 if __name__ == "__main__":
     _serve()

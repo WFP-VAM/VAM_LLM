@@ -1,10 +1,9 @@
 from pathlib import Path
-import json
 
 import pandas as pd
 import pytest
 
-from app.services.mfi_drafter.data_loader import load_mfi_from_csv, load_mfi_from_dataframe
+from app.services.mfi_drafter.data_loader import load_mfi_from_dataframe
 from app.services.mfi_drafter.analysis import build_assessment_profile
 from app.services.mfi_drafter.input_validation import MFIInputError
 
@@ -18,101 +17,6 @@ def market_frame():
         pytest.skip("Local benchmark absent")
     frame = pd.read_csv(path, dtype=str)
     return frame[frame.MarketID == "124"].copy()
-
-
-@pytest.mark.parametrize("country,survey", [("Benin",5896),("Haiti",5899)])
-def test_authoritative_benchmark_unchanged(country, survey, monkeypatch):
-    path = ROOT / f"MFI Test Databases/MFI_Full_{country}_surveyid{survey}.csv"
-    if not path.exists():
-        pytest.skip("Local benchmark absent")
-    expected = json.loads((ROOT / "tests/fixtures/mfi_reliable_baseline.json").read_text(encoding="utf-8"))[country]
-    data = load_mfi_from_csv(path)
-    profile = build_assessment_profile(data["markets_data"], data["metric_summaries"], data).model_dump()
-    assert len(data["markets_data"]) == expected["count"]
-    assert len(data["excluded_market_records"]) == expected["excluded"]
-    assert profile["mean_mfi_across_assessed_markets"] == expected["mean"]
-    assert profile["priority_dimension_names"] == expected["priorities"]
-    assert profile["priority_market_names"] == expected["selected"]
-    if country == "Benin":
-        facts = profile["analytical_facts"]
-        assert facts["fact.assessment.service.at_or_below_median"]["numerator"] == 37
-        assert facts["fact.assessment.service.at_or_below_median"]["denominator"] == 53
-        assert facts["fact.assessment.infrastructure.below_3"]["numerator"] == 7
-        assert facts["fact.region.food_quality.minimum"]["subject"] == "Oueme"
-        assert facts["fact.region.food_quality.minimum"]["value"] == pytest.approx(4.7916666667)
-    for market in data["markets_data"]:
-        assert {k:market[k] for k in ["overall_mfi","dimension_scores","traders_surveyed"]} == expected["markets"][market["market_name"]]
-    for metrics in data["metric_summaries"].values():
-        for metric in metrics:
-            reference = expected["metrics"][metric["metric_id"]]
-            assert metric["aggregation_denominator"] == reference["aggregation_denominator"]
-            # Python 3.12 changed float summation. Allow only machine-roundoff
-            # across Windows 3.12 / container 3.11, far below MFI's 1e-6 tolerance.
-            for field in ("mean_raw_value", "mean_normalized_value"):
-                if reference[field] is None:
-                    assert metric[field] is None
-                else:
-                    assert metric[field] == pytest.approx(reference[field], rel=0, abs=1e-12)
-
-    # Exercise the actual outgoing dimension/review builders against both full inputs.
-    from app.services.mfi_drafter import graph
-    from app.services.mfi_drafter.narrative import build_claim_catalog
-    from app.services.mfi_drafter.reliable_nodes import complete_dimension_node
-    from app.services.mfi_drafter.packages import ensure_message_budget
-    from app.services.mfi_drafter.review import review_packages
-    from types import SimpleNamespace
-    catalog = build_claim_catalog(profile)
-    captured = []
-    def invoke(**kwargs):
-        ensure_message_budget(kwargs["messages"])
-        packet = json.loads(kwargs["messages"][0].content.rsplit("\n",1)[-1])
-        assert len(packet["dimension"]["market_comparators"]) == expected["count"]
-        captured.append(packet["dimension"]["dimension"])
-        return SimpleNamespace(value={"summary":{"text":"Observed dimension evidence.", "metric_ids":packet["dimension"]["ledger_metric_ids"],
-            "document_ids":[],"scope":"assessment","polarity":"neutral"}, "key_findings":[],"subdimension_analysis":[],
-            "geographic_patterns":[],"data_limitations":[],"recommendations":[]}, payload={}, call_id="dry-run"), 0
-    monkeypatch.setattr(graph,"get_model",lambda **kwargs: object())
-    monkeypatch.setattr(graph,"_invoke_json_with_one_normalization",invoke)
-    state = {"run_id":"dry-"+country,"assessment_profile":profile,"claim_catalog":catalog}
-    update = complete_dimension_node(state)
-    assert len(set(captured)) == 9
-    reviews = review_packages(assessment_profile=profile, claim_catalog=catalog, dimension_narratives=update["dimension_narratives"],
-        market_narratives={}, executive_narrative={}, context_evidence=[], documents=[])
-    for review in reviews:
-        score_rows = [entry for entry in review["package"]["evidence_by_metric_id"].values() if entry.get("statistic") == "stored_level_1_score"]
-        assert len(score_rows) == expected["count"]
-        assert review["character_count"] <= 125000
-
-    from app.services.mfi_drafter import reliable_nodes
-    from app.services.mfi_drafter.packages import bounded_groups
-    from app.services.mfi_drafter.correction import correction_request
-    from app.shared.llm_observability import serialize_messages
-    from app.services.mfi_drafter.simple_orchestration import build_budgeted_market_draft_batches
-    market_batches = build_budgeted_market_draft_batches(profile, catalog)
-    assert all(batch["prompt_character_count"] <= 140000 for batch in market_batches)
-
-    class BudgetsChecked(Exception):
-        pass
-
-    def check_correction_packages(**kwargs):
-        fingerprints = {row["task_id"]: "0" * 64 for row in kwargs["targets"]}
-        def package(rows):
-            messages, schema, _ = correction_request("claim", rows, kwargs["build_payload"], fingerprints)
-            return {"messages": serialize_messages(messages), "response_schema": schema}
-        groups = bounded_groups(kwargs["targets"], package, maximum_items=4, maximum_characters=155000)
-        assert sum(map(len, groups)) == 9
-        for group in groups:
-            messages, schema, _ = correction_request("claim", group, kwargs["build_payload"], fingerprints)
-            ensure_message_budget(messages, schema)
-        raise BudgetsChecked
-
-    monkeypatch.setattr(reliable_nodes, "correct_targets", check_correction_packages)
-    flags = [{"flag_id": "check-"+name, "severity":"high", "repairable":True,
-              "artifact_type":"dimension", "artifact_id":name, "field_name":"summary",
-              "claim_id":"summary", "message":"Verify against the full evidence", "code":"numeric_value_mismatch"}
-             for name in update["dimension_narratives"]]
-    with pytest.raises(BudgetsChecked):
-        reliable_nodes.typed_correction_node({**state, **update, "deterministic_flags":flags})
 
 
 def test_aliases_do_not_duplicate_traders(market_frame):

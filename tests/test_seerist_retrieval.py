@@ -100,28 +100,6 @@ class FakeSeeristRetriever:
         ]
 
 
-class FakeUnavailableSeeristRetriever:
-    DEFAULT_ECON_TERMS = ("market", "prices")
-
-    def __init__(self, verbose=False):
-        self.verbose = verbose
-        self.last_trace = {}
-
-    @classmethod
-    def build_lucene_or_query(cls, terms):
-        return " OR ".join(str(term) for term in terms)
-
-    def fetch_batch(self, *, queries, start_date, end_date, country, max_per_query=20):
-        self.last_trace = {
-            "retriever": "Seerist",
-            "country": country,
-            "queries": list(queries),
-            "num_documents": 0,
-            "error": "Missing SEERIST_API_KEY.",
-        }
-        return []
-
-
 def import_graph_module(module_name):
     return import_module(module_name)
 
@@ -264,10 +242,10 @@ def test_seerist_palestine_uses_ps_without_gaza_override():
 
 
 def test_mfi_and_market_monitor_share_the_gaza_aware_seerist_retriever():
-    mfi_graph = import_graph_module("app.services.mfi_drafter.graph")
+    mfi_context = import_graph_module("app.services.mfi_drafter.context")
     market_graph = import_graph_module("app.services.market_monitor.graph")
 
-    assert mfi_graph.SeeristRetriever is SeeristRetriever
+    assert mfi_context.SeeristRetriever is SeeristRetriever
     assert market_graph.SeeristRetriever is SeeristRetriever
 
 
@@ -293,27 +271,3 @@ def test_market_monitor_news_retrieval_combines_and_deduplicates(monkeypatch):
     assert "warnings" not in result
     assert next(doc for doc in result["documents"] if doc["source"] == "ReliefWeb")["date"] == "2024-12-01"
     assert all(doc["date"] == "2025-01-31" for doc in result["documents"] if doc["source"] == "Seerist")
-
-
-def test_mfi_context_retrieval_falls_back_to_reliefweb_when_seerist_unavailable(monkeypatch):
-    mfi_graph = import_graph_module("app.services.mfi_drafter.graph")
-    monkeypatch.setattr(mfi_graph, "ReliefWebRetriever", FakeReliefWebRetriever)
-    monkeypatch.setattr(mfi_graph, "SeeristRetriever", FakeUnavailableSeeristRetriever)
-
-    state = mfi_graph.create_initial_state(
-        country="South Sudan",
-        data_collection_start="2025-01-01",
-        data_collection_end="2025-01-31",
-        markets=["Juba"],
-    )
-    result = mfi_graph.node_context_retrieval(state)
-
-    assert result["context_counts"] == {"Seerist": 0, "ReliefWeb": 1, "total": 1}
-    assert len(result["contextual_documents"]) == 1
-    assert "warnings" not in result
-    assert (
-        result["context_status"]["limitation_code"]
-        == "context_partial_retrieval_unavailable"
-    )
-    assert result["context_status"]["retrievers"]["Seerist"]["status"] == "failed"
-    assert result["retriever_traces"][1]["error"] == "Missing SEERIST_API_KEY."

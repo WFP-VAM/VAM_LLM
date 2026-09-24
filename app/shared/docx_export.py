@@ -525,7 +525,6 @@ def build_docx_bytes_from_report_blocks(
     include_sources: bool = True,
     include_visualizations: bool = True,
     language: str = "en",
-    draft_identity: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     doc = Document()
     visualizations = visualizations or {}
@@ -540,12 +539,6 @@ def build_docx_bytes_from_report_blocks(
             {},
         )
         _configure_mfi_document(doc, title_layout)
-    if draft_identity is not None:
-        from app.services.mfi_drafter.drafts import DRAFT_LABEL
-        for section in doc.sections:
-            for header in (section.header, section.first_page_header, section.even_page_header):
-                header.paragraphs[0].text = DRAFT_LABEL
-        doc.core_properties.subject = f"Incomplete MFI draft: {draft_identity['run_id']}, snapshot {draft_identity['revision']}"
 
     for block in report_blocks:
         layout = _mfi_layout(block)

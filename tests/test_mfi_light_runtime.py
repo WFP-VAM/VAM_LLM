@@ -148,3 +148,16 @@ def test_unknown_identifiers_and_scalar_notes_are_not_silently_accepted():
     payload["notes"] = None
     valid, issues = inspect_sections(payload, ["A", "B"], {})
     assert set(valid) == {"A"} and len(issues) == 3
+
+
+def test_schema_compilation_never_returns_shared_mutable_dictionary():
+    from app.services.mfi_drafter.light_contracts import SectionsResponse, provider_schema
+    first = provider_schema(SectionsResponse)
+    first["properties"]["sections"].clear()
+    assert provider_schema(SectionsResponse)["properties"]["sections"]["type"] == "array"
+
+
+def test_unknown_provider_schema_construct_is_configuration_error():
+    from app.services.mfi_drafter.light_contracts import ContractConfigurationError, compile_provider_schema
+    with pytest.raises(ContractConfigurationError):
+        compile_provider_schema({"oneOf": [{"type": "string"}, {"type": "number"}]})

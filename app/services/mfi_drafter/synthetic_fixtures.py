@@ -21,7 +21,7 @@ without the generator's happy path knowing anything about them.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, Sequence
 
 from .methodology import (
@@ -547,59 +547,3 @@ def build_profile(spec: SyntheticSpec = DEFAULT_SPEC) -> Any:
     return build_assessment_profile(
         loaded["markets_data"], loaded["metric_summaries"], loaded
     )
-
-
-def build_report_run(
-    spec: SyntheticSpec = DEFAULT_SPEC, *, render_figures: bool = False
-) -> Any:
-    """Run the full deterministic report path over a synthetic assessment."""
-    from .deterministic_report import run_deterministic_report
-
-    return run_deterministic_report(build_loaded(spec), render_figures=render_figures)
-
-
-def build_blocks_with_claim_status(status: str = "unverified") -> list[Any]:
-    """Build minimal report blocks carrying a claim status.
-
-    Used to probe whether the renderers surface claim-level validation status at all,
-    independently of whether a real run happens to produce an unverified claim.
-    """
-    from app.shared.report_blocks import ReportBlock
-
-    return [
-        ReportBlock(type="heading", text="Assessment findings", level=2),
-        ReportBlock(
-            type="paragraph",
-            text="The Service dimension scored 3.33/10 across assessed markets.",
-            meta={
-                "claim_id": "dimension.service.finding.1",
-                "validation_status": status,
-                "metric_ids": ["service.dimension.mean"],
-                "document_ids": [],
-            },
-        ),
-        ReportBlock(
-            type="evidence_note",
-            text="Service: mean 3.33/10; scope: assessment",
-            meta={
-                "claim_id": "dimension.service.finding.1",
-                "metric_ids": ["service.dimension.mean"],
-            },
-        ),
-        ReportBlock(
-            type="claim_warning",
-            text=(
-                "[UNVERIFIED] Unverified — review required. Claim ID: "
-                "dimension.service.finding.1. QA codes: synthetic_probe."
-            ),
-            meta={
-                "claim_id": "dimension.service.finding.1",
-                "severity": "medium",
-                "flag_ids": ["synthetic-probe-1"],
-                "flag_codes": ["synthetic_probe"],
-                "repair_attempted": False,
-                "attempt_count": 0,
-                "disposition": "retained_unverified_for_delivery",
-            },
-        ),
-    ]

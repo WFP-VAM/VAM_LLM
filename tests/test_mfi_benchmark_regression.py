@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from functools import lru_cache
 from math import ceil
 from pathlib import Path
@@ -11,19 +10,6 @@ import pytest
 from app.services.mfi_drafter.analysis import build_assessment_profile
 from app.services.mfi_drafter.data_loader import load_mfi_from_csv
 from app.services.mfi_drafter.methodology import OFFICIAL_SCORE_DEFINITIONS
-from app.services.mfi_drafter.narrative import (
-    build_claim_catalog,
-    fallback_dimension_narrative,
-    fallback_executive_narrative,
-    fallback_market_narrative,
-    validate_structured_narratives,
-)
-from app.services.mfi_drafter.release_validation import (
-    MFIExpectedMetricAssertion,
-    MFIRegressionCaseConfig,
-    MFIReleaseValidationConfig,
-    run_regression,
-)
 
 
 BENCHMARK_DIRECTORY = Path(__file__).resolve().parents[1] / "MFI Test Databases"
@@ -70,34 +56,6 @@ def _profile(path_string: str):
         result["metric_summaries"],
         result,
     )
-
-
-@lru_cache(maxsize=2)
-def _phase3_fallback(path_string: str):
-    profile = _profile(path_string).model_dump()
-    catalog = build_claim_catalog(profile)
-    dimensions = {
-        item["dimension"]: fallback_dimension_narrative(
-            item, assessment_profile=profile
-        )
-        for item in profile["dimensions"]
-    }
-    markets = {
-        item["market_name"]: fallback_market_narrative(item)
-        for item in profile["markets"]
-        if item["is_priority_market"]
-    }
-    executive = fallback_executive_narrative(profile)
-    validation = validate_structured_narratives(
-        context_evidence=[],
-        dimension_narratives=dimensions,
-        market_narratives=markets,
-        executive_narrative=executive,
-        claim_catalog=catalog,
-        assessment_profile=profile,
-        documents=[],
-    )[0]
-    return profile, dimensions, validation
 
 
 @pytest.mark.parametrize(("path", "expected_full", "expected_mfir"), BENCHMARKS)
@@ -268,135 +226,3 @@ def test_local_benchmark_relevant_items_meet_coverage_and_contrast(
         assert metric.unfavorable_rate - category.unfavorable_rate >= (
             0.10 - 1e-6
         )
-
-
-@pytest.mark.parametrize(
-    ("path", "expected_priorities"),
-    [
-        (BENCHMARKS[0][0], ["Service", "Infrastructure", "Food Quality"]),
-        (
-            BENCHMARKS[1][0],
-            ["Food Quality", "Infrastructure", "Service", "Price"],
-        ),
-    ],
-)
-def test_local_benchmark_phase3_fallback_is_evidence_backed(
-    path, expected_priorities
-):
-    profile, narratives, validation = _phase3_fallback(str(path))
-
-    assert profile["priority_dimension_names"] == expected_priorities
-    assert validation["status"] == "passed"
-    for dimension in expected_priorities:
-        narrative = narratives[dimension]
-        assert narrative["subdimension_analysis"]
-        driver_ids = {
-            metric_id
-            for item in narrative["subdimension_analysis"]
-            for metric_id in item["driver_metric_ids"]
-        }
-        assert 2 <= len(driver_ids) <= 4
-        assert narrative["geographic_patterns"]
-        assert narrative["recommendations"]
-
-
-def test_local_benchmarks_build_phase4_release_evidence(tmp_path):
-    for path, _expected_full, _expected_mfir in BENCHMARKS:
-        _skip_if_benchmark_absent(path)
-
-    validation_config = MFIReleaseValidationConfig(
-        cases=[
-            MFIRegressionCaseConfig(
-                case_id="benin-example",
-                label="Benin local regression example",
-                source_csv=BENCHMARKS[0][0].name,
-                expected_included_market_count=53,
-                expected_excluded_market_count=0,
-                expected_priority_dimensions=[
-                    "Service",
-                    "Infrastructure",
-                    "Food Quality",
-                ],
-            ),
-            MFIRegressionCaseConfig(
-                case_id="haiti-example",
-                label="Haiti local regression example",
-                source_csv=BENCHMARKS[1][0].name,
-                expected_included_market_count=68,
-                expected_excluded_market_count=6,
-                expected_priority_dimensions=[
-                    "Food Quality",
-                    "Infrastructure",
-                    "Service",
-                    "Price",
-                ],
-                expected_methodology_warning_codes=[
-                    "mfir_records_excluded"
-                ],
-                # Since R1, optional item non-representation is disclosed as coverage
-                # rather than reported as unavailable evidence, so this benchmark no
-                # longer expects that limitation.
-                expected_limitation_codes=[
-                    "assessment_scope_not_representative",
-                    "item_trader_denominator_unavailable",
-                    "mfir_records_excluded",
-                ],
-                metric_assertions=[
-                    MFIExpectedMetricAssertion(
-                        assertion_id="price-increase-mean",
-                        dimension="Price",
-                        metric_id="price.increase",
-                        expected_value=9.240196,
-                    ),
-                    MFIExpectedMetricAssertion(
-                        assertion_id="price-stability-mean",
-                        dimension="Price",
-                        metric_id="price.stability",
-                        expected_value=1.691176,
-                    ),
-                ],
-            ),
-        ]
-    )
-    manifest = run_regression(
-        validation_config=validation_config,
-        case_root=BENCHMARK_DIRECTORY,
-        output_directory=tmp_path / "phase4",
-        release_id="pytest-phase4",
-        candidate_revision="pytest-candidate",
-    )
-
-    assert manifest.release_ready is False
-    assert manifest.blockers == [
-        "approval:benin-example",
-        "approval:haiti-example",
-        "pilot:real_assessments",
-        "pilot:regression_case:benin-example",
-        "pilot:regression_case:haiti-example",
-    ]
-    assert {
-        case.case_id for case in manifest.regression_cases
-    } == {"benin-example", "haiti-example"}
-    for case in manifest.regression_cases:
-        assert not [
-            check
-            for check in case.checks
-            if check.blocking and check.status == "failed"
-        ]
-        assert all(
-            len(artifact.sha256) == 64 for artifact in case.artifacts
-        )
-        result_artifact = next(
-            artifact
-            for artifact in case.artifacts
-            if artifact.artifact_id.endswith(".result")
-        )
-        rendered = json.loads(
-            (tmp_path / "phase4" / result_artifact.path).read_text(
-                encoding="utf-8"
-            )
-        )
-        assert rendered["llm_calls"] == 0
-        assert rendered["generation_diagnostics"]["dimensions"]["llm"] == []
-        assert rendered["generation_diagnostics"]["retrievers"] == {}
-        assert rendered["context_status"]["status"] == "not_attempted"

@@ -191,7 +191,7 @@ The old modules re-export what moved (`graph.py` from `mock_data.py`, `simple_or
   - Step 4 moved to Phase 3.
   - `check_mfi_reliable.py` needed no change: it selects `tests/test_mfi*.py` by pattern.
   - On the synchronous endpoints, run errors now return their own status (e.g. 422 for an oversized request) instead of 500.
-- **Found: the JSON endpoints could never produce a report.** A mock-data report fails while building the annex (`KeyError: 'distribution'` in `coverage.py`), on the pre-refactor code as well; the MFI page only uses the CSV endpoints. D5 is in place (the flag is required), but the endpoints stay broken. **Decision needed before Phase 3:** remove `/generate` and `/generate-async` (JSON), or fix the synthetic data.
+- **Found: the JSON endpoints could never produce a report.** A mock-data report fails while building the annex (`KeyError: 'distribution'` in `coverage.py`), on the pre-refactor code as well; the MFI page only uses the CSV endpoints. D5 is in place (the flag is required), but the endpoints stay broken. **Decision needed before Phase 3:** remove `/generate` and `/generate-async` (JSON), or fix the synthetic data. **Decided 2026-09-24: remove them** (Phase 3, step 3.1). This supersedes D5.
 
 ### Phase 3 — MFI: delete the old workflows and the offline tooling
 
@@ -204,6 +204,29 @@ The old modules re-export what moved (`graph.py` from `mock_data.py`, `simple_or
    - **Split** (keep the tests of live modules, drop the rest): `test_mfi_analysis`, `_benchmark_regression`, `_phase4`, `_r2_aggregation_metadata`, `_r3_narrative_safety`, `_r5_visualizations`, `_r7_context_and_evidence`, `_r8_layout_density`, `_reliable_inputs`.
 
 **Verify:** `git grep` finds no import of a deleted module; `python -c "import main"`; full suite; MFI outputs identical to the baseline; AppTest on every page.
+
+**As built**, in three commits:
+- **3.1:** remove the JSON endpoints (decision above) and `mock_data`'s only caller.
+- **3.2:** steps 1–3 and 5.
+- **3.3:** step 4 (D4 readers) and a sweep of symbols that only the deleted modules used.
+
+Tests were classified one by one, not by file. A test was removed when it imports, patches or names a deleted module, endpoint or symbol, or depends on a helper that does. Files left with no tests were deleted (8), the others trimmed (22). Tests of live code that sat in the deleted files moved to the light test files instead of going away:
+- the release gate and the immutable release snapshot, now through `light_service`;
+- schema compilation, now through `light_contracts`;
+- the shared Seerist retriever, now through `context`;
+- the "no direct model call" guard, now on `light_graph`.
+
+**Done 3.1 + 3.2, 2026-09-24.**
+- 19 modules deleted (16,875 lines), plus `render_worker.render_node`, the DOCX draft watermark, `MFIGenerationBlockedError`/`claim_identity_blocked` (raised only by the old workflow), and two fixture helpers built on `deterministic_report`.
+- Router and dispatcher:
+  - the output builder accepts only `mfi-light-v1` results and returns 410 for older ones (D4);
+  - the failure handlers and the old progress map are gone;
+  - `/info` comes from one function, `light_service.service_info()`, and lists the 11 light phases.
+- `git grep` and an AST scan find no reference to a deleted module; all 94 `app/` modules and `main` import.
+- Full suite: **1,001 tests: 997 passed, 4 skipped, 0 failed (1 min 52 s)**. Against the Phase 2 run: 318 tests removed and 12 added across 3.1 and 3.2 (one of the 12 is the Phase 2 page test written after that run). No retained test changed outcome. The 5 skips of `test_mfi_r0_artifact` went with the file; the remaining 4 are the DataBridges and Postgres ones.
+- MFI output snapshot identical to the baseline on all three benchmarks and the misc checks (mock data excluded, since it is gone). Every page renders; page 5 shows its usual storage-configuration message.
+- Left for 3.3: the D4 readers in `report_blocks.py`, `docx_export.py`, `compatibility.py`, page 4 and `schemas.py`, and live-module symbols that only deleted code used (candidates: `claim_identity`, `evidence_notes`, `wording`, `reconcile_context_status` and the LLM-classification branch of `resolve_context_status`). Their remaining tests go with them.
+- **Found (not changed here):** on each phase, the router and dispatcher run-metadata helpers write `release_control: {}` and `context_status: {}` when the phase output lacks them, overwriting the stored values. The page reads both from the result, so nothing visible breaks. This matters when the router becomes the backend.
 
 ### Phase 4 — Seasonal: LangGraph phase graph, no checkpoint layer
 
@@ -245,7 +268,7 @@ The old modules re-export what moved (`graph.py` from `mock_data.py`, `simple_or
 | Area | Remove |
 |---|---|
 | Market Monitor | `/dataset/status` and `/dataset/upload` 404 stubs (router `:916-930`, dispatcher `:2004-2017`); the `load_csv_price_data` and `_upload_file_to_gcs` shims and the unused GCS imports (`data_loader.py:57-59`, `:142-150`); unused `_report_status` (router `:78`) |
-| Dispatcher | `_save_temp_file`, `_get_food_basket_commodities` |
+| Dispatcher | `_save_temp_file`, `_get_food_basket_commodities`; the unused `os` and `supported_country_options` imports |
 | Shared | `app/shared/gcs.py`; the `DataBridgesAuth` and `DataBridgesClient` classes in `app/shared/databridges.py` (its constants move next to `price_cache/databridges_adapter.py`) and `tests/test_databridges_client.py`; the `MFI_MARKET_DRAFT_TIMEOUT_SECONDS` / `MFI_RED_TEAM_TIMEOUT_SECONDS` settings in `app/shared/llm.py`, used only by the deleted MFI workflow |
 | Seasonal | the research/recovery symbols of §1.4 (D2) |
 | Infrastructure | `supervisord.conf`, `nginx.conf.template` |

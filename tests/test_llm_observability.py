@@ -312,14 +312,15 @@ def test_structured_logs_never_include_prompt_or_response_bodies():
 
 def test_report_workflows_have_no_direct_model_invocations():
     root = Path(__file__).resolve().parents[1]
-    for relative in (
-        "app/services/mfi_drafter/graph.py",
-        "app/services/market_monitor/graph.py",
+    # The only permitted invoke: the compiled Market Monitor graph, and the MFI model runtime.
+    for relative, permitted in (
+        ("app/services/mfi_drafter/light_graph.py", "runtime.invoke("),
+        ("app/services/market_monitor/graph.py", "agent.invoke("),
     ):
         source = (root / relative).read_text(encoding="utf-8")
         direct_invocations = [
             line.strip()
             for line in source.splitlines()
-            if ".invoke(" in line and "agent.invoke(" not in line
+            if ".invoke(" in line and permitted not in line
         ]
         assert direct_invocations == []

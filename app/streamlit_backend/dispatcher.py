@@ -39,36 +39,25 @@ from app.shared.report_blocks import (
 )
 from app.shared.countries import supported_country_options
 from app.shared.llm_observability import LLMCallError, observability_config
-from app.shared.llm import (
-    LLMRuntimeConfigurationError,
-    llm_runtime_status,
-    require_llm_runtime_config,
-)
+from app.shared.llm import llm_runtime_status
 
 from app.services.mfi_drafter.data_loader import (
     load_mfi_from_csv,
     validate_csv_structure,
 )
-from app.services.mfi_drafter.compatibility import (
-    canonical_and_legacy_response_fields,
-)
-from app.services.mfi_drafter.context_status import not_attempted_context_status
 from app.services.mfi_drafter.features import (
     MFIAnalysisVersionDisabled,
     mfi_release_control,
     require_mfi_analysis_v2,
 )
 from app.services.mfi_drafter.methodology import DIMENSION_DESCRIPTIONS
-from app.services.mfi_drafter.graph import (
-    reconcile_correction_history_for_failure,
-    reconcile_generation_diagnostics_for_blocked_failure,
-    reconcile_generation_diagnostics_for_llm_failure,
-)
 from app.services.mfi_drafter.light_service import (
     run_mfi_report_generation,
     runtime_status as light_runtime_status,
+    service_info as mfi_service_info,
+    validate_submission,
 )
-from app.services.mfi_drafter.errors import MFIGenerationBlockedError, MFIRunError
+from app.services.mfi_drafter.errors import MFIRunError
 from app.services.mfi_drafter.schemas import MFI_DIMENSIONS
 from app.services.market_monitor.graph import (
     AVAILABLE_MODULES,
@@ -393,7 +382,6 @@ def _mfi_analysis_run_metadata(state: Dict[str, Any]) -> Dict[str, Any]:
         "generation_diagnostics": state.get("generation_diagnostics", {}),
         "context_status": state.get("context_status", {}),
         "llm_diagnostics": state.get("llm_diagnostics", {}),
-        "correction_history": state.get("correction_history", []),
     }
     profile = state.get("assessment_profile")
     if not isinstance(profile, dict):
@@ -405,45 +393,9 @@ def _mfi_analysis_run_metadata(state: Dict[str, Any]) -> Dict[str, Any]:
         "priority_market_names": profile.get("priority_market_names", []),
         "analysis_limitations": profile.get("limitations", []),
         "methodology_warnings": state.get("methodology_warnings", []),
-        "narrative_schema_version": state.get("narrative_schema_version", "2.0"),
-        "claim_validation": state.get("claim_validation", {}),
-        "qa_review": state.get("qa_review", {}),
+        "narrative_schema_version": state.get("narrative_schema_version"),
     })
     return metadata
-
-
-def _record_mfi_llm_failure_metadata(run_id: str, error: LLMCallError) -> None:
-    run = get_run(run_id)
-    metadata = dict(getattr(run, "metadata", {}) or {})
-    update_run(
-        run_id,
-        metadata={
-            "generation_diagnostics": (
-                reconcile_generation_diagnostics_for_llm_failure(metadata, error)
-            ),
-            "correction_history": reconcile_correction_history_for_failure(
-                metadata, task_id=error.task_id
-            ),
-        },
-    )
-
-
-def _record_mfi_blocked_failure_metadata(
-    run_id: str, error: MFIGenerationBlockedError
-) -> None:
-    run = get_run(run_id)
-    metadata = dict(getattr(run, "metadata", {}) or {})
-    update_run(
-        run_id,
-        metadata={
-            "generation_diagnostics": (
-                reconcile_generation_diagnostics_for_blocked_failure(metadata, error)
-            ),
-            "correction_history": reconcile_correction_history_for_failure(
-                metadata, task_id=error.task_id
-            ),
-        },
-    )
 
 
 def _require_enabled_mfi_release_control():
@@ -454,84 +406,11 @@ def _require_enabled_mfi_release_control():
     return control
 
 
-def _build_mfi_report_output(
-    *,
-    result: Dict[str, Any],
-    run_id: str,
-    country: str,
-    data_collection_start: str,
-    data_collection_end: str,
-) -> Dict[str, Any]:
-    if result.get("workflow_revision") == "mfi-light-v1":
-        from app.services.mfi_drafter.light_report import public_output
-        return public_output(result)
-    response_fields = canonical_and_legacy_response_fields(result)
-
-    result_for_blocks = dict(result)
-    result_for_blocks["country"] = country
-    result_for_blocks["data_collection_start"] = data_collection_start
-    result_for_blocks["data_collection_end"] = data_collection_end
-
-    return {
-        "run_id": run_id,
-        "workflow_revision": (result.get("assessment_profile") or {}).get("workflow_revision"),
-        "country": country,
-        "data_collection_start": data_collection_start,
-        "data_collection_end": data_collection_end,
-        "analysis_schema_version": result.get("analysis_schema_version", "2.0"),
-        "methodology_version": result.get("methodology_version", "databridge-current"),
-        "score_authority": result.get("score_authority", "synthetic_mock"),
-        "release_control": (
-            result.get("release_control")
-            or mfi_release_control().model_dump()
-        ),
-        "generation_diagnostics": result.get("generation_diagnostics", {}),
-        "llm_diagnostics": result.get("llm_diagnostics") or {
-            "service": "mfi-drafter",
-            "run_id": run_id,
-        },
-        "excluded_market_records": result.get("excluded_market_records", []),
-        "methodology_warnings": result.get("methodology_warnings", []),
-        "survey_metadata": result.get("survey_metadata", {}),
-        "national_mfi": response_fields["national_mfi"],
-        "risk_distribution": response_fields["risk_distribution"],
-        "markets_data": response_fields["markets_data"],
-        "dimension_scores": response_fields["dimension_scores"],
-        "mean_mfi_across_assessed_markets": response_fields[
-            "mean_mfi_across_assessed_markets"
-        ],
-        "assessment_profile": response_fields["assessment_profile"],
-        "narrative_schema_version": result.get("narrative_schema_version", "2.0"),
-        "market_score_distribution": response_fields["market_score_distribution"],
-        "context_status": (
-            result.get("context_status")
-            or not_attempted_context_status().model_dump()
-        ),
-        "context_evidence": result.get("context_evidence", []),
-        "dimension_narratives": result.get("dimension_narratives", {}),
-        "market_narratives": result.get("market_narratives", {}),
-        "executive_summary_narrative": result.get(
-            "executive_summary_narrative", {}
-        ),
-        "claim_validation": result.get("claim_validation", {}),
-        "qa_review": result.get("qa_review", {}),
-        "executive_summary": response_fields["executive_summary"],
-        "dimension_findings": response_fields["dimension_findings"],
-        "market_recommendations": response_fields["market_recommendations"],
-        "country_context": response_fields["country_context"],
-        "document_references": result.get("document_references", []),
-        "report_blocks": resolve_mfi_report_blocks(
-            result_for_blocks,
-            country=country,
-            data_collection_start=data_collection_start,
-            data_collection_end=data_collection_end,
-        ),
-        "visualizations": result.get("visualizations", {}),
-        "warnings": result.get("warnings", []),
-        "llm_calls": result.get("llm_calls", 0),
-        "correction_attempts": result.get("correction_attempts", 0),
-        "success": True,
-    }
+def _build_mfi_report_output(result: Dict[str, Any]) -> Dict[str, Any]:
+    from app.services.mfi_drafter.light_report import public_output
+    if result.get("workflow_revision") != "mfi-light-v1":
+        raise LocalHTTPException(410, "Reports produced by the previous MFI workflow are no longer supported")
+    return public_output(result)
 
 
 def _build_market_monitor_output(
@@ -603,7 +482,7 @@ def _dispatch_mfi_drafter(
     if method == "POST" and len(parts) == 2 and parts[0] == "export-docx":
         return _mfi_drafter_export_docx(parts[1], json_body=json_body)
     if method == "GET" and parts == ["info"]:
-        return _json_response(_mfi_drafter_info())
+        return _json_response(mfi_service_info())
     if method == "GET" and parts == ["health"]:
         control = mfi_release_control()
         return _json_response(
@@ -655,10 +534,6 @@ def _mfi_drafter_generate_from_csv(
         )
     except ValueError as exc:
         raise LocalHTTPException(400, str(exc))
-    except LLMCallError as exc:
-        raise LocalHTTPException(502, exc.to_public_dict())
-    except MFIGenerationBlockedError as exc:
-        raise LocalHTTPException(exc.status_code, exc.to_public_dict())
     except Exception as exc:
         raise LocalHTTPException(500, str(exc))
 
@@ -671,24 +546,12 @@ def _mfi_drafter_generate_from_csv(
             csv_data=csv_data,
             release_control=release_control,
         )
-    except LLMCallError as exc:
-        raise LocalHTTPException(502, exc.to_public_dict())
-    except MFIGenerationBlockedError as exc:
-        raise LocalHTTPException(exc.status_code, exc.to_public_dict())
     except MFIRunError as exc:
         raise LocalHTTPException(exc.status_code, str(exc))
     except Exception as exc:
         raise LocalHTTPException(500, str(exc))
 
-    run_id = result.get("run_id", "unknown")
-    output = _build_mfi_report_output(
-        result=result,
-        run_id=run_id,
-        country=csv_data["country"],
-        data_collection_start=csv_data["data_collection_start"],
-        data_collection_end=csv_data["data_collection_end"],
-    )
-    return _json_response(output)
+    return _json_response(_build_mfi_report_output(result))
 
 
 def _mfi_drafter_validate_csv(*, files: Any) -> LocalResponse:
@@ -740,7 +603,6 @@ def _mfi_drafter_generate_from_csv_async(
 
     run_id = f"mfi_{uuid.uuid4().hex[:8]}"
     create_run(run_id)
-    from app.services.mfi_drafter.light_service import validate_submission
     try:
         validate_submission(csv_data)
     except MFIRunError as exc:
@@ -751,24 +613,6 @@ def _mfi_drafter_generate_from_csv_async(
         metadata={"release_control": release_control.model_dump(), "workflow_revision": "mfi-light-v1"},
     )
 
-    progress_map = {
-        "mfi_data_agent": 10,
-        "mfi_analysis": 18,
-        "context_retrieval": 25,
-        "context_extractor": 40,
-        "mfi_graph_designer": 55,
-        "dimension_drafter": 72,
-        "market_recommendations_drafter": 82,
-        "executive_summary_drafter": 88,
-        "deterministic_claim_validator": 92,
-        "semantic_review": 94,
-        "consolidated_correction": 95,
-        "post_correction_validator": 96,
-        "corrected_claim_verification": 96,
-        "finalize_qa": 97,
-        "finalize_delivery": 99,
-    }
-
     def run_in_background() -> None:
         try:
             update_run(run_id, status="running", error=None, traceback=None)
@@ -777,7 +621,7 @@ def _mfi_drafter_generate_from_csv_async(
                 update_run(run_id, metadata={"llm_diagnostics": diagnostics})
 
             def on_step(node_name: str, _state: dict) -> None:
-                progress = (_state.get("generation_diagnostics") or {}).get("progress_pct", progress_map.get(node_name))
+                progress = (_state.get("generation_diagnostics") or {}).get("progress_pct")
                 if progress is not None:
                     update_run_progress(run_id, current_node=node_name, progress_pct=progress)
                 else:
@@ -856,19 +700,9 @@ def _mfi_drafter_generate_from_csv_async(
             update_run(run_id, warnings=result.get("warnings", []))
             set_run_completed(run_id, result=result)
         except Exception as exc:
-            if isinstance(exc, LLMCallError):
-                _record_mfi_llm_failure_metadata(run_id, exc)
-            elif isinstance(exc, MFIGenerationBlockedError):
-                _record_mfi_blocked_failure_metadata(run_id, exc)
-            public_failure = isinstance(exc, (LLMCallError, MFIGenerationBlockedError))
-            tb_str = None if public_failure else traceback.format_exc()
-            current_node = (
-                exc.node
-                if public_failure
-                else (get_run(run_id).current_node if get_run(run_id) is not None else None)
-            )
-            error = json.dumps(exc.to_public_dict(), sort_keys=True) if public_failure else str(exc)
-            set_run_failed(run_id, error=error, traceback=tb_str, current_node=current_node)
+            current = get_run(run_id)
+            set_run_failed(run_id, error=str(exc), traceback=traceback.format_exc(),
+                           current_node=current.current_node if current is not None else None)
 
     threading.Thread(target=run_in_background, daemon=True).start()
     preview = {
@@ -904,19 +738,7 @@ def _mfi_drafter_result(run_id: str) -> LocalResponse:
     if run.status != "completed":
         raise LocalHTTPException(400, f"Report not completed. Current status: {run.status}")
 
-    result = run.result or {}
-    country = result.get("country", "Unknown")
-    data_collection_start = result.get("data_collection_start", "Unknown")
-    data_collection_end = result.get("data_collection_end", "Unknown")
-
-    output = _build_mfi_report_output(
-        result=result,
-        run_id=run_id,
-        country=country,
-        data_collection_start=data_collection_start,
-        data_collection_end=data_collection_end,
-    )
-    return _json_response(output)
+    return _json_response(_build_mfi_report_output({**(run.result or {}), "run_id": run_id}))
 
 
 def _mfi_drafter_artifact(run_id: str, artifact_id: str) -> LocalResponse:
@@ -967,106 +789,6 @@ def _mfi_drafter_export_docx(run_id: str, *, json_body: Any) -> LocalResponse:
         },
     )
     return LocalResponse(status_code=200, headers=headers, content=docx_bytes)
-
-
-def _mfi_drafter_info() -> Dict[str, Any]:
-    release_control = mfi_release_control()
-    return {
-        "id": "mfi-drafter",
-        "name": "MFI Report Generator",
-        "description": "Generates full Market Functionality Index (MFI) reports. "
-        "Analyzes 9 market functionality dimensions and generates "
-        "visualizations, an executive summary, and recommendations.",
-        "version": "2.0.0",
-        "release_control": release_control.model_dump(),
-        "generation_enabled": release_control.enabled,
-        "llm_observability": observability_config().model_dump(),
-        "llm_runtime": light_runtime_status(),
-        "supports_csv_upload": True,
-        "data_source": "Uploaded processed MFI CSV",
-        "csv_upload": {
-            "endpoint": "/generate-from-csv",
-            "async_endpoint": "/generate-from-csv-async",
-            "validate_endpoint": "/validate-csv",
-            "required_columns": [
-                "MarketName",
-                "Adm0Name",
-                "Adm1Name",
-                "LevelID",
-                "DimensionName",
-                "VariableName",
-                "OutputValue",
-                "TradersSampleSize",
-            ],
-            "optional_columns": [
-                "MarketLatitude",
-                "MarketLongitude",
-                "Adm2Name",
-                "StartDate",
-                "EndDate",
-            ],
-            "description": "Upload the final processed or elaborated MFI CSV to generate the report.",
-        },
-        "outputs": {
-            "run_id": "Unique generation identifier",
-            "release_control": "Immutable Phase 4 deployment-control snapshot",
-            "generation_diagnostics": (
-                "Drafting provenance, retriever status, fallback use, and QA counts"
-            ),
-            "mean_mfi_across_assessed_markets": (
-                "Unrounded unweighted mean across included Full MFI markets"
-            ),
-            "assessment_profile": (
-                "Versioned deterministic profiles, rankings, limitations, "
-                "ledger, and tables"
-            ),
-            "narrative_schema_version": "Version of the structured narrative contract",
-            "market_score_distribution": "Neutral ordered assessed-market scores",
-            "context_evidence": "Classified, source-linked contextual statements",
-            "context_status": "Stable retrieval, classification, and accepted-context status",
-            "dimension_narratives": "Metric-cited structured dimension narratives",
-            "market_narratives": "Metric-cited structured market narratives",
-            "executive_summary_narrative": "Metric-cited structured executive summary",
-            "claim_validation": "Deterministic narrative claim validation",
-            "qa_review": "Combined deterministic and Red-Team QA status",
-            "national_mfi": "Deprecated Phase 4 compatibility alias",
-            "risk_distribution": "Deprecated Phase 4 compatibility alias",
-            "markets_data": "Detailed data for each market",
-            "dimension_scores": "Score for each MFI dimension",
-            "executive_summary": "Generated executive summary",
-            "dimension_findings": "Findings for each dimension",
-            "market_recommendations": "Recommendations by market",
-            "visualizations": "Charts in Base64 format",
-            "llm_calls": "Number of LLM calls performed",
-            "success": "True if generation is completed",
-        },
-        "workflow_nodes": [
-            {"id": "mfi_data_agent", "name": "MFI Data Agent", "description": "Retrieves/generates MFI data"},
-            {"id": "mfi_analysis", "name": "MFI Analysis", "description": "Builds the deterministic assessment profile"},
-            {"id": "context_retrieval", "name": "Context Retrieval", "description": "Retrieves contextual news"},
-            {"id": "context_extractor", "name": "Context Extractor", "description": "Extracts context with the LLM"},
-            {"id": "mfi_graph_designer", "name": "Graph Designer", "description": "Generates visualizations"},
-            {"id": "dimension_drafter", "name": "Dimension Drafter", "description": "Drafts findings per dimension"},
-            {
-                "id": "market_recommendations_drafter",
-                "name": "Market Recommendations",
-                "description": "Drafts recommendations by market",
-            },
-            {
-                "id": "executive_summary_drafter",
-                "name": "Executive Summary",
-                "description": "Drafts executive summary",
-            },
-            {"id": "deterministic_claim_validator", "name": "Claim Validator", "description": "Validates every claim against the closed catalog"},
-            {"id": "semantic_review", "name": "Semantic Review", "description": "Runs the three bounded narrative reviews"},
-            {"id": "consolidated_correction", "name": "Consolidated Correction", "description": "Repairs all material fields in one call"},
-            {"id": "post_correction_validator", "name": "Post-correction Validation", "description": "Revalidates numbers and citations"},
-            {"id": "corrected_claim_verification", "name": "Correction Verification", "description": "Reviews only corrected claims"},
-            {"id": "finalize_qa", "name": "Finalize QA", "description": "Finalizes claim and QA status"},
-            {"id": "finalize_delivery", "name": "Validate Delivery", "description": "Validates and stores reader-facing report blocks"},
-        ],
-        "mfi_dimensions": MFI_DIMENSIONS,
-    }
 
 
 def _mfi_drafter_dimensions() -> Dict[str, Any]:

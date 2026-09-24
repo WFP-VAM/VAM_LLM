@@ -2,12 +2,8 @@ from __future__ import annotations
 
 import io
 
-import pytest
 from docx import Document
 
-from app.services.mfi_drafter import graph
-from app.services.mfi_drafter.errors import MFIGenerationBlockedError
-from app.services.mfi_drafter.report_inspector import inspect_docx_bytes
 from app.services.mfi_drafter.schemas import GenerateMFIReportOutput
 from app.shared.docx_export import build_docx_bytes_from_report_blocks
 from app.shared.report_blocks import build_mfi_report_blocks
@@ -229,42 +225,6 @@ def test_unverified_figure_is_retained_with_adjacent_warning_and_docx_notice() -
     assert "Report delivered with figures requiring verification" in docx_text
 
 
-def test_high_claim_shows_withdrawal_and_never_exports_rejected_text() -> None:
-    rejected = "Use MFI alone to choose cash assistance."
-    replacement = "MFI findings do not determine transfer modality."
-    flag = _flag(
-        "flag-high",
-        severity="high",
-        code="unsupported_modality_conclusion",
-        message="MFI evidence cannot determine transfer modality.",
-    )
-    result = _result(claim=_claim(replacement, substituted=True), flags=[flag])
-    result["generation_diagnostics"]["claim_substitutions"] = [
-        {
-            "claim_id": "dimension.price.finding.1",
-            "rejected_text": rejected,
-            "replacement_text": replacement,
-            "codes": ["unsupported_modality_conclusion"],
-            "flag_ids": ["flag-high"],
-            "disposition": "replaced_by_deterministic_fallback",
-        }
-    ]
-
-    blocks = build_mfi_report_blocks(result)
-    warning = next(block for block in blocks if block.type == "claim_warning")
-    assert warning.meta["disposition"] == "replaced_by_deterministic_fallback"
-    assert "DO NOT USE ORIGINAL" in warning.text
-
-    docx = build_docx_bytes_from_report_blocks(blocks, visualizations={})
-    text = _docx_text(docx)
-    assert "dimension.price.finding.1" in text
-    assert "unsupported_modality_conclusion" in text
-    assert rejected not in text
-    inspected = inspect_docx_bytes(docx)
-    assert inspected.claim_status_marker_count >= 1
-    assert inspected.qa_table_row_count == 1
-
-
 def test_global_red_team_failure_is_listed_without_fake_claim_marker() -> None:
     flag = _flag(
         "system-red-team-execution-error",
@@ -297,40 +257,6 @@ def test_global_red_team_failure_is_listed_without_fake_claim_marker() -> None:
         qa_table.meta["rows"][0]["raw_values"]["disposition"]
         == "global_unresolved"
     )
-
-
-def test_unmatched_high_claim_id_is_promoted_to_global_delivery_notice() -> None:
-    flag = _flag(
-        "unmatched-high",
-        severity="high",
-        code="invalid_metric_id",
-        claim_id="claim-that-is-not-rendered",
-    )
-    blocks = build_mfi_report_blocks(_result(flags=[flag]))
-
-    assert not [block for block in blocks if block.type == "claim_warning"]
-    notice = next(
-        block
-        for block in blocks
-        if block.type == "qa_warning" and (block.meta or {}).get("global_flag_ids")
-    )
-    assert notice.meta["global_flag_ids"] == ["unmatched-high"]
-    assert "invalid_metric_id" in notice.text
-
-    with pytest.raises(MFIGenerationBlockedError) as caught:
-        graph.node_finalize_qa(
-            {
-                "deterministic_flags": [flag],
-                "red_team_flags": [],
-                "correction_attempts": 0,
-                "correction_history": [],
-                "dimension_narratives": {},
-                "market_narratives": {},
-                "executive_summary_narrative": {},
-                "context_evidence": [],
-            }
-        )
-    assert caught.value.code == "mfi_narrative_qa_unresolved"
 
 
 def test_low_advisory_does_not_create_claim_warning_or_material_table() -> None:
@@ -380,83 +306,6 @@ def test_streamlit_preview_renders_claim_warning_and_qa_table(monkeypatch) -> No
         for kind, value in events
     )
     assert any(kind == "dataframe" for kind, _value in events)
-
-
-def test_failed_targeted_repair_is_retained_and_blocks_delivery() -> None:
-    flag = _flag("flag-failed", severity="high", code="invalid_metric_id")
-    prepared = graph.node_prepare_correction(
-        {
-            "deterministic_flags": [flag],
-            "red_team_flags": [],
-            "correction_attempts": 0,
-            "correction_history": [],
-            "contextual_documents": [],
-            "context_evidence": [],
-        }
-    )
-    history = graph._record_correction_execution(
-        prepared["correction_history"],
-        attempt_number=1,
-        targets=prepared["correction_targets"],
-        outcome="llm_or_schema_failed",
-    )
-    reconciled = graph._reconcile_correction_history(history, [flag])
-    record = reconciled[0]
-    assert record["claim_id"] == "dimension.price.finding.1"
-    assert record["execution_outcome"] == "llm_or_schema_failed"
-    assert record["validation_outcome"] == "unresolved"
-    with pytest.raises(MFIGenerationBlockedError) as caught:
-        graph.node_finalize_qa(
-            {
-                "deterministic_flags": [flag],
-                "red_team_flags": [],
-                "correction_attempts": 1,
-                "correction_history": reconciled,
-                "dimension_narratives": {
-                    "Price": {"key_findings": [_claim("Invalid drafted claim.")]}
-                },
-                "market_narratives": {},
-                "executive_summary_narrative": {},
-                "context_evidence": [],
-            }
-        )
-    assert caught.value.code == "mfi_narrative_qa_unresolved"
-
-
-def test_high_context_statement_blocks_live_delivery_without_withdrawal() -> None:
-    rejected = "The price shock caused market failure."
-    flag = _flag(
-        "context-causal",
-        severity="high",
-        code="unsupported_causal_claim",
-        claim_id=None,
-        artifact_type="context",
-        artifact_id="context.statement.1",
-        field_name="text",
-    )
-    with pytest.raises(MFIGenerationBlockedError) as caught:
-        graph.node_finalize_qa(
-            {
-                "deterministic_flags": [flag],
-                "red_team_flags": [],
-                "correction_attempts": 0,
-                "correction_history": [],
-                "dimension_narratives": {},
-                "market_narratives": {},
-                "executive_summary_narrative": {},
-                "context_evidence": [
-                    {
-                        "statement_id": "context.statement.1",
-                        "text": rejected,
-                        "classification": "potentially_explanatory",
-                        "document_ids": ["doc-1"],
-                        "validation_status": "unverified",
-                        "validation_flags": ["unsupported_causal_claim"],
-                    }
-                ],
-            }
-        )
-    assert caught.value.code == "mfi_narrative_qa_unresolved"
 
 
 def test_public_schema_preserves_r4_audit_fields() -> None:

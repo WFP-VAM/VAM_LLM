@@ -17,87 +17,11 @@ import pytest
 
 from app.services.mfi_drafter import wording
 from app.services.mfi_drafter.methodology import DIMENSION_DESCRIPTIONS
-from app.services.mfi_drafter.narrative import (
-    fallback_dimension_narrative,
-    fallback_executive_narrative,
-    fallback_market_narrative,
-)
-from app.services.mfi_drafter.synthetic_fixtures import DEFAULT_SPEC, build_profile
-
-
-@pytest.fixture(scope="module")
-def profile() -> dict:
-    return build_profile(DEFAULT_SPEC).model_dump()
-
-
-def _claim_texts(value) -> list[str]:
-    """Collect every claim text in a narrative structure."""
-    found: list[str] = []
-    if isinstance(value, dict):
-        if isinstance(value.get("text"), str) and value.get("claim_id"):
-            found.append(value["text"])
-        for item in value.values():
-            found.extend(_claim_texts(item))
-    elif isinstance(value, list):
-        for item in value:
-            found.extend(_claim_texts(item))
-    return found
-
-
-@pytest.fixture(scope="module")
-def deterministic_strings(profile) -> list[str]:
-    """Every sentence the system can emit without an LLM."""
-    texts: list[str] = []
-
-    for dimension in profile["dimensions"]:
-        texts.extend(
-            _claim_texts(
-                fallback_dimension_narrative(dimension, assessment_profile=profile)
-            )
-        )
-    for market in profile["markets"]:
-        if market["is_priority_market"]:
-            texts.extend(_claim_texts(fallback_market_narrative(market)))
-    texts.extend(_claim_texts(fallback_executive_narrative(profile)))
-
-    texts.append(wording.NEUTRAL_SCOPE_STATEMENT)
-    texts.extend(wording.WITHDRAWN_CLAIM_TEXT.values())
-    texts.append(wording.WITHDRAWN_CLAIM_DEFAULT)
-    texts.extend(str(limitation["message"]) for limitation in profile["limitations"])
-    texts.extend(str(value) for value in DIMENSION_DESCRIPTIONS.values())
-    texts.extend(
-        entry["permitted_subject_phrase"] for entry in profile["metric_ledger"].values()
-    )
-    return [text for text in dict.fromkeys(texts) if text]
 
 
 # ---------------------------------------------------------------------------
 # The invariant
 # ---------------------------------------------------------------------------
-
-
-def test_no_deterministic_text_trips_any_safety_rule(deterministic_strings) -> None:
-    """Everything the system writes for itself must survive its own rules.
-
-    The deterministic path is what the report falls back to when drafting fails, and what
-    the committed test suites validate. A rule that fires on it would make a clean run
-    look like a failed one.
-    """
-    assert len(deterministic_strings) > 40, "fixture collected too little to be meaningful"
-
-    offenders: list[tuple[str, str]] = []
-    for text in deterministic_strings:
-        for rule, hits in (
-            ("modality", wording.modality_conclusions(text)),
-            ("affordability", wording.affordability_claims(text)),
-            ("causal", wording.causal_claims(text)),
-            ("pooled_population", wording.pooled_population_phrases(text)),
-            ("residual_markup", list(wording.residual_markup(text))),
-        ):
-            if hits:
-                offenders.append((rule, text))
-
-    assert offenders == [], "\n".join(f"[{rule}] {text}" for rule, text in offenders)
 
 
 def test_neutral_statement_is_permitted_by_the_negation_rule() -> None:
@@ -124,15 +48,6 @@ def test_price_methodology_description_is_permitted() -> None:
 
     assert "affordability" in description
     assert wording.affordability_claims(description) == []
-
-
-def test_withdrawal_text_cannot_trip_the_rules_that_caused_it(deterministic_strings) -> None:
-    """A replacement that re-flagged would loop the delivery policy against itself."""
-    for text in [*wording.WITHDRAWN_CLAIM_TEXT.values(), wording.WITHDRAWN_CLAIM_DEFAULT]:
-        assert wording.modality_conclusions(text) == []
-        assert wording.affordability_claims(text) == []
-        assert wording.causal_claims(text) == []
-        assert wording.numeric_tokens(text) == []
 
 
 # ---------------------------------------------------------------------------
@@ -330,20 +245,6 @@ def test_sanitizer_leaves_safe_text_untouched(raw) -> None:
     assert wording.sanitize_claim_text(raw) == raw
 
 
-def test_sanitizer_never_changes_a_number(deterministic_strings) -> None:
-    """The guarantee that lets the sanitizer run before numeric authorization."""
-    samples = [
-        *deterministic_strings,
-        "A rate of `35.1%` and a score of **3.33/10**.",
-        "See [2024 figures](https://example.org/2024/report).",
-        "```json\n{\"value\": 12.5}\n```",
-    ]
-
-    for raw in samples:
-        cleaned = wording.sanitize_claim_text(raw)
-        assert wording.numeric_tokens(cleaned) == wording.numeric_tokens(raw), raw
-
-
 def test_sanitizer_aborts_rather_than_alter_a_number() -> None:
     """A link whose URL carries digits is returned raw for the validator to flag."""
     raw = "See [the rate](https://example.org/2024)."
@@ -354,43 +255,12 @@ def test_sanitizer_aborts_rather_than_alter_a_number() -> None:
     assert "markdown_link" in wording.residual_markup(cleaned)
 
 
-def test_sanitizer_is_idempotent(deterministic_strings) -> None:
-    for raw in [*deterministic_strings, "A rate of `35.1%` was **reported**."]:
-        once = wording.sanitize_claim_text(raw)
-        assert wording.sanitize_claim_text(once) == once
-
-
 def test_sanitized_text_reports_no_residual_markup() -> None:
     raw = "The `value` was **3.33/10** per [source](https://example.org)."
 
     assert wording.residual_markup(wording.sanitize_claim_text(raw)) == ()
 
 
-def test_catalog_renderings_survive_every_delimiter(profile) -> None:
-    """Wrapping a citable value in markup must return the value byte-identical."""
-    from app.services.mfi_drafter.narrative import build_claim_catalog
-
-    catalog = build_claim_catalog(profile)
-    renderings = sorted({entry["formatted_value"] for entry in catalog.values()})
-    assert renderings
-
-    for value in renderings:
-        for wrapped in (f"`{value}`", f"**{value}**", f"*{value}*"):
-            assert wording.sanitize_claim_text(wrapped) == value
-
-
 # ---------------------------------------------------------------------------
 # Shared-definition contract
 # ---------------------------------------------------------------------------
-
-
-def test_inspector_and_validator_share_one_definition() -> None:
-    """Measurement and enforcement must be the same rule, or the exit gate is hollow."""
-    from app.services.mfi_drafter.report_inspector import InspectorConfig
-
-    config = InspectorConfig()
-
-    assert config.modality_subject_pattern == wording.MODALITY_SUBJECT_PATTERN
-    assert config.modality_verdict_pattern == wording.MODALITY_VERDICT_PATTERN
-    assert config.modality_negation_pattern == wording.METHODOLOGICAL_NEGATION_PATTERN
-    assert config.pooled_population_pattern == wording.POOLED_POPULATION_PATTERN

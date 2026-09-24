@@ -6,7 +6,6 @@ __all__ = [
     "router",
     "run_mfi_report_generation",
     "build_graph",
-    "create_initial_state",
     "DIMENSION_DESCRIPTIONS",
     "MFI_DIMENSIONS",
     "RISK_COLORS",
@@ -48,14 +47,10 @@ def __getattr__(name: str):
         from .router import router
 
         return router
+    if name == "build_graph":
+        return getattr(import_module(".light_graph", __name__), name)
     if name == "DIMENSION_DESCRIPTIONS":
         return getattr(import_module(".methodology", __name__), name)
-    if name in {
-        "run_mfi_report_generation",
-        "build_graph",
-        "create_initial_state",
-    }:
-        return getattr(import_module(".graph", __name__), name)
     if name == "build_assessment_profile":
         return getattr(import_module(".analysis", __name__), name)
     if name in {

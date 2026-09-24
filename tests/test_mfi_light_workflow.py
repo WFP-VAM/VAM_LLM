@@ -118,6 +118,27 @@ def test_charts_render_alongside_the_drafts(args, monkeypatch):
     assert light_service.run_mfi_report_generation(**args, client=Drafting())["success"]
 
 
+def test_disabled_release_stops_before_the_graph_is_built(args, monkeypatch):
+    from app.services.mfi_drafter.features import MFIAnalysisVersionDisabled, MFI_DRAFTER_ANALYSIS_VERSION_ENV
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("the graph must not be built")
+    monkeypatch.delenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, raising=False)
+    monkeypatch.setattr(light_graph, "build_graph", forbidden)
+    client = Client()
+    with pytest.raises(MFIAnalysisVersionDisabled):
+        light_service.run_mfi_report_generation(**{**args, "release_control": None}, client=client)
+    assert not client.calls
+
+
+def test_supplied_release_snapshot_outlives_a_later_configuration_change(args, monkeypatch):
+    from app.services.mfi_drafter.features import MFI_DRAFTER_ANALYSIS_VERSION_ENV, mfi_release_control
+    control = mfi_release_control({MFI_DRAFTER_ANALYSIS_VERSION_ENV: "2", "K_REVISION": "candidate-7"})
+    monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "invalid-after-submit")
+    result = light_service.run_mfi_report_generation(**{**args, "release_control": control}, client=Client())
+    assert result["release_control"]["analysis_version"] == "2"
+    assert result["release_control"]["deployment_revision"] == "candidate-7"
+
+
 def test_map_preflight_reports_same_configuration_error_in_api_and_streamlit(args, api, monkeypatch):
     from app.services.mfi_drafter import router, map_basemap
     from app.streamlit_backend import dispatcher

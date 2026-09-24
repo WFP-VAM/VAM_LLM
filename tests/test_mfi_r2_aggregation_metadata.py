@@ -12,19 +12,11 @@ validation. Several tests below exist solely to prevent that.
 
 from __future__ import annotations
 
-import json
 import re
 
 import pytest
 
 from app.services.mfi_drafter.analysis import _ledger_semantics
-from app.services.mfi_drafter.narrative import (
-    _allowed_renderings,
-    _format_catalog_value,
-    build_claim_catalog,
-    compact_catalog,
-    dimension_catalog_ids,
-)
 from app.services.mfi_drafter.synthetic_fixtures import (
     DEFAULT_SPEC,
     SyntheticDefect,
@@ -196,15 +188,6 @@ def test_only_trader_level_phrases_name_a_respondent_population(
         assert offenders == []
 
 
-def test_no_permitted_phrase_trips_the_terminology_validator(complete_profile) -> None:
-    """A supplied phrase must never be one the validator would reject."""
-    from app.services.mfi_drafter.narrative import _terminology_flags
-
-    location = {"artifact_type": "dimension", "artifact_id": "Price", "field_name": "text"}
-    for phrase in _phrases(complete_profile):
-        assert _terminology_flags(phrase, location, "claim.test", []) == [], phrase
-
-
 def test_phrases_are_lowercase_noun_phrases(complete_profile) -> None:
     """They are dropped into sentences, so they must not carry their own punctuation."""
     for phrase in _phrases(complete_profile):
@@ -287,101 +270,3 @@ def test_count_entries_name_what_they_count(partial_profile) -> None:
 # ---------------------------------------------------------------------------
 # Catalog and prompt serialization
 # ---------------------------------------------------------------------------
-
-
-def test_catalog_carries_the_ledger_metadata_unchanged(complete_profile) -> None:
-    catalog = build_claim_catalog(complete_profile)
-    ledger = _ledgers(complete_profile)
-
-    assert set(catalog) == set(ledger)
-    for metric_id, entry in catalog.items():
-        source = ledger[metric_id]
-        for field in (
-            "aggregation_method",
-            "population_basis",
-            "pooled_denominator_available",
-            "representation_basis",
-            "permitted_subject_phrase",
-        ):
-            assert entry[field] == source[field], f"{metric_id}/{field}"
-
-
-def test_catalog_formatting_is_unchanged_by_r2(complete_profile) -> None:
-    """Numeric authorization re-parses these strings, so R2 must not perturb them."""
-    catalog = build_claim_catalog(complete_profile)
-
-    for entry in catalog.values():
-        expected = _format_catalog_value(
-            entry["numeric_value"], entry["unit"], entry["statistic"]
-        )
-        assert entry["formatted_value"] == expected
-        assert entry["allowed_renderings"] == _allowed_renderings(
-            entry["numeric_value"], entry["unit"], entry["statistic"]
-        ) + ([entry["fact"]["rendered_text"]] if entry.get("fact") else [])
-
-
-def test_representation_counts_are_available_as_integers(partial_profile) -> None:
-    """R3 needs an authorized denominator without parsing the coverage label."""
-    catalog = build_claim_catalog(partial_profile)
-
-    partial = [
-        entry
-        for entry in catalog.values()
-        if entry["representation_basis"] == "incomplete_assessed_markets"
-        and entry["represented_market_count"] is not None
-    ]
-    assert partial
-    for entry in partial:
-        assert entry["represented_market_count"] <= entry["assessed_market_count"]
-
-
-def test_permitted_claim_scopes_equals_scope_in_r2(complete_profile) -> None:
-    """Deliberate pin: R2 must not change claim-scope behaviour.
-
-    Later phases widen this list so one value can back more than one kind of claim, and
-    move the scope validator onto it. This test is expected to change then.
-    """
-    catalog = build_claim_catalog(complete_profile)
-
-    for entry in catalog.values():
-        assert entry["permitted_claim_scopes"] == [entry["scope"]]
-
-
-def test_prompt_catalog_exposes_the_permitted_phrase(complete_profile) -> None:
-    catalog = build_claim_catalog(complete_profile)
-    ids = dimension_catalog_ids(complete_profile["dimensions"][0])
-
-    projected = compact_catalog(catalog, ids)
-
-    assert projected
-    assert all(entry.get("permitted_subject_phrase") for entry in projected)
-
-
-def test_prompt_catalog_hides_the_classification_enums(complete_profile) -> None:
-    """Only the wording reaches the model; validation reads the full catalog itself.
-
-    R3 may deliberately change this if a validator instruction needs an enum.
-    """
-    catalog = build_claim_catalog(complete_profile)
-    ids = dimension_catalog_ids(complete_profile["dimensions"][0])
-
-    projected = compact_catalog(catalog, ids)
-
-    for entry in projected:
-        for field in (
-            "aggregation_method",
-            "population_basis",
-            "pooled_denominator_available",
-            "representation_basis",
-            "permitted_claim_scopes",
-        ):
-            assert field not in entry
-
-
-def test_prompt_catalog_stays_within_its_size_budget(complete_profile) -> None:
-    """An oversized prompt makes dimension drafting fall back, which is a narrative change."""
-    catalog = build_claim_catalog(complete_profile)
-
-    for dimension in complete_profile["dimensions"]:
-        projected = compact_catalog(catalog, dimension_catalog_ids(dimension))
-        assert len(json.dumps(projected)) < 120_000, dimension["dimension"]

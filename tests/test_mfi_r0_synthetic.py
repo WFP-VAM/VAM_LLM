@@ -173,30 +173,6 @@ def test_dataframe_has_no_missing_required_columns() -> None:
     assert not frame["OutputValue"].isna().any()
 
 
-def test_deterministic_report_matches_release_validation(tmp_path) -> None:
-    """Pin the temporary duplication between the two deterministic pipelines.
-
-    ``deterministic_report`` generalises ``release_validation._deterministic_result`` so it
-    can accept a DataFrame and capture chart titles. Until the older function is reduced to
-    a delegating wrapper, this test guarantees the two cannot drift apart.
-    """
-    from app.services.mfi_drafter.deterministic_report import (
-        run_deterministic_report_from_csv,
-    )
-    from app.services.mfi_drafter.release_validation import _deterministic_result
-
-    spec = SyntheticSpec(market_count=4)
-    source = tmp_path / "synthetic.csv"
-    source.write_bytes(build_csv_bytes(spec))
-
-    _, reference_blocks, _ = _deterministic_result(source)
-    run = run_deterministic_report_from_csv(source)
-
-    assert [block.model_dump() for block in run.blocks] == [
-        block.model_dump() for block in reference_blocks
-    ]
-
-
 @pytest.mark.parametrize(
     "expectation", DEFECT_EXPECTATIONS, ids=lambda item: item.kind
 )

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from itertools import combinations
 
 import matplotlib
@@ -11,9 +10,7 @@ import pytest
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from app.services.mfi_drafter import graph
 from app.services.mfi_drafter import visualization as visualization_contract
-from app.services.mfi_drafter.schemas import MFI_DIMENSIONS
 from app.services.mfi_drafter.visualization import (
     MAP_LABEL_MAX,
     MFIMapLabelInput,
@@ -244,84 +241,6 @@ def test_map_callouts_use_deterministic_edge_lane_when_offsets_are_exhausted(
         plt.close(figure)
 
 
-def _map_state_and_markets():
-    profiles = [
-        {
-            "market_name": "Mapped B",
-            "selection_order": 2,
-            "score_rank": 2,
-            "is_priority_market": True,
-        },
-        {
-            "market_name": "Mapped A",
-            "selection_order": 1,
-            "score_rank": 1,
-            "is_priority_market": True,
-        },
-        {
-            "market_name": "Missing coordinates",
-            "selection_order": 3,
-            "score_rank": 3,
-            "is_priority_market": True,
-        },
-    ]
-    state = {
-        "country": "Testland",
-        "assessment_profile": {
-            "priority_market_names": [
-                "Mapped A",
-                "Mapped B",
-                "Missing coordinates",
-            ],
-            "markets": profiles,
-        },
-    }
-    markets = [
-        {
-            "market_name": "Mapped B",
-            "latitude": 31.5,
-            "longitude": 34.5,
-            "overall_mfi": 4.5,
-        },
-        {
-            "market_name": "Mapped A",
-            "latitude": 31.50001,
-            "longitude": 34.50001,
-            "overall_mfi": 4.0,
-        },
-    ]
-    return state, markets
-
-
-def test_geographic_map_legend_matches_callouts_and_omits_missing_coordinates(
-    monkeypatch,
-) -> None:
-    state, markets = _map_state_and_markets()
-    monkeypatch.setattr(graph, "save_plot_to_base64", lambda: "image")
-    visualizations: dict[str, str] = {}
-    graph._generate_simple_geographic_map(state, markets, visualizations)
-    figure = plt.gcf()
-    try:
-        assert visualizations == {"geographic_map": "image"}
-        legend_text = [text.get_text() for text in figure.legends[0].get_texts()]
-        assert legend_text == [
-            "1. Mapped A (score rank 1)",
-            "2. Mapped B (score rank 2)",
-        ]
-        assert all("Missing coordinates" not in item for item in legend_text)
-    finally:
-        plt.close(figure)
-
-
-def test_geographic_map_produces_a_readable_png_payload() -> None:
-    state, markets = _map_state_and_markets()
-    visualizations: dict[str, str] = {}
-    graph._generate_simple_geographic_map(state, markets, visualizations)
-    payload = base64.b64decode(visualizations["geographic_map"])
-    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
-    assert len(payload) > 10_000
-
-
 def test_geographic_report_caption_explains_numbered_callouts() -> None:
     blocks = build_mfi_report_blocks(
         {
@@ -348,53 +267,3 @@ def test_geographic_report_caption_explains_numbered_callouts() -> None:
         if block.type == "figure" and block.figure_id == "geographic_map"
     )
     assert "numbered callouts identify selected review markets" in map_block.caption
-
-
-def test_graph_rejects_malformed_dimension_coverage(monkeypatch) -> None:
-    monkeypatch.setattr(graph, "save_plot_to_base64", lambda: "image")
-    dimensions = []
-    for dimension in MFI_DIMENSIONS:
-        coverage = {
-            "available_market_count": 1,
-            "total_assessed_market_count": 1,
-            "missing_count": 0,
-            "coverage_ratio": 1.0,
-        }
-        if dimension == "Price":
-            coverage.pop("available_market_count")
-        dimensions.append(
-            {
-                "dimension": dimension,
-                "statistics": {"mean": 5.0, "coverage": coverage},
-                "localized_patterns": {
-                    "ordered_markets": [{"name": "Market A", "value": 5.0}]
-                },
-                "regional_summaries": [],
-                "subsections": [],
-                "drivers": [],
-            }
-        )
-
-    try:
-        with pytest.raises(MFIVisualizationContractError, match="Price chart coverage"):
-            graph.node_mfi_graph_designer(
-                {
-                    "country": "Testland",
-                    "assessment_profile": {
-                        "dimensions": dimensions,
-                        "markets": [],
-                        "priority_dimension_names": [],
-                        "priority_market_names": [],
-                    },
-                    "markets_data": [
-                        {
-                            "market_name": "Market A",
-                            "dimension_scores": {
-                                dimension: 5.0 for dimension in MFI_DIMENSIONS
-                            },
-                        }
-                    ],
-                }
-            )
-    finally:
-        plt.close("all")
