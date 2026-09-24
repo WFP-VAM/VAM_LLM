@@ -920,8 +920,8 @@ def health_check():
 @router.get("/dimensions")
 def get_mfi_dimensions():
     """Returns the 9 MFI dimensions with descriptions."""
-    from .graph import DIMENSION_DESCRIPTIONS
-    
+    from .methodology import DIMENSION_DESCRIPTIONS
+
     return {
         "dimensions": [
             {

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
+from functools import lru_cache
 from pydantic import BaseModel, ConfigDict, Field
 
 WORKFLOW = "mfi-light-v1"
@@ -40,8 +42,77 @@ def dumps(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+class ContractConfigurationError(ValueError):
+    """A programming/configuration failure, never a model repair target."""
+
+
+def expanded_schema(model):
+    schema = model.model_json_schema()
+    definitions = schema.get("$defs", {})
+    def expand(value):
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "$ref" in value:
+            return expand(definitions[value["$ref"].rsplit("/", 1)[-1]])
+        return {key: expand(item) for key, item in value.items() if key != "$defs"}
+    return expand(schema)
+
+
+def compile_provider_schema(schema):
+    """Translate the supported transport subset; retain stricter checks in Pydantic.
+
+    Annotation/default/extra-key/string-length rules are intentionally enforced
+    by the application. Unknown structural constructs fail instead of weakening
+    the response schema through the SDK's warning-and-drop behavior.
+    """
+    allowed = {"type", "properties", "items", "required", "enum", "description",
+               "nullable", "minimum", "maximum", "minItems", "maxItems", "format"}
+    application_only = {"title", "default", "additionalProperties", "minLength", "maxLength"}
+    def convert(value):
+        if "anyOf" in value:
+            choices = [item for item in value["anyOf"] if item.get("type") != "null"]
+            if len(choices) != 1 or len(value["anyOf"]) != 2:
+                raise ContractConfigurationError("Response schema requires a concrete type or a nullable concrete type")
+            return {**convert(choices[0]), "nullable": True}
+        unknown = set(value) - allowed - application_only - {"const"}
+        if unknown:
+            raise ContractConfigurationError(f"Unsupported response schema keywords: {sorted(unknown)}")
+        result = {key: deepcopy(item) for key, item in value.items() if key in allowed}
+        if "const" in value:
+            if isinstance(value["const"], str):
+                result["enum"] = [value["const"]]
+            else:
+                result["description"] = f"Must equal {value['const']!r}; checked by application validation."
+        if "properties" in result:
+            result["properties"] = {key: convert(item) for key, item in result["properties"].items()}
+        if "items" in result:
+            result["items"] = convert(result["items"])
+        if result.get("type") == "object" and not result.get("properties"):
+            raise ContractConfigurationError("Model-facing objects must have explicit properties")
+        return result
+    result = convert(schema)
+    from langchain_google_vertexai.chat_models import _convert_schema_dict_to_gapic
+    try:
+        _convert_schema_dict_to_gapic(deepcopy(result))
+    except Exception as exc:
+        raise ContractConfigurationError("Installed Vertex SDK cannot encode the response contract") from exc
+    return result
+
+
+@lru_cache(maxsize=32)
+def _compiled_schema(model):
+    return compile_provider_schema(expanded_schema(model))
+
+
+def provider_schema(model):
+    # The installed SDK mutates schema dictionaries while converting types.
+    # Never pass the registry's cached object to a provider or caller.
+    return deepcopy(_compiled_schema(model))
+
+
 def response_schema(review=False):
-    from .response_contracts import provider_schema
     return provider_schema(ReviewResponse if review else SectionsResponse)
 
 

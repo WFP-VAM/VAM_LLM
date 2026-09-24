@@ -58,8 +58,8 @@ from app.services.mfi_drafter.features import (
     mfi_release_control,
     require_mfi_analysis_v2,
 )
+from app.services.mfi_drafter.methodology import DIMENSION_DESCRIPTIONS
 from app.services.mfi_drafter.graph import (
-    DIMENSION_DESCRIPTIONS,
     reconcile_correction_history_for_failure,
     reconcile_generation_diagnostics_for_blocked_failure,
     reconcile_generation_diagnostics_for_llm_failure,

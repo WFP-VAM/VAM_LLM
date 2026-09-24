@@ -9,17 +9,14 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from collections import defaultdict
-from functools import cmp_to_key
 from typing import Any, Dict, List, Mapping, Sequence
 
 from .claim_identity import normalized_slug
+from .light_evidence import MARKET_PROMPT_PROJECTION_VERSION, build_market_prompt_projection
 from .methodology import (
     DISPLAY_DIMENSIONS,
-    METRIC_DEFINITIONS_BY_ID,
     NARRATIVE_PROHIBITIONS,
     NARRATIVE_PROMPT_CONSTRAINTS,
-    SCORE_VALIDATION_ABS_TOLERANCE,
 )
 from .narrative import (
     NARRATIVE_DENSITY_POLICY,
@@ -45,7 +42,6 @@ SEMANTIC_REVIEW_MAX_CHARACTERS = 400_000
 MAX_MARKETS_PER_DRAFT_BATCH = 5
 MARKET_DRAFT_MAX_PROMPT_CHARACTERS = 160_000
 CONSOLIDATED_CORRECTION_MAX_PROMPT_CHARACTERS = 600_000
-MARKET_PROMPT_PROJECTION_VERSION = "mfi-market-prompt-v1"
 
 DIMENSION_DRAFT_OPERATION = "mfi.dimension_batch_drafting.v1"
 MARKET_DRAFT_OPERATION = "mfi.market_batch_drafting.v2"
@@ -231,251 +227,6 @@ class MarketDraftPromptContractError(ValueError):
             f"Market {market_name!r} requires {character_count} prompt characters; "
             f"the limit is {target_characters}."
         )
-
-
-def _market_local_evidence(
-    assessment_profile: Mapping[str, Any],
-    *,
-    market_name: str,
-    dimension: str,
-) -> Dict[str, Dict[str, str]]:
-    """Index one market/dimension ledger by methodology metric and statistic."""
-    result: Dict[str, Dict[str, str]] = defaultdict(dict)
-    ledger = assessment_profile.get("metric_ledger") or {}
-    if not isinstance(ledger, Mapping):
-        return {}
-    for ledger_id, raw_entry in ledger.items():
-        if not isinstance(raw_entry, Mapping):
-            continue
-        if (
-            str(raw_entry.get("market_name") or "") != market_name
-            or str(raw_entry.get("dimension") or "") != dimension
-        ):
-            continue
-        source_ids = [
-            str(item) for item in raw_entry.get("source_metric_ids", []) or [] if item
-        ]
-        if not source_ids or source_ids[0] not in METRIC_DEFINITIONS_BY_ID:
-            continue
-        statistic = str(raw_entry.get("statistic") or "")
-        if statistic:
-            result[source_ids[0]][statistic] = str(ledger_id)
-    return dict(result)
-
-
-def _primary_local_ledger_id(
-    statistics: Mapping[str, str],
-    *,
-    role: str,
-) -> str | None:
-    if role in {"category_driver", "question_driver", "item_driver"}:
-        return statistics.get("derived_market_unfavorable_rate")
-    return statistics.get("market_explanatory_normalized_value") or statistics.get(
-        "market_explanatory_raw_value"
-    )
-
-
-def _market_projection_entry(
-    *,
-    source_metric_id: str,
-    ledger_id: str,
-) -> Dict[str, Any]:
-    definition = METRIC_DEFINITIONS_BY_ID[source_metric_id]
-    return {
-        "source_metric_id": source_metric_id,
-        "ledger_metric_id": ledger_id,
-        "role": definition.role,
-        "parent_subsection_id": definition.parent_subsection_id,
-        "product_group": definition.product_group,
-        "question_group": definition.question_group,
-        "item_name": definition.item_name,
-    }
-
-
-def _compare_metric_value(
-    left: float,
-    right: float,
-    *,
-    descending: bool = False,
-) -> int:
-    """Compare analytical values while preserving methodology-level ties."""
-    delta = float(left) - float(right)
-    if abs(delta) <= SCORE_VALIDATION_ABS_TOLERANCE:
-        return 0
-    result = -1 if delta < 0 else 1
-    return -result if descending else result
-
-
-def _compare_subsection_candidate(
-    left: tuple[float, int, str, str],
-    right: tuple[float, int, str, str],
-) -> int:
-    value_order = _compare_metric_value(left[0], right[0])
-    if value_order:
-        return value_order
-    return (left[2] > right[2]) - (left[2] < right[2])
-
-
-def _compare_driver_candidate(
-    left: tuple[float, int, str, str],
-    right: tuple[float, int, str, str],
-) -> int:
-    value_order = _compare_metric_value(left[0], right[0], descending=True)
-    if value_order:
-        return value_order
-    if left[1] != right[1]:
-        return -1 if left[1] > right[1] else 1
-    return (left[2] > right[2]) - (left[2] < right[2])
-
-
-def _compare_item_candidate(
-    left: tuple[float, str, str],
-    right: tuple[float, str, str],
-) -> int:
-    value_order = _compare_metric_value(left[0], right[0], descending=True)
-    if value_order:
-        return value_order
-    return (left[1] > right[1]) - (left[1] < right[1])
-
-
-def build_market_prompt_projection(
-    assessment_profile: Mapping[str, Any],
-    market_profile: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Project bounded, market-scoped evidence without changing Phase 2 data."""
-    market_name = str(market_profile.get("market_name") or "")
-    ledger = assessment_profile.get("metric_ledger") or {}
-    if not market_name or not isinstance(ledger, Mapping):
-        raise ValueError("Market prompt projection requires a market and metric ledger")
-
-    relevant_items_by_dimension = {
-        str(dimension.get("dimension")): {
-            str(metric.get("metric_id"))
-            for metric in dimension.get("drivers", []) or []
-            if isinstance(metric, Mapping)
-            and metric.get("metric_id")
-            and bool(metric.get("item_relevant"))
-        }
-        for dimension in assessment_profile.get("dimensions", []) or []
-        if isinstance(dimension, Mapping) and dimension.get("dimension")
-    }
-    selected_ids: List[str] = [
-        str(item) for item in market_profile.get("ledger_metric_ids", []) or [] if item
-    ]
-    weak_projections: List[Dict[str, Any]] = []
-    selection_counts = {"subsections": 0, "drivers": 0, "relevant_items": 0}
-
-    for weak in market_profile.get("weak_dimensions", []) or []:
-        if not isinstance(weak, Mapping) or not weak.get("dimension"):
-            continue
-        dimension = str(weak["dimension"])
-        weak_ledger_ids = [
-            str(item) for item in weak.get("ledger_metric_ids", []) or [] if item
-        ]
-        selected_ids.extend(weak_ledger_ids)
-        by_source = _market_local_evidence(
-            assessment_profile,
-            market_name=market_name,
-            dimension=dimension,
-        )
-        subsection_candidates: List[tuple[float, int, str, str]] = []
-        driver_candidates: List[tuple[float, int, str, str]] = []
-        item_candidates: List[tuple[float, str, str]] = []
-        for source_metric_id, statistics in by_source.items():
-            definition = METRIC_DEFINITIONS_BY_ID[source_metric_id]
-            ledger_id = _primary_local_ledger_id(
-                statistics,
-                role=definition.role,
-            )
-            entry = ledger.get(ledger_id) if ledger_id else None
-            if not ledger_id or not isinstance(entry, Mapping):
-                continue
-            value = entry.get("value")
-            if not isinstance(value, (int, float)):
-                continue
-            if dimension == "Food Quality":
-                is_subsection = definition.role == "dimension_validation_component"
-            else:
-                is_subsection = definition.role == "official_subsection"
-            if is_subsection:
-                quality_order = (
-                    0
-                    if source_metric_id == "quality.measure"
-                    else 1
-                    if source_metric_id == "quality.maximum"
-                    else 2
-                )
-                subsection_candidates.append(
-                    (float(value), quality_order, source_metric_id, ledger_id)
-                )
-            elif definition.role in {"category_driver", "question_driver"}:
-                driver_candidates.append(
-                    (
-                        float(value),
-                        int(definition.severity_weight or 0),
-                        source_metric_id,
-                        ledger_id,
-                    )
-                )
-            elif (
-                definition.role == "item_driver"
-                and source_metric_id in relevant_items_by_dimension.get(dimension, set())
-            ):
-                item_candidates.append(
-                    (float(value), source_metric_id, ledger_id)
-                )
-
-        if dimension == "Food Quality":
-            subsection_candidates.sort(key=lambda item: (item[1], item[2]))
-        else:
-            subsection_candidates.sort(key=cmp_to_key(_compare_subsection_candidate))
-        driver_candidates.sort(key=cmp_to_key(_compare_driver_candidate))
-        item_candidates.sort(key=cmp_to_key(_compare_item_candidate))
-        subsections = [
-            _market_projection_entry(source_metric_id=item[2], ledger_id=item[3])
-            for item in subsection_candidates[:2]
-        ]
-        drivers = [
-            _market_projection_entry(source_metric_id=item[2], ledger_id=item[3])
-            for item in driver_candidates[:4]
-        ]
-        relevant_items = [
-            _market_projection_entry(source_metric_id=item[1], ledger_id=item[2])
-            for item in item_candidates[:3]
-        ]
-        for entry in [*subsections, *drivers, *relevant_items]:
-            selected_ids.append(str(entry["ledger_metric_id"]))
-        selection_counts["subsections"] += len(subsections)
-        selection_counts["drivers"] += len(drivers)
-        selection_counts["relevant_items"] += len(relevant_items)
-        weak_projections.append(
-            {
-                "dimension": dimension,
-                "score": weak.get("score"),
-                "rank": weak.get("rank"),
-                "selection_order": weak.get("selection_order"),
-                "ledger_metric_ids": weak_ledger_ids,
-                "official_subsections": subsections,
-                "explanatory_drivers": drivers,
-                "relevant_items": relevant_items,
-            }
-        )
-
-    return {
-        "projection_version": MARKET_PROMPT_PROJECTION_VERSION,
-        "market_name": market_name,
-        "market_key": market_profile.get("market_key"),
-        "region": market_profile.get("region"),
-        "overall_mfi": market_profile.get("overall_mfi"),
-        "score_rank": market_profile.get("score_rank"),
-        "selection_order": market_profile.get("selection_order"),
-        "ledger_metric_ids": [
-            str(item) for item in market_profile.get("ledger_metric_ids", []) or [] if item
-        ],
-        "weak_dimensions": weak_projections,
-        "selected_ledger_metric_ids": list(dict.fromkeys(selected_ids)),
-        "selection_counts": selection_counts,
-    }
 
 
 def compose_market_draft_prompt(batch: Mapping[str, Any]) -> str:

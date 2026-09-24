@@ -151,6 +151,12 @@ The old modules re-export what moved (`graph.py` from `mock_data.py`, `simple_or
 
 **Verify:** full suite green; MFI outputs identical to the Phase 0 baseline.
 
+**Done 2026-09-24.**
+- Full suite: 1,311 tests, 1,302 passed, the same 9 skipped, 0 failed. The only difference from the baseline is the 8 new tests (`test_mfi_context.py`, `test_mfi_mock_data.py`).
+- MFI output snapshot identical to the baseline on all three benchmarks and on the misc checks.
+- Every Streamlit page renders without exceptions. Locally, page 5 shows its usual "Seasonal durable storage is not configured" message, because `SEASONAL_PROJECT` and `SEASONAL_BUCKET` are not set.
+- The light workflow no longer imports `graph.py`. `router.py` and `dispatcher.py` still import its failure-reconciliation helpers, which Phase 3 removes.
+
 ### Phase 2 — MFI: remove the checkpoint layer
 
 1. `light_runtime.py`: `ModelRuntime` keeps its per-run bookkeeping in an in-memory, thread-safe ledger instead of the journal.

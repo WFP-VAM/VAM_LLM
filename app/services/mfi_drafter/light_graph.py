@@ -25,7 +25,7 @@ class State(TypedDict, total=False):
 
 def prepare_analysis(inputs):
     from .analysis import build_assessment_profile
-    from .graph import generate_mock_mfi_data
+    from .mock_data import generate_mock_mfi_data
     loaded = inputs.get("csv_data")
     if loaded is None:
         loaded = generate_mock_mfi_data(inputs["country"], inputs["markets"], inputs["data_collection_start"], inputs["data_collection_end"])
@@ -39,10 +39,10 @@ def prepare_analysis(inputs):
 
 
 def retrieve_context(base):
-    from .graph import node_context_retrieval
+    from .context import retrieve_context_documents
     from .context_status import resolve_context_status
     try:
-        retrieved = node_context_retrieval({**base, "generation_diagnostics": {}})
+        retrieved = retrieve_context_documents(base)
     except Exception as exc:
         # Context has always been optional. Keep its failure distinct from analysis.
         retrieved = {"contextual_documents": [], "retriever_traces": [{"retriever": "context", "error": type(exc).__name__}],
