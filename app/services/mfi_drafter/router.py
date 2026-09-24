@@ -15,8 +15,8 @@ from .graph import (
     reconcile_generation_diagnostics_for_blocked_failure,
     reconcile_generation_diagnostics_for_llm_failure,
 )
-from .light_service import run_mfi_report_generation, runtime_status as light_runtime_status
-from .errors import MFIGenerationBlockedError
+from .light_service import MOCK_DATA_REQUIRED, run_mfi_report_generation, runtime_status as light_runtime_status
+from .errors import MFIGenerationBlockedError, MFIRunError
 from .data_loader import load_mfi_from_csv, validate_csv_structure
 from .compatibility import canonical_and_legacy_response_fields
 from .context_status import not_attempted_context_status
@@ -55,8 +55,6 @@ from app.shared.llm import (
     llm_runtime_status,
     require_llm_runtime_config,
 )
-from .execution_service import get_mfi_run as get_run
-from .execution import execution_status, RecoveryError
 
 logger = logging.getLogger(__name__)
 
@@ -282,15 +280,18 @@ async def generate_mfi_report(input_data: GenerateMFIReportInput):
         GenerateMFIReportOutput with all report sections
     """
     release_control = _require_enabled_release_control()
+    if not input_data.use_mock_data:
+        raise HTTPException(status_code=400, detail=MOCK_DATA_REQUIRED)
     try:
         logger.info(f"Starting MFI report generation for {input_data.country}")
-        
+
         result = run_mfi_report_generation(
             country=input_data.country,
             data_collection_start=input_data.data_collection_start,
             data_collection_end=input_data.data_collection_end,
             markets=input_data.markets,
             release_control=release_control,
+            use_mock_data=True,
         )
         
         output = _build_mfi_output(
@@ -310,6 +311,9 @@ async def generate_mfi_report(input_data: GenerateMFIReportInput):
     except MFIGenerationBlockedError as e:
         logger.error("MFI report generation blocked: %s", e)
         raise HTTPException(status_code=e.status_code, detail=e.to_public_dict())
+    except MFIRunError as e:
+        logger.error("MFI report generation stopped: %s", e)
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except Exception as e:
         logger.error(f"MFI report generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -355,6 +359,9 @@ async def generate_mfi_report_from_csv(
     except MFIGenerationBlockedError as e:
         logger.error("MFI report generation from CSV blocked: %s", e)
         raise HTTPException(status_code=e.status_code, detail=e.to_public_dict())
+    except MFIRunError as e:
+        logger.error("MFI report generation from CSV stopped: %s", e)
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except ValueError as e:
         logger.error(f"CSV validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -409,11 +416,10 @@ async def generate_mfi_report_from_csv_async(
 
     run_id = f"mfi_{uuid_module.uuid4().hex[:8]}"
     create_run(run_id)
-    from app.services.mfi_drafter.light_service import prepare_submission
-    from app.services.mfi_drafter.execution import RecoveryError
+    from app.services.mfi_drafter.light_service import validate_submission
     try:
-        reservation = prepare_submission(run_id, csv_data)
-    except RecoveryError as exc:
+        validate_submission(csv_data)
+    except MFIRunError as exc:
         set_run_failed(run_id, error=str(exc))
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     update_run(
@@ -521,7 +527,6 @@ async def generate_mfi_report_from_csv_async(
                 release_control=release_control,
                 run_id=run_id,
                 llm_trace_sink=on_llm_trace,
-                **({"execution_reservation": reservation} if reservation else {}),
             )
 
             update_run(run_id, warnings=result.get("warnings", []))
@@ -569,6 +574,8 @@ async def generate_mfi_report_async(
     """
     import uuid
     release_control = _require_enabled_release_control()
+    if not input_data.use_mock_data:
+        raise HTTPException(status_code=400, detail=MOCK_DATA_REQUIRED)
     run_id = f"mfi_{uuid.uuid4().hex[:8]}"
 
     create_run(run_id)
@@ -628,6 +635,7 @@ async def generate_mfi_report_async(
                 release_control=release_control,
                 run_id=run_id,
                 llm_trace_sink=on_llm_trace,
+                use_mock_data=True,
             )
             
             update_run(run_id, warnings=result.get("warnings", []))
@@ -662,9 +670,7 @@ async def get_report_status(run_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run ID not found: {run_id}")
 
-    from .light_service import effective_contract
     return MFIReportStatusOutput(
-        **execution_status(run_id, runtime=effective_contract()),
         run_id=run_id,
         status=run.status,
         current_node=run.current_node,
@@ -674,61 +680,6 @@ async def get_report_status(run_id: str):
         error=run.error,
         traceback=run.traceback,
     )
-
-
-class ResumeMFIInput(BaseModel):
-    expected_revision: int
-    idempotency_key: str
-
-
-class DraftMFIOptions(BaseModel):
-    snapshot_revision: Optional[int] = None
-
-
-@router.post("/resume/{run_id}", status_code=202)
-async def resume_mfi(run_id: str, request: ResumeMFIInput, background_tasks: BackgroundTasks):
-    from .light_service import schedule_resume
-    if not request.idempotency_key.strip():
-        raise HTTPException(status_code=422, detail="idempotency_key is required")
-    try:
-        return schedule_resume(run_id, request.expected_revision, request.idempotency_key, background_tasks.add_task)
-    except RecoveryError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-
-
-@router.get("/draft/{run_id}")
-async def get_draft(run_id: str, snapshot_revision: Optional[int] = None):
-    from .drafts import draft_payload
-    if get_run(run_id) is None:
-        raise HTTPException(status_code=404, detail="Run ID not found")
-    try:
-        return draft_payload(run_id, snapshot_revision)
-    except RecoveryError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-
-
-@router.get("/analysis/{run_id}")
-async def get_analysis(run_id: str):
-    from .drafts import analysis_payload
-    if get_run(run_id) is None:
-        raise HTTPException(status_code=404, detail="Run ID not found")
-    try:
-        return analysis_payload(run_id)
-    except RecoveryError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-
-
-@router.post("/export-draft-docx/{run_id}")
-async def export_mfi_draft_docx(run_id: str, options: DraftMFIOptions = Body(default_factory=DraftMFIOptions)):
-    from .drafts import export_draft
-    if get_run(run_id) is None:
-        raise HTTPException(status_code=404, detail="Run ID not found")
-    try:
-        content, filename = export_draft(run_id, options.snapshot_revision)
-        return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        headers={"Content-Disposition": build_content_disposition(filename)})
-    except RecoveryError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.get("/result/{run_id}", response_model=GenerateMFIReportOutput | LightMFIReportOutput)

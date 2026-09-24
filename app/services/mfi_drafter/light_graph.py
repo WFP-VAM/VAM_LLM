@@ -2,7 +2,6 @@
 from __future__ import annotations
 from typing import TypedDict
 from copy import deepcopy
-from concurrent.futures import ThreadPoolExecutor, Future
 from langgraph.graph import StateGraph, START, END
 from .light_contracts import WORKFLOW, NODES
 from .light_evidence import evidence, section_specs, source_map
@@ -60,13 +59,13 @@ def retrieve_context(base):
             "original_document_id": source.get("doc_id"), "doc_id": key, "source_id": key} for key,source in sources.items()]}
 
 
-def render_figures(base, execution):
+def render_figures(base):
     from .render_worker import RenderWorker, figure_jobs
     worker = RenderWorker()
     images, metadata = {}, {}
     try:
         for job in figure_jobs(base):
-            result = execution.execute_once("figure:" + job["figure_id"], job, lambda job=job: worker.run(job), kind="figure")
+            result = worker.run(job)
             images[job["figure_id"]], metadata[job["figure_id"]] = result["image"], result["metadata"]
     finally:
         worker.close()
@@ -77,63 +76,37 @@ def texts(response):
     return {s["section_id"]: s["text_markdown"] for s in response["sections"]}
 
 
-def build_graph(execution, *, client=None, on_step=None, trace_sink=None):
+def build_graph(ledger, *, client=None, on_step=None, trace_sink=None):
     import threading
     callback_lock = threading.RLock()
     def notify(name=None, value=None):
         with callback_lock:
-            diag = public_diagnostics(execution.store.read(execution.run_id))
+            manifest = ledger.read()
+            if manifest["execution_state"] != "running":
+                return  # A sibling that finishes after a failure must not overwrite the failed run.
+            diag = public_diagnostics(manifest)
             if trace_sink:
                 trace_sink(diag["llm_diagnostics"])
             if on_step:
                 on_step(name or "model_call", {**(value or {}), "workflow_revision": WORKFLOW,
                     "generation_diagnostics": {k:v for k,v in diag.items() if k != "llm_diagnostics"},
                     "llm_diagnostics": diag["llm_diagnostics"]})
-    runtime = ModelRuntime(execution, client, notify=notify)
+    runtime = ModelRuntime(ledger, client, notify=notify)
 
-    # LangGraph supersteps normally wait for all siblings. Scheduling owned
-    # outputs as futures lets a correction follow its own review immediately,
-    # and lets generation overlap charts. Futures never enter checkpoints.
-    pool = None
-    owned = dict(zip(NODES, ("base", "context", "figures", "draft_dimensions", "draft_markets",
-        "review_dimensions", "review_markets", "final_dimensions", "final_markets", "summary", "report")))
-    requirements = {
-        "prepare_analysis": ("base",), "context_retrieval": ("base",), "charts": ("base",),
-        "draft_dimensions": ("base", "context"), "draft_markets": ("base", "context"),
-        "review_dimensions": ("base", "context", "draft_dimensions", "draft_markets"),
-        "review_markets": ("base", "context", "draft_dimensions", "draft_markets"),
-        "correct_dimensions": ("base", "context", "draft_dimensions", "draft_markets", "review_dimensions"),
-        "correct_markets": ("base", "context", "draft_dimensions", "draft_markets", "review_markets"),
-        "executive_summary": ("base", "context", "final_dimensions", "final_markets"),
-        "assemble_report": ("base", "context", "figures", "final_dimensions", "final_markets", "review_dimensions", "review_markets", "summary"),
-    }
-
-    def stage(name, function, dependencies):
+    def stage(name, function):
         def execute(state):
-            state = {key: (state[key].result() if isinstance(state[key], Future) else state[key]) for key in requirements[name]}
-            deps = dependencies(state)
-            before = execution.store.read(execution.run_id)
-            def start(v):
-                v.setdefault("light_phases", {})[name] = {"status": "running"}
-            execution.change(start)
+            ledger.change(lambda v: v.setdefault("light_phases", {}).update({name: {"status": "running"}}))
             notify(name)
             try:
-                value = execution.execute_once("light:"+name, deps, lambda: function(state), kind="phase")
-                from .reliable_contracts import fingerprint
-                dep = fingerprint([before["input_fingerprint"], before["contract_bundle"], deps, None])
-                reused = any(r["task_id"] == "light:"+name and r["input_fingerprint"] == dep and r["status"] == "succeeded" for r in before["tasks"].values())
-                execution.change(lambda v: v["light_phases"][name].update(status="succeeded", reused=reused))
-                if name == "prepare_analysis":
-                    execution.snapshot(value["base"])
-                notify(name, value.get("context", value.get("base", {})))
-                return value[owned[name]]
+                value = function(state)
             except Exception:
-                execution.change(lambda v: v["light_phases"][name].update(status="failed"))
+                ledger.change(lambda v: v["light_phases"][name].update(status="failed"))
                 notify(name)
                 raise
-        def wrapped(state):
-            return {owned[name]: pool.submit(execute, state)}
-        return wrapped
+            ledger.change(lambda v: v["light_phases"][name].update(status="succeeded"))
+            notify(name, value.get("context", value.get("base", {})))
+            return value
+        return execute
 
     def package_for(state, family, ids, kind):
         base = {**state["base"], **state["context"]}
@@ -168,27 +141,24 @@ def build_graph(execution, *, client=None, on_step=None, trace_sink=None):
         if review:
             result = {"needs_revision": any(o["needs_revision"] for o in outputs),
                       "review_markdown": "\n\n".join(o["review_markdown"] for o in outputs)}
-            execution.change(lambda v: v.setdefault("light_review_outcomes", {}).update({family: {"needs_revision": result["needs_revision"]}}))
+            ledger.change(lambda v: v.setdefault("light_review_outcomes", {}).update({family: {"needs_revision": result["needs_revision"]}}))
             return result
         return {"sections": [s for o in outputs for s in o["sections"]], "notes": [n for o in outputs for n in o["notes"]]}
 
     graph = StateGraph(State)
-    graph.add_node("prepare_analysis", stage("prepare_analysis", lambda s: {"base": prepare_analysis(s["base"])}, lambda s: s["base"]))
-    graph.add_node("context_retrieval", stage("context_retrieval", lambda s: {"context": retrieve_context(s["base"])}, lambda s: {k:s["base"][k] for k in ("country", "data_collection_start", "data_collection_end")}))
-    from .map_basemap import chart_dependencies
-    graph.add_node("charts", stage("charts", lambda s: {"figures": render_figures(s["base"], execution)},
-        lambda s: chart_dependencies(s["base"])))
+    graph.add_node("prepare_analysis", stage("prepare_analysis", lambda s: {"base": prepare_analysis(s["base"])}))
+    graph.add_node("context_retrieval", stage("context_retrieval", lambda s: {"context": retrieve_context(s["base"])}))
+    graph.add_node("charts", stage("charts", lambda s: {"figures": render_figures(s["base"])}))
     for family in ("dimensions", "markets"):
         draft, review, correct = "draft_"+family, "review_"+family, "correct_"+family
-        graph.add_node(draft, stage(draft, lambda s, f=family, n=draft: {n: generate_family(s,f,n)}, lambda s: {"base":s["base"], "context":s["context"]}))
-        graph.add_node(review, stage(review, lambda s, f=family, n=review: {n: generate_family(s,f,n)},
-            lambda s: {k:s[k] for k in ("base", "context", "draft_dimensions", "draft_markets")}))
+        graph.add_node(draft, stage(draft, lambda s, f=family, n=draft: {n: generate_family(s,f,n)}))
+        graph.add_node(review, stage(review, lambda s, f=family, n=review: {n: generate_family(s,f,n)}))
         def correction(s, f=family, n=correct):
             result = generate_family(s,f,n) if s["review_"+f]["needs_revision"] else s["draft_"+f]
-            execution.change(lambda v: v.setdefault("light_review_outcomes", {}).setdefault(f, {}).update(
+            ledger.change(lambda v: v.setdefault("light_review_outcomes", {}).setdefault(f, {}).update(
                 correction="completed" if s["review_"+f]["needs_revision"] else "skipped"))
             return {"final_"+f: result}
-        graph.add_node(correct, stage(correct, correction, lambda s, f=family: {k:s[k] for k in ("base", "context", "draft_dimensions", "draft_markets", "review_"+f)}))
+        graph.add_node(correct, stage(correct, correction))
         graph.add_edge("context_retrieval", draft)
         graph.add_edge(review, correct)
     for family in ("dimensions", "markets"):
@@ -200,8 +170,7 @@ def build_graph(execution, *, client=None, on_step=None, trace_sink=None):
             "FINAL_DIMENSIONS": texts(s["final_dimensions"]), "FINAL_MARKETS": texts(s["final_markets"]),
             "FINAL_NOTES": [*s["final_dimensions"]["notes"], *s["final_markets"]["notes"]]}
         return {"summary": runtime.invoke("executive_summary", "executive_summary", package, ["executive_summary", "country_context"])}
-    graph.add_node("executive_summary", stage("executive_summary", synthesis,
-        lambda s: {k:s[k] for k in ("base", "context", "final_dimensions", "final_markets")}))
+    graph.add_node("executive_summary", stage("executive_summary", synthesis))
 
     def assemble(s):
         from .light_report import build_blocks, output_aliases
@@ -212,27 +181,12 @@ def build_graph(execution, *, client=None, on_step=None, trace_sink=None):
         result["report_blocks"], result["coverage"] = build_blocks(result)
         result.update(output_aliases(result))
         return {"report": result}
-    graph.add_node("assemble_report", stage("assemble_report", assemble,
-        lambda s: {k:s[k] for k in ("base", "context", "figures", "final_dimensions", "final_markets", "review_dimensions", "review_markets", "summary")}))
+    graph.add_node("assemble_report", stage("assemble_report", assemble))
     graph.add_edge(START, "prepare_analysis")
     graph.add_edge("prepare_analysis", "context_retrieval")
-    graph.add_edge("prepare_analysis", "charts")
+    # Charts render in the same step as the two drafts, so drafting never waits for them.
+    graph.add_edge("context_retrieval", "charts")
     graph.add_edge(["correct_dimensions", "correct_markets"], "executive_summary")
     graph.add_edge(["executive_summary", "charts"], "assemble_report")
     graph.add_edge("assemble_report", END)
-    compiled = graph.compile()
-
-    class ExecutionGraph:
-        def get_graph(self, **kwargs):
-            return compiled.get_graph(**kwargs)
-
-        def invoke(self, state, config=None):
-            nonlocal pool
-            # At most eleven jobs, with an acyclic dependency order. Independent
-            # successful branches are committed even when another branch fails.
-            with ThreadPoolExecutor(max_workers=len(NODES), thread_name_prefix="mfi-light") as executor:
-                pool = executor
-                scheduled = compiled.invoke(state, config=config)
-                return {"report": scheduled["report"].result()}
-
-    return ExecutionGraph()
+    return graph.compile()

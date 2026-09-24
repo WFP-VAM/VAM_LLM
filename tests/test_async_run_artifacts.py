@@ -1,4 +1,29 @@
+import pytest
+
 from app.shared import async_runs
+
+
+@pytest.mark.parametrize("backend", [None, "memory", " MEMORY "])
+def test_memory_is_the_default_and_an_explicit_memory_backend_wins(monkeypatch, backend):
+    for key in ("RUNS_BACKEND", "RUNS_GCS_URI"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(async_runs, "_BACKEND", None)
+    if backend is not None:
+        monkeypatch.setenv("RUNS_BACKEND", backend)
+        # An explicit memory backend must take precedence over a leftover URI.
+        monkeypatch.setenv("RUNS_GCS_URI", "gs://existing-runs/runs")
+    assert not async_runs._use_durable_store()
+
+
+@pytest.mark.parametrize("backend", [None, "firestore_gcs", "firestore", "gcs", " FIRESTORE_GCS "])
+def test_durable_backend_is_selected_by_name_or_by_a_gcs_uri(monkeypatch, backend):
+    monkeypatch.delenv("RUNS_BACKEND", raising=False)
+    monkeypatch.setattr(async_runs, "_BACKEND", None)
+    if backend is not None:
+        monkeypatch.setenv("RUNS_BACKEND", backend)
+    monkeypatch.setenv("RUNS_GCS_URI", " gs://existing-runs/runs ")
+    monkeypatch.setattr(async_runs, "_has_gcp_deps", lambda: True)
+    assert async_runs._use_durable_store()
 
 
 class _FakeSnapshot:

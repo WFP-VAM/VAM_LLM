@@ -169,7 +169,7 @@ The old modules re-export what moved (`graph.py` from `mock_data.py`, `simple_or
    - `schedule_resume`, `execute_resumed` and `get_light_run` are removed;
    - `run_mfi_report_generation` returns the result with `llm_diagnostics` and `generation_diagnostics` taken from the ledger;
    - `effective_contract()` stays, as metadata in the result and in `/info`.
-4. Delete `execution.py`, `execution_service.py`, `drafts.py`.
+4. ~~Delete `execution.py`, `execution_service.py`, `drafts.py`.~~ **Moved to Phase 3.** `graph.py` imports `execution_service` at module level (`graph.py:4785`), and `router.py`/`dispatcher.py` still import `graph.py` until Phase 3, so deleting these files now would stop the app from starting. After Phase 2 they are used only by the old workflow.
 5. Router and dispatcher (both, since Streamlit goes through the dispatcher):
    - remove `POST /resume/{id}`, `GET /draft/{id}`, `GET /analysis/{id}` and `POST /export-draft-docx/{id}` (`router.py:688-735`, `dispatcher.py:588-611`);
    - `/status` and `/result` read the shared run record, like MM (`router.py:58-59` and `:658-686`, `dispatcher.py:1081-1137`). This also fixes the shadowed `get_run` import in the router;
@@ -183,9 +183,19 @@ The old modules re-export what moved (`graph.py` from `mock_data.py`, `simple_or
 
 **Verify:** full suite; MFI outputs identical to the baseline; AppTest on page 4.
 
+**Done 2026-09-24.**
+- Full suite: 1,307 tests, 1,298 passed, the same 9 skipped, 0 failed. One page test added after that run passes on its own (`test_mfi_drafter_ui.py`: 9/9). No retained test changed outcome.
+- Tests removed (26): resume, recovery, ownership fencing, cross-run reuse and old storage selection. Tests added (23): failure reporting, charts in the drafts' step (D3), removed endpoints, D5, CSV submission via API and Streamlit, token caching, diagnostics without response text, the page's progress panel, and the run-store backend rules (moved to `test_async_run_artifacts.py`).
+- MFI output snapshot identical to the baseline; every Streamlit page renders.
+- As built:
+  - Step 4 moved to Phase 3.
+  - `check_mfi_reliable.py` needed no change: it selects `tests/test_mfi*.py` by pattern.
+  - On the synchronous endpoints, run errors now return their own status (e.g. 422 for an oversized request) instead of 500.
+- **Found: the JSON endpoints could never produce a report.** A mock-data report fails while building the annex (`KeyError: 'distribution'` in `coverage.py`), on the pre-refactor code as well; the MFI page only uses the CSV endpoints. D5 is in place (the flag is required), but the endpoints stay broken. **Decision needed before Phase 3:** remove `/generate` and `/generate-async` (JSON), or fix the synthetic data.
+
 ### Phase 3 — MFI: delete the old workflows and the offline tooling
 
-1. Delete about 15k lines of modules: `graph.py`, `narrative.py`, `simple_orchestration.py`, `qa_pipeline.py`, `review.py`, `correction.py`, `reliable_nodes.py`, `packages.py`, `response_runtime.py`, `response_contracts.py`, `deterministic_report.py`, `release_validation.py`, `report_inspector.py`, `r0_diagnostic.py`, `offline_narrative_fixtures.py`.
+1. Delete about 15k lines of modules: `graph.py`, `narrative.py`, `simple_orchestration.py`, `qa_pipeline.py`, `review.py`, `correction.py`, `reliable_nodes.py`, `packages.py`, `response_runtime.py`, `response_contracts.py`, `deterministic_report.py`, `release_validation.py`, `report_inspector.py`, `r0_diagnostic.py`, `offline_narrative_fixtures.py`, and the checkpoint layer moved here from Phase 2: `execution.py`, `execution_service.py`, `drafts.py`. Also remove what only they use: the draft watermark branch in `app/shared/docx_export.py` (`DRAFT_LABEL`) and the old-workflow `render_node` in `render_worker.py`.
 2. Router and dispatcher failure handlers: remove the branches that reconcile old-workflow diagnostics (`reconcile_*`, `graph.py:547/688/846`). Check whether `MFIGenerationBlockedError` can still be raised; remove its handling if not.
 3. `mfi_drafter/__init__.py`: rewrite the lazy exports (today it lists `run_mfi_report_generation` twice).
 4. Remove the readers for historical claim-based results (D4) in `app/shared/report_blocks.py`, `app/shared/docx_export.py` and `compatibility.py`. The exact list is established in this step; the light report path (`_apply_mfi_layout_contract`, persisted `report_blocks`) is kept.

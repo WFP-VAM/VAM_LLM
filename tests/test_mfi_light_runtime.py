@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 import pytest
 from langchain_core.messages import HumanMessage
-from app.services.mfi_drafter import execution, light_service, light_runtime
+from app.services.mfi_drafter import light_service, light_runtime
 from app.services.mfi_drafter.light_contracts import response_schema, inspect_sections, instructions
 
 
@@ -40,21 +40,14 @@ def test_active_prompts_are_isolated_from_legacy_recommendation_policy(monkeypat
 
 
 @pytest.fixture
-def runtime(monkeypatch):
-    store = execution.MemoryRecoveryStore()
-    contract = light_service.effective_contract()
-    execution.create_checkpoint(store, "response", {}, contract)
-    worker = execution.Execution(store, "response", execution.reserve_execution(store, "response", runtime=contract))
+def ledger(monkeypatch):
     monkeypatch.setattr(light_runtime.time, "sleep", lambda _: None)
-    return store, worker
+    return light_runtime.RunLedger("response")
 
 
 @pytest.mark.parametrize("policy_name", ["RECOMMENDATION_POLICY", "ANALYSIS_POLICY", "STYLE_POLICY"])
-def test_shared_policy_change_blocks_resume_without_changing_checkpoint(runtime, monkeypatch, policy_name):
+def test_shared_policy_change_is_recorded_in_the_effective_contract(monkeypatch, policy_name):
     from app.services.mfi_drafter import light_contracts
-    store, worker = runtime
-    worker.finish(ValueError("Interrupted before completion"))
-    before = store.read("response")
     old_contract = light_service.effective_contract()
     monkeypatch.setattr(light_contracts, policy_name,
                         getattr(light_contracts, policy_name) + "\nRevised shared guidance.")
@@ -63,20 +56,14 @@ def test_shared_policy_change_blocks_resume_without_changing_checkpoint(runtime,
     assert len(new_contract["prompt_hashes"]) == 7
     assert all(value != old_contract["prompt_hashes"][node]
                for node, value in new_contract["prompt_hashes"].items())
-    status = execution.execution_status("response", store, runtime=new_contract)
-    assert not status["resumable"] and "incompatible" in status["resume_block_reason"]
-    with pytest.raises(execution.RecoveryError, match="incompatible"):
-        execution.reserve_execution(store, "response", runtime=new_contract)
-    assert store.read("response") == before
 
 
-def invoke(worker, client):
-    return light_runtime.ModelRuntime(worker, client).invoke("draft_dimensions", "dimensions", {"EVIDENCE": {"sources": {}}, "requested_sections": ["A", "B"]}, ["A", "B"])
+def invoke(ledger, client):
+    return light_runtime.ModelRuntime(ledger, client).invoke("draft_dimensions", "dimensions", {"EVIDENCE": {"sources": {}}, "requested_sections": ["A", "B"]}, ["A", "B"])
 
 
 @pytest.mark.parametrize("defect", ["missing", "blank", "duplicate", "bad_citation", "metadata"])
-def test_repairs_only_invalid_sections(runtime, defect):
-    store, worker = runtime
+def test_repairs_only_invalid_sections(ledger, defect):
     first = answer("A", "B")
     first["sections"][0]["text_markdown"] = "Original valid prose stays."
     if defect == "missing": first["sections"].pop()
@@ -85,60 +72,52 @@ def test_repairs_only_invalid_sections(runtime, defect):
     if defect == "bad_citation": first["sections"][1]["text_markdown"] = "Unsupported [S99]."
     if defect == "metadata": first["sections"][1]["claim_id"] = "forbidden"
     client = Responses([first, answer("B", text="Repaired prose.")])
-    output = invoke(worker, client)
+    output = invoke(ledger, client)
     assert client.calls[1]["requested_sections"] == ["B"]
     assert output["sections"][0]["text_markdown"] == "Original valid prose stays."
     assert len(client.calls) == 2
-    assert len(next(iter(store.read("response")["light_work"].values()))["attempts"]) == 2
+    assert len(next(iter(ledger.read()["light_work"].values()))["attempts"]) == 2
 
 
-def test_syntax_then_schema_error_has_no_third_attempt(runtime):
-    store, worker = runtime
+def test_syntax_then_schema_error_has_no_third_attempt(ledger):
     client = Responses(["{", answer("A")])
-    with pytest.raises(light_runtime.InvalidResponse): invoke(worker, client)
-    with pytest.raises(execution.RecoveryError, match="exhausted"): invoke(worker, client)
+    with pytest.raises(light_runtime.InvalidResponse): invoke(ledger, client)
     assert len(client.calls) == 2
+    work = next(iter(ledger.read()["light_work"].values()))
+    assert work["status"] == "failed" and [a["status"] for a in work["attempts"]] == ["failed", "failed"]
 
 
 @pytest.mark.parametrize("first", [(answer("A", "B"), "MAX_TOKENS"), "{", [1, 2]])
-def test_truncation_and_unreadable_response_bounded(runtime, first):
-    _, worker = runtime
+def test_truncation_and_unreadable_response_bounded(ledger, first):
     client = Responses([first, answer("B") if isinstance(first, tuple) else answer("A", "B")])
-    assert len(invoke(worker, client)["sections"]) == 2
+    assert len(invoke(ledger, client)["sections"]) == 2
     assert len(client.calls) == 2
 
 
-def test_access_error_is_not_a_format_retry(runtime):
+def test_access_error_is_not_a_format_retry(ledger):
     from google.api_core.exceptions import PermissionDenied
-    _, worker = runtime
     client = Responses([PermissionDenied("test model not enabled")])
-    with pytest.raises(PermissionDenied): invoke(worker, client)
+    with pytest.raises(PermissionDenied): invoke(ledger, client)
     assert len(client.calls) == 1
 
 
-def test_saved_response_recovers_after_commit_failure_without_another_call(runtime, monkeypatch):
-    store, worker = runtime
-    client = Responses([answer("A", "B")])
-    original = light_runtime.ModelRuntime.complete
-    monkeypatch.setattr(light_runtime.ModelRuntime, "complete", lambda *args: (_ for _ in ()).throw(execution.RecoveryError("injected output commit failure")))
-    with pytest.raises(execution.RecoveryError): invoke(worker, client)
-    monkeypatch.setattr(light_runtime.ModelRuntime, "complete", original)
-    assert len(invoke(worker, client)["sections"]) == 2
-    assert len(client.calls) == 1
-    diagnostics = light_runtime.public_diagnostics(store.read("response"))
-    assert diagnostics["llm_diagnostics"]["calls"][0]["status"] == "succeeded"
-    assert "raw_text" not in json.dumps(diagnostics)
+def test_diagnostics_describe_calls_without_response_text(ledger):
+    client = Responses([answer("A", "B", text="Confidential drafted prose.")])
+    assert len(invoke(ledger, client)["sections"]) == 2
+    diagnostics = light_runtime.public_diagnostics(ledger.read())
+    call = diagnostics["llm_diagnostics"]["calls"][0]
+    assert call["status"] == "succeeded" and call["finish_reason"] == "STOP"
+    assert diagnostics["llm_diagnostics"]["status"] == "running"
+    assert "Confidential drafted prose" not in json.dumps(diagnostics)
 
 
-def test_ownership_loss_cannot_commit_late_response(runtime):
-    store, worker = runtime
-    class Late(Responses):
-        def generate(self, *args):
-            response = super().generate(*args)
-            store.transaction("response", lambda m: {**m, "fence": m["fence"]+1})
-            return response
-    with pytest.raises(execution.RecoveryError): invoke(worker, Late([answer("A", "B")]))
-    assert not next(iter(store.read("response")["light_work"].values())).get("output_ref")
+def test_token_counts_are_cached_within_a_run(ledger):
+    client = Responses([answer("A", "B"), answer("A", "B")])
+    runtime = light_runtime.ModelRuntime(ledger, client)
+    package = {"EVIDENCE": {"sources": {}}, "requested_sections": ["A", "B"]}
+    runtime.invoke("draft_dimensions", "first", package, ["A", "B"])
+    runtime.invoke("draft_dimensions", "second", package, ["A", "B"])
+    assert client.counts == 1 and ledger.read()["light_token_count_requests"] == 1
 
 
 def test_provider_configuration_schema_count_and_cached_client_are_isolated(monkeypatch):

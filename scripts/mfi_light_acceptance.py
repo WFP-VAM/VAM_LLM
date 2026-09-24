@@ -8,7 +8,6 @@ import shutil
 import statistics
 import sys
 import time
-import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -50,7 +49,7 @@ def prepare(directory, datasets):
     return cases
 
 
-def run(directory, base_url, resume_failed=False):
+def run(directory, base_url):
     import requests
     cases = json.loads((directory/"manifest.json").read_text(encoding="utf-8"))
     session = requests.Session()
@@ -72,17 +71,11 @@ def run(directory, base_url, resume_failed=False):
                 submission=call("POST", "generate-from-csv-async", files={"file":(case["file"], handle, "text/csv")})
             record.update(run_id=submission["run_id"], submitted_at=started, sha256=actual_hash)
             record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        resumed=False
         while True:
             status=call("GET", "status/"+record["run_id"])
             record["status"]=status
             record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-            if status["status"] == "completed": break
-            if status["status"] == "failed":
-                if resume_failed and not resumed and status.get("resumable"):
-                    call("POST", "resume/"+record["run_id"], json={"expected_revision":status["run_revision"],"idempotency_key":uuid.uuid4().hex})
-                    resumed=True
-                else: break
+            if status["status"] in {"completed", "failed"}: break
             if time.time()-started > 3600: break
             time.sleep(5)
         completed=status["status"] == "completed"
@@ -90,7 +83,7 @@ def run(directory, base_url, resume_failed=False):
             record.setdefault("completed_at", time.time())
         elapsed=record.get("completed_at", time.time())-record["submitted_at"]
         record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        outcome={"case":case["id"], "completed":completed, "seconds":elapsed, "resumed":resumed,
+        outcome={"case":case["id"], "completed":completed, "seconds":elapsed,
             "semantic_acceptance":"pending_manual_review"}
         if completed:
             result=call("GET", "result/"+record["run_id"])
@@ -119,10 +112,9 @@ if __name__ == "__main__":
     parser.add_argument("--directory", type=Path, default=ROOT/".tmp/mfi-light-acceptance")
     parser.add_argument("--datasets", type=Path, default=ROOT/"MFI Test Databases")
     parser.add_argument("--url", help="Existing owner-selected test deployment; run makes paid model calls")
-    parser.add_argument("--resume-failed", action="store_true", help="Explicitly resume one eligible failure per case")
     args=parser.parse_args()
     if args.action == "prepare":
         print(f"Prepared {len(prepare(args.directory, args.datasets))} cases in {args.directory}")
     else:
         if not args.url: parser.error("run requires --url")
-        run(args.directory, args.url, args.resume_failed)
+        run(args.directory, args.url)

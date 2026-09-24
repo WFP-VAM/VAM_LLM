@@ -64,6 +64,7 @@ def test_mfi_dispatcher_uses_public_run_id_for_graph_and_live_trace(monkeypatch)
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         }
     )
     public_run_id = response.json()["run_id"]
@@ -158,6 +159,7 @@ def test_async_llm_failure_stops_at_active_node_and_retains_trace(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         }
     )
     run_id = response.json()["run_id"]
@@ -200,6 +202,7 @@ def test_synchronous_dispatchers_map_llm_failures_to_502(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         },
     )
     assert response.status_code == 502
@@ -242,6 +245,7 @@ def test_dispatcher_red_team_failure_sets_generation_status_failed(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Dangbo"],
+            "use_mock_data": True,
         }
     )
     run_id = response.json()["run_id"]
@@ -274,6 +278,7 @@ def test_fastapi_synchronous_paths_map_llm_failures_to_502(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         },
     )
     assert mfi_response.status_code == 502
@@ -329,6 +334,7 @@ def test_fastapi_async_mfi_public_and_graph_run_ids_match(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         },
     )
     public_run_id = response.json()["run_id"]
@@ -361,6 +367,7 @@ def test_async_fail_closed_mfi_run_publishes_no_result_or_artifact(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         },
     )
     assert response.status_code == 200
@@ -396,6 +403,7 @@ def test_dispatcher_async_fail_closed_mfi_run_publishes_no_result(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         }
     )
     run = async_runs.get_run(response.json()["run_id"])
@@ -439,6 +447,7 @@ def test_fastapi_maps_typed_fail_closed_errors(monkeypatch, code, status_code):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         },
     )
     assert response.status_code == status_code
@@ -484,6 +493,7 @@ def test_fastapi_async_red_team_failure_sets_generation_status_failed(monkeypatc
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Dangbo"],
+            "use_mock_data": True,
         },
     )
     assert response.status_code == 200

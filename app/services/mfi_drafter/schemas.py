@@ -1374,6 +1374,8 @@ class GenerateMFIReportInput(BaseModel):
     data_collection_start: str = Field(..., description="Data collection start date (YYYY-MM-DD)")
     data_collection_end: str = Field(..., description="Data collection end date (YYYY-MM-DD)")
     markets: List[str] = Field(..., description="List of surveyed markets")
+    use_mock_data: bool = Field(False, description="Required: this JSON input carries no survey data, "
+                                "so the report is built on synthetic demonstration data")
 
 
 class GenerateMFIReportFromCSVInput(BaseModel):
@@ -1495,30 +1497,8 @@ class GenerateMFIReportOutput(BaseModel):
 
 
 class MFIReportStatusOutput(BaseModel):
-    """Status of an in-progress report."""
+    """Status of an in-progress report; phase progress is in metadata.generation_diagnostics."""
     run_id: str
-    light_progress: Optional[Dict[str, Any]] = None
-    workflow_revision: Optional[str] = None
-    run_revision: int = 0
-    execution_state: Optional[str] = None
-    active_task: Optional[str] = None
-    last_error: Optional[str] = None
-    recovery_storage: Optional[str] = None
-    recovery_limitation: Optional[str] = None
-    resumable: bool = False
-    resume_block_reason: Optional[str] = None
-    draft_available: bool = False
-    draft_revision: Optional[int] = None
-    analysis_available: bool = False
-    qa_evaluation_status: str = "not_evaluated"
-    unresolved_counts: Optional[Dict[str, int]] = None
-    work_totals: Dict[str, int] = Field(default_factory=dict)
-    response_contract_bundle: Optional[str] = None
-    structural_validation_issues: Optional[List[Dict[str, Any]]] = None
-    structural_repair_summary: Optional[Dict[str, Any]] = None
-    degraded_work_count: Optional[int] = None
-    context_classification_outcome: Optional[str] = None
-    unresolved_context_statement_count: Optional[int] = None
     status: Literal["pending", "running", "completed", "failed"]
     current_node: Optional[str] = None
     progress_pct: int = 0

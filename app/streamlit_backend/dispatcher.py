@@ -64,8 +64,12 @@ from app.services.mfi_drafter.graph import (
     reconcile_generation_diagnostics_for_blocked_failure,
     reconcile_generation_diagnostics_for_llm_failure,
 )
-from app.services.mfi_drafter.light_service import run_mfi_report_generation, runtime_status as light_runtime_status
-from app.services.mfi_drafter.errors import MFIGenerationBlockedError
+from app.services.mfi_drafter.light_service import (
+    MOCK_DATA_REQUIRED,
+    run_mfi_report_generation,
+    runtime_status as light_runtime_status,
+)
+from app.services.mfi_drafter.errors import MFIGenerationBlockedError, MFIRunError
 from app.services.mfi_drafter.schemas import MFI_DIMENSIONS
 from app.services.market_monitor.graph import (
     AVAILABLE_MODULES,
@@ -585,31 +589,6 @@ def _dispatch_mfi_drafter(
     files: Any,
     params: Dict[str, Any],
 ) -> LocalResponse:
-    if len(parts) == 2 and parts[0] in {"resume", "draft", "analysis", "export-draft-docx"}:
-        from app.services.mfi_drafter.execution_service import get_mfi_run
-        from app.services.mfi_drafter.light_service import schedule_resume
-        from app.services.mfi_drafter.execution import RecoveryError
-        from app.services.mfi_drafter.drafts import draft_payload, analysis_payload, export_draft
-        try:
-            if get_mfi_run(parts[1]) is None:
-                raise RecoveryError("Run ID not found", 404)
-            options = json_body if isinstance(json_body, dict) else {}
-            if method == "POST" and parts[0] == "resume":
-                if not isinstance(options.get("expected_revision"), int) or not str(options.get("idempotency_key") or "").strip():
-                    raise RecoveryError("expected_revision and idempotency_key are required", 422)
-                def schedule(function, *args):
-                    threading.Thread(target=function, args=args, daemon=True).start()
-                return _json_response(schedule_resume(parts[1], options["expected_revision"], options["idempotency_key"], schedule), status_code=202)
-            if method == "GET" and parts[0] == "draft":
-                return _json_response(draft_payload(parts[1], params.get("snapshot_revision")))
-            if method == "GET" and parts[0] == "analysis":
-                return _json_response(analysis_payload(parts[1]))
-            if method == "POST" and parts[0] == "export-draft-docx":
-                content, filename = export_draft(parts[1], options.get("snapshot_revision"))
-                return LocalResponse(status_code=200, content=content, headers={"Content-Disposition": build_content_disposition(filename),
-                    "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"})
-        except RecoveryError as exc:
-            raise LocalHTTPException(exc.status_code, str(exc)) from exc
     if method == "POST" and parts == ["generate"]:
         return _mfi_drafter_generate(json_body=json_body)
     if method == "POST" and parts == ["generate-from-csv"]:
@@ -653,6 +632,8 @@ def _mfi_drafter_generate(*, json_body: Any) -> LocalResponse:
     release_control = _require_enabled_mfi_release_control()
     if not isinstance(json_body, dict):
         raise LocalHTTPException(400, "Invalid JSON body")
+    if json_body.get("use_mock_data") is not True:
+        raise LocalHTTPException(400, MOCK_DATA_REQUIRED)
 
     country = json_body.get("country")
     data_collection_start = json_body.get("data_collection_start")
@@ -668,11 +649,14 @@ def _mfi_drafter_generate(*, json_body: Any) -> LocalResponse:
             data_collection_end=data_collection_end,
             markets=markets,
             release_control=release_control,
+            use_mock_data=True,
         )
     except LLMCallError as exc:
         raise LocalHTTPException(502, exc.to_public_dict())
     except MFIGenerationBlockedError as exc:
         raise LocalHTTPException(exc.status_code, exc.to_public_dict())
+    except MFIRunError as exc:
+        raise LocalHTTPException(exc.status_code, str(exc))
     except Exception as exc:
         raise LocalHTTPException(500, str(exc))
 
@@ -739,6 +723,8 @@ def _mfi_drafter_generate_from_csv(
         raise LocalHTTPException(502, exc.to_public_dict())
     except MFIGenerationBlockedError as exc:
         raise LocalHTTPException(exc.status_code, exc.to_public_dict())
+    except MFIRunError as exc:
+        raise LocalHTTPException(exc.status_code, str(exc))
     except Exception as exc:
         raise LocalHTTPException(500, str(exc))
 
@@ -802,11 +788,10 @@ def _mfi_drafter_generate_from_csv_async(
 
     run_id = f"mfi_{uuid.uuid4().hex[:8]}"
     create_run(run_id)
-    from app.services.mfi_drafter.light_service import prepare_submission
-    from app.services.mfi_drafter.execution import RecoveryError
+    from app.services.mfi_drafter.light_service import validate_submission
     try:
-        reservation = prepare_submission(run_id, csv_data)
-    except RecoveryError as exc:
+        validate_submission(csv_data)
+    except MFIRunError as exc:
         set_run_failed(run_id, error=str(exc))
         raise LocalHTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     update_run(
@@ -914,7 +899,6 @@ def _mfi_drafter_generate_from_csv_async(
                 release_control=release_control,
                 run_id=run_id,
                 llm_trace_sink=on_llm_trace,
-                **({"execution_reservation": reservation} if reservation else {}),
             )
 
             update_run(run_id, warnings=result.get("warnings", []))
@@ -947,6 +931,8 @@ def _mfi_drafter_generate_async(*, json_body: Any) -> LocalResponse:
     release_control = _require_enabled_mfi_release_control()
     if not isinstance(json_body, dict):
         raise LocalHTTPException(400, "Invalid JSON body")
+    if json_body.get("use_mock_data") is not True:
+        raise LocalHTTPException(400, MOCK_DATA_REQUIRED)
 
     run_id = f"mfi_{uuid.uuid4().hex[:8]}"
     create_run(run_id)
@@ -1054,6 +1040,7 @@ def _mfi_drafter_generate_async(*, json_body: Any) -> LocalResponse:
                 release_control=release_control,
                 run_id=run_id,
                 llm_trace_sink=on_llm_trace,
+                use_mock_data=True,
             )
 
             update_run(run_id, warnings=result.get("warnings", []))
@@ -1078,9 +1065,6 @@ def _mfi_drafter_generate_async(*, json_body: Any) -> LocalResponse:
 
 
 def _mfi_drafter_status(run_id: str) -> LocalResponse:
-    from app.services.mfi_drafter.execution_service import get_mfi_run as get_run
-    from app.services.mfi_drafter.light_service import effective_contract
-    from app.services.mfi_drafter.execution import execution_status
     run = get_run(run_id)
     if run is None:
         raise LocalHTTPException(404, f"Run ID not found: {run_id}")
@@ -1088,7 +1072,6 @@ def _mfi_drafter_status(run_id: str) -> LocalResponse:
         {
             "run_id": run_id,
             "status": run.status,
-            **execution_status(run_id, runtime=effective_contract()),
             "current_node": run.current_node,
             "progress_pct": run.progress_pct,
             "warnings": run.warnings,
@@ -1100,7 +1083,6 @@ def _mfi_drafter_status(run_id: str) -> LocalResponse:
 
 
 def _mfi_drafter_result(run_id: str) -> LocalResponse:
-    from app.services.mfi_drafter.execution_service import get_mfi_run as get_run
     run = get_run(run_id)
     if run is None:
         raise LocalHTTPException(404, f"Run ID not found: {run_id}")
@@ -1134,7 +1116,6 @@ def _mfi_drafter_artifact(run_id: str, artifact_id: str) -> LocalResponse:
 
 
 def _mfi_drafter_export_docx(run_id: str, *, json_body: Any) -> LocalResponse:
-    from app.services.mfi_drafter.execution_service import get_mfi_run as get_run
     run = get_run(run_id)
     if run is None:
         raise LocalHTTPException(404, f"Run ID not found: {run_id}")

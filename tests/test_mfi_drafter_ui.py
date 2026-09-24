@@ -26,9 +26,11 @@ class FakeMFIBackend:
         validation=None,
         result=None,
         generation_enabled=True,
+        status=None,
     ):
         self.upload = upload
         self.result = result
+        self.status = status
         self.validation = validation or {
             "valid": True,
             "missing_columns": [],
@@ -54,6 +56,8 @@ class FakeMFIBackend:
                     "deployment_revision": "test",
                 },
             }
+        if path.startswith("/mfi-drafter/status/"):
+            return self.status
         assert path == "/mfi-drafter/validate-csv"
         return self.validation
 
@@ -78,7 +82,7 @@ def _element(elements, label):
     return next(element for element in elements if element.label == label)
 
 
-def _app(monkeypatch, backend):
+def _app(monkeypatch, backend, run_id=None):
     monkeypatch.setattr(builtins, "_mfi_drafter_test_backend", backend, raising=False)
     page_path = str(PAGE).replace("\\", "\\\\")
     source = f'''
@@ -87,6 +91,8 @@ import sys
 import types
 import streamlit as st
 
+if {run_id!r}:
+    st.query_params["mfi_run"] = {run_id!r}
 backend = builtins._mfi_drafter_test_backend
 if backend.upload is not None:
     st.file_uploader = lambda *args, **kwargs: backend.upload
@@ -387,3 +393,26 @@ def test_r7_context_status_is_informational_or_warning_in_technical_details(monk
     assert any(
         "context_retrieval_unavailable" in item.value for item in failed.warning
     )
+
+def test_failed_run_shows_phase_progress_and_offers_no_recovery_actions(monkeypatch):
+    backend = FakeMFIBackend(status={
+        "run_id": "mfi-run-7",
+        "status": "failed",
+        "current_node": "review_markets",
+        "progress_pct": 0,
+        "error": "Attempts exhausted for review_markets; generate the report again",
+        "metadata": {"generation_diagnostics": {"progress_pct": 45, "phases": [
+            {"node": "draft_markets", "status": "succeeded", "reused": False},
+            {"node": "review_markets", "status": "failed", "reused": False},
+        ]}},
+    })
+    app = _app(monkeypatch, backend, run_id="mfi-run-7")
+
+    assert not app.exception
+    assert any("Attempts exhausted" in warning.value for warning in app.warning)
+    assert any("Generate it again" in caption.value for caption in app.caption)
+    assert not [button for button in app.button
+                if button.label in {"Resume", "Prepare incomplete draft", "Prepare analytical download"}]
+    paths = [path for _, path, _ in backend.requests]
+    assert "/mfi-drafter/status/mfi-run-7" in paths
+    assert not [path for path in paths if any(part in path for part in ("/resume/", "/draft/", "/analysis/"))]

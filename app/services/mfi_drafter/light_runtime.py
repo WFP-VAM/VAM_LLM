@@ -1,7 +1,8 @@
-"""Bounded model calls with captured responses and section-level recovery."""
+"""Bounded model calls with section-level repair, bookkept in memory for one run."""
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 from datetime import datetime, timezone
 from functools import lru_cache
 import threading
@@ -9,14 +10,14 @@ import time
 import uuid
 
 from langchain_core.messages import HumanMessage
-from .execution import RecoveryError
+from .errors import MFIRunError
 from .reliable_contracts import fingerprint
 from .light_contracts import (MODEL, NODES, MAX_CHARACTERS, MAX_INPUT_TOKENS,
     MAX_OUTPUT_TOKENS, ReviewResponse, dumps, instructions, inspect_sections,
     parse_response, response_schema)
 
 
-class Oversized(RecoveryError):
+class Oversized(MFIRunError):
     def __init__(self, characters, tokens=None):
         super().__init__(f"MFI request exceeds its budget ({characters} characters, {tokens} tokens); subdivide the requested sections", 422)
 
@@ -73,6 +74,25 @@ def extracted(response):
     raise InvalidResponse("Response contains no text")
 
 
+class RunLedger:
+    """Phase and model-call records of one run; kept in memory and discarded with the run."""
+
+    def __init__(self, run_id):
+        self._lock = threading.RLock()
+        self._value = {"run_id": run_id, "execution_state": "running"}
+
+    def read(self):
+        with self._lock:
+            return deepcopy(self._value)
+
+    def change(self, mutation):
+        with self._lock:
+            mutation(self._value)
+
+    def finish(self, state):
+        self.change(lambda value: value.update(execution_state=state))
+
+
 def public_diagnostics(manifest):
     work = manifest.get("light_work", {})
     phases = manifest.get("light_phases", {})
@@ -95,19 +115,10 @@ def public_diagnostics(manifest):
 
 
 class ModelRuntime:
-    def __init__(self, execution, client=None, notify=None):
-        self.execution = execution
+    def __init__(self, ledger, client=None, notify=None):
+        self.ledger = ledger
         self.client = client or VertexClient()
         self.notify = notify or (lambda: None)
-
-    def read(self):
-        return self.execution.store.read(self.execution.run_id)
-
-    def put(self, value):
-        return self.execution.store.put(self.execution.run_id, value)
-
-    def get(self, ref):
-        return self.execution.store.get(ref)
 
     def budget(self, messages, schema, timeout):
         payload = {"model": MODEL, "contents": [{"role": "user", "parts": [{"text": m.content}]} for m in messages],
@@ -116,10 +127,10 @@ class ModelRuntime:
         characters, key = len(dumps(payload)), fingerprint(payload)
         if characters > MAX_CHARACTERS:
             raise Oversized(characters)
-        cache = self.read().get("light_token_counts", {})
-        if key not in cache:
+        tokens = self.ledger.read().get("light_token_counts", {}).get(key)
+        if tokens is None:
             for attempt in range(2):
-                self.execution.change(lambda v: v.update(light_token_count_requests=v.get("light_token_count_requests", 0)+1))
+                self.ledger.change(lambda v: v.update(light_token_count_requests=v.get("light_token_count_requests", 0)+1))
                 try:
                     tokens = self.client.count(messages, schema, timeout)
                     break
@@ -127,9 +138,7 @@ class ModelRuntime:
                     if attempt or not retryable(exc):
                         raise
                     time.sleep(1)
-            self.execution.change(lambda v: v.setdefault("light_token_counts", {}).update({key: tokens}))
-        else:
-            tokens = cache[key]
+            self.ledger.change(lambda v: v.setdefault("light_token_counts", {}).update({key: tokens}))
         if tokens > MAX_INPUT_TOKENS:
             raise Oversized(characters, tokens)
         return characters, tokens, key
@@ -141,21 +150,15 @@ class ModelRuntime:
         messages = [HumanMessage(content=prompt)]
         characters, tokens, dependency = self.budget(messages, schema, timeout)
         key = work_id + ":" + dependency[:20]
-        self.execution.change(lambda v: v.setdefault("light_work", {}).setdefault(key, {
+        self.ledger.change(lambda v: v.setdefault("light_work", {}).setdefault(key, {
             "status": "pending", "section_ids": section_ids, "attempts": [], "issues": [], "node": node}))
-        record = self.read()["light_work"][key]
-        if record.get("output_ref"):
-            return self.get(record["output_ref"])
-        epoch = self.execution.reservation["epoch"]
-        accepted = self.get(record["accepted_ref"]) if record.get("accepted_ref") else {}
-        issues = record.get("issues", [])
-        notes = self.get(record["notes_ref"]) if record.get("notes_ref") else []
+        accepted, issues, notes = {}, [], []
 
-        def consume(captured, requested):
-            nonlocal issues, notes
-            truncated = str(captured.get("finish_reason", "")).upper() in {"MAX_TOKENS", "LENGTH", "2"}
+        def consume(raw_text, finish_reason, requested):
+            nonlocal issues
+            truncated = str(finish_reason).upper() in {"MAX_TOKENS", "LENGTH", "2"}
             try:
-                payload = parse_response(captured["raw_text"])
+                payload = parse_response(raw_text)
             except (ValueError, TypeError) as exc:
                 raise InvalidResponse("Model output is not valid JSON") from exc
             if review:
@@ -176,7 +179,7 @@ class ModelRuntime:
             if truncated:
                 # The final section may end mid-sentence even if the provider
                 # closed its JSON envelope. Earlier complete sections are safe
-                # to stage; request the potentially cut section again.
+                # to keep; request the potentially cut section again.
                 rows = payload.get("sections", []) if isinstance(payload, dict) else []
                 last = rows[-1].get("section_id") if rows and isinstance(rows[-1], dict) else None
                 valid.pop(last, None)
@@ -185,30 +188,13 @@ class ModelRuntime:
             accepted.update(valid)
             if isinstance(payload, dict) and isinstance(payload.get("notes"), list):
                 notes.extend(n for n in payload["notes"] if isinstance(n, str))
-            accepted_ref = self.put(accepted)
-            notes_ref = self.put(list(dict.fromkeys(notes)))
-            self.execution.change(lambda v: v["light_work"][key].update(accepted_ref=accepted_ref, notes_ref=notes_ref, issues=issues))
+            self.ledger.change(lambda v: v["light_work"][key].update(issues=list(issues)))
             if issues:
                 raise InvalidResponse("; ".join(issues))
             return {"sections": [{"section_id": sid, "text_markdown": accepted[sid]} for sid in section_ids],
                     "notes": list(dict.fromkeys(notes))}
 
-        # Captured responses are processed before reserving any new paid attempt.
-        for old in record["attempts"]:
-            if old.get("response_ref"):
-                try:
-                    output = consume(self.get(old["response_ref"]), old["requested_ids"])
-                    if review or set(accepted) == set(section_ids):
-                        def recovered(v):
-                            row = next(a for a in v["light_work"][key]["attempts"] if a["call_id"] == old["call_id"])
-                            row.update(status="succeeded", disposition="recovered_from_captured_response", contract_validation_status="passed")
-                        self.execution.change(recovered)
-                        return self.complete(key, output)
-                except InvalidResponse:
-                    pass
-
-        used = sum(a["epoch"] == epoch for a in record["attempts"])
-        for attempt_number in range(used, 2):
+        for attempt_number in range(2):
             requested = section_ids if review else [sid for sid in section_ids if sid not in accepted]
             outgoing = messages
             if issues or accepted:
@@ -219,58 +205,54 @@ class ModelRuntime:
                 size, input_tokens, _ = self.budget(outgoing, schema, timeout)
             except Oversized as exc:
                 # Do not turn an oversized repair into a new whole-draft call.
-                if accepted or record["attempts"] or attempt_number:
-                    raise RecoveryError("The remaining response repair cannot fit its request budget; saved sections are retained", 422) from exc
+                if accepted or attempt_number:
+                    raise MFIRunError("The remaining response repair cannot fit its request budget", 422) from exc
                 raise
             call_id, started = "llm-" + uuid.uuid4().hex[:12], time.monotonic()
             def start(v):
                 sequence = v.get("light_call_sequence", 0) + 1
                 v["light_call_sequence"] = sequence
                 v["light_work"][key]["status"] = "running"
-                v["light_work"][key]["attempts"].append({"call_id": call_id, "sequence": sequence, "epoch": epoch,
+                v["light_work"][key]["attempts"].append({"call_id": call_id, "sequence": sequence,
                     "requested_ids": requested, "service": "mfi-drafter", "run_id": v["run_id"], "node": node,
                     "operation": "mfi.light."+node+".v1", "model": MODEL, "location": "global", "provider": "vertex_ai",
                     "configured_timeout_seconds": timeout, "configured_max_retries": 0,
                     "started_at": now(), "status": "started", "prompt_character_count": size,
                     "prompt_sha256": fingerprint([m.content for m in outgoing]), "token_usage": {"prompt_tokens": input_tokens}})
-            self.execution.change(start)
+            self.ledger.change(start)
             self.notify()
             def update_attempt(**fields):
                 def update(v):
                     row = next(a for a in v["light_work"][key]["attempts"] if a["call_id"] == call_id)
                     row.update(fields)
-                self.execution.change(update)
+                self.ledger.change(update)
             try:
                 response = self.client.generate(outgoing, schema, timeout)
                 raw = extracted(response)
                 metadata = getattr(response, "response_metadata", {}) or {}
                 usage = getattr(response, "usage_metadata", {}) or {}
-                captured = {"raw_text": raw, "checksum": fingerprint(raw), "finish_reason": metadata.get("finish_reason", "STOP"),
-                            "call_id": call_id, "dependency": dependency, "epoch": epoch}
-                ref = self.put(captured)
-                update_attempt(response_ref=ref, transport_status="succeeded", finish_reason=str(captured["finish_reason"]),
+                finish_reason = metadata.get("finish_reason", "STOP")
+                update_attempt(transport_status="succeeded", finish_reason=str(finish_reason),
                     response_character_count=len(raw), response_sha256=fingerprint(raw),
                     token_usage={"prompt_tokens": usage.get("input_tokens", input_tokens), "candidate_tokens": usage.get("output_tokens"),
                                  "total_tokens": usage.get("total_tokens")})
-                output = consume(captured, requested)
+                output = consume(raw, finish_reason, requested)
                 update_attempt(status="succeeded", completed_at=now(), duration_ms=int((time.monotonic()-started)*1000),
                                contract_validation_status="passed", json_parse_status="passed")
                 return self.complete(key, output)
             except Exception as exc:
-                # Persistence/ownership errors propagate without another model call.
                 update_attempt(status="failed", completed_at=now(), duration_ms=int((time.monotonic()-started)*1000),
                     error_type=type(exc).__name__, failure_code="invalid_response" if isinstance(exc, InvalidResponse) else "execution_error",
                     error_message=str(exc) if isinstance(exc, InvalidResponse) else type(exc).__name__)
-                self.execution.change(lambda v: v["light_work"][key].update(status="failed", issues=[str(exc)] if isinstance(exc, InvalidResponse) else []))
+                self.ledger.change(lambda v: v["light_work"][key].update(status="failed", issues=[str(exc)] if isinstance(exc, InvalidResponse) else []))
                 self.notify()
                 if attempt_number or not retryable(exc):
                     raise
                 issues = [str(exc)] if isinstance(exc, InvalidResponse) else []
                 time.sleep(1)
-        raise RecoveryError(f"Attempts exhausted for {node}; use Resume to retry this unfinished work", 409)
+        raise MFIRunError(f"Attempts exhausted for {node}; generate the report again", 502)
 
     def complete(self, key, output):
-        ref = self.put(output)
-        self.execution.change(lambda v: v["light_work"][key].update(status="succeeded", output_ref=ref, issues=[]))
+        self.ledger.change(lambda v: v["light_work"][key].update(status="succeeded", issues=[]))
         self.notify()
         return output

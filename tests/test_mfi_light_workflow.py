@@ -6,9 +6,8 @@ from types import SimpleNamespace
 from collections import Counter
 import pytest
 
-from app.services.mfi_drafter import light_graph, light_service
-from app.services.mfi_drafter.execution import MemoryRecoveryStore, execution_status, reserve_execution
-from app.services.mfi_drafter.synthetic_fixtures import SyntheticSpec, build_loaded
+from app.services.mfi_drafter import light_graph, light_runtime, light_service
+from app.services.mfi_drafter.synthetic_fixtures import SyntheticSpec, build_loaded, build_csv_bytes
 from app.services.mfi_drafter.schemas import MFIReleaseControl
 
 
@@ -45,104 +44,87 @@ class Client:
         return SimpleNamespace(content=json.dumps(response), response_metadata={"finish_reason":"STOP"},usage_metadata={"input_tokens":100,"output_tokens":50,"total_tokens":150})
 
 
+RELEASE = MFIReleaseControl(analysis_version="2",enabled=True,configuration_status="configured")
+
+
 @pytest.fixture
-def setup(monkeypatch, loaded):
-    store = MemoryRecoveryStore()
-    monkeypatch.setattr(light_service,"recovery_store",lambda:store)
+def args(monkeypatch, loaded):
+    monkeypatch.setattr(light_runtime.time, "sleep", lambda _: None)
     monkeypatch.setattr(light_graph,"retrieve_context",lambda base:{"sources":{},"document_references":[],"contextual_documents":[],"context_status":{},"context_limitation":"No context"})
-    monkeypatch.setattr(light_graph,"render_figures",lambda base,execution:{"visualizations":{},"figure_metadata":{}})
-    args = dict(country=loaded["country"],data_collection_start=loaded["data_collection_start"],data_collection_end=loaded["data_collection_end"],
-        markets=loaded["markets"],csv_data=deepcopy(loaded),run_id="light-test",
-        release_control=MFIReleaseControl(analysis_version="2",enabled=True,configuration_status="configured"))
-    return store,args
+    monkeypatch.setattr(light_graph,"render_figures",lambda base:{"visualizations":{},"figure_metadata":{}})
+    return dict(country=loaded["country"],data_collection_start=loaded["data_collection_start"],data_collection_end=loaded["data_collection_end"],
+        markets=loaded["markets"],csv_data=deepcopy(loaded),run_id="light-test",release_control=RELEASE)
+
+
+@pytest.fixture
+def api(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.services.mfi_drafter import router
+    from app.shared import async_runs
+    monkeypatch.setenv("MFI_DRAFTER_ANALYSIS_VERSION", "2")
+    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
+    app = FastAPI(); app.include_router(router.router, prefix="/mfi-drafter")
+    return TestClient(app)
 
 
 @pytest.mark.parametrize("changes,expected",[((),5),(("dimensions",),6),(("markets",),6),(("dimensions","markets"),7)])
-def test_five_six_seven_calls_and_complete_report(setup,changes,expected):
-    store,args=setup
+def test_five_six_seven_calls_and_complete_report(args,changes,expected):
     client=Client(changes)
     result=light_service.run_mfi_report_generation(**args,client=client)
     assert sum(client.calls.values()) == result["llm_calls"] == expected
-    assert len(result["generation_diagnostics"]["phases"]) == 11
+    phases = result["generation_diagnostics"]["phases"]
+    assert len(phases) == 11 and all(p["status"] == "succeeded" for p in phases)
+    assert result["generation_diagnostics"]["progress_pct"] == 100
+    assert result["llm_diagnostics"]["status"] == "completed"
     assert result["coverage"]["complete"]
     assert len(result["light_narrative"]["dimensions"]) == 9
     assert len(result["light_narrative"]["markets"]) == 2
     assert result["workflow_revision"] == "mfi-light-v1"
     assert result["narrative_schema_version"] == "3.0"
-    assert store.read(args["run_id"])["execution_state"] == "completed"
     for kind,p in client.packages:
         if kind.startswith("correct"):
             assert p["ORIGINAL_DRAFT"] and p["REVIEW_REPORT"]["needs_revision"] and p["EVIDENCE"]
-    assert not execution_status(args["run_id"],store,runtime=light_service.effective_contract())["draft_available"]
 
 
-def test_resume_reuses_successful_work(setup):
-    store,args=setup
-    client=Client(fail="review_dimensions")
+def test_failed_phase_is_reported_and_the_whole_report_fails(args):
+    client=Client(["dimensions"], fail="review_dimensions")
+    steps=[]
     with pytest.raises(TimeoutError):
-        light_service.run_mfi_report_generation(**args,client=client)
-    before=dict(client.calls)
-    assert before["review_dimensions"] == 2
-    status=execution_status(args["run_id"],store,runtime=light_service.effective_contract())
-    assert status["resumable"] and not status["draft_available"]
-    reservation=reserve_execution(store,args["run_id"],expected_revision=status["run_revision"],idempotency_key="resume-1",runtime=light_service.effective_contract())
-    client.fail=None
-    result=light_service.run_mfi_report_generation(**args,client=client,execution_reservation=reservation)
-    assert client.calls["draft_dimensions"] == before["draft_dimensions"]
-    assert client.calls["draft_markets"] == before["draft_markets"]
-    assert client.calls["review_dimensions"] == 3
-    assert result["success"]
+        light_service.run_mfi_report_generation(**args,client=client,on_step=lambda name, state: steps.append((name, state)))
+    assert client.calls["review_dimensions"] == 2  # one transient retry, then the run fails
+    assert client.calls["correct_dimensions"] == 0 and client.calls["draft_summary"] == 0
+    phases = {p["node"]: p["status"] for p in steps[-1][1]["generation_diagnostics"]["phases"]}
+    assert phases["review_dimensions"] == "failed"
+    assert phases["draft_dimensions"] == phases["draft_markets"] == "succeeded"
+    assert phases["executive_summary"] == phases["assemble_report"] == "pending"
 
 
-def test_map_revision_only_invalidates_map_and_assembly(setup, monkeypatch):
-    from app.services.mfi_drafter import render_worker, map_basemap, light_report
-    from app.services.mfi_drafter.reliable_contracts import fingerprint
-    store, args = setup
-    rendered = Counter()
-    def figures(base, execution):
-        images, metadata = {}, {}
-        for job in render_worker.figure_jobs(base):
-            def action(job=job):
-                rendered[job['figure_id']] += 1
-                return {'image': fingerprint(job), 'metadata': {'renderer_version': map_basemap.MAP_RENDERER_VERSION}}
-            result = execution.execute_once('figure:' + job['figure_id'], job, action, kind='figure')
-            images[job['figure_id']], metadata[job['figure_id']] = result['image'], result['metadata']
-        return {'visualizations': images, 'figure_metadata': metadata}
-    monkeypatch.setattr(light_graph, 'render_figures', figures)
-    original = light_report.build_blocks
-    monkeypatch.setattr(light_report, 'build_blocks', lambda result: (_ for _ in ()).throw(RuntimeError('assembly interruption')))
-    client = Client()
-    with pytest.raises(RuntimeError, match='assembly interruption'):
-        light_service.run_mfi_report_generation(**args, client=client)
-    before = dict(client.calls)
-    assert sum(before.values()) == 5 and rendered['geographic_map'] == 1
-    monkeypatch.setattr(light_report, 'build_blocks', original)
-    monkeypatch.setattr(map_basemap, 'MAP_RENDERER_VERSION', 'mfi-map-test-next')
-    status = execution_status(args['run_id'], store, runtime=light_service.effective_contract())
-    reservation = reserve_execution(store, args['run_id'], expected_revision=status['run_revision'],
-                                    idempotency_key='updated-map', runtime=light_service.effective_contract())
-    result = light_service.run_mfi_report_generation(**args, client=client, execution_reservation=reservation)
-    assert result['success'] and dict(client.calls) == before
-    assert rendered['geographic_map'] == 2
-    assert all(n == 1 for key, n in rendered.items() if key != 'geographic_map')
-    assert result['figure_metadata']['geographic_map']['renderer_version'] == 'mfi-map-test-next'
-    assert len([b for b in result['report_blocks'] if b.get('figure_id') == 'geographic_map']) == 1
+def test_charts_render_alongside_the_drafts(args, monkeypatch):
+    # Each side waits for the other, which only succeeds if both run in the same graph step.
+    drafting, charting = threading.Event(), threading.Event()
+    class Drafting(Client):
+        def generate(self, messages, schema, timeout):
+            packet = json.loads(messages[0].content.split("\nREQUEST:\n",1)[1])
+            if not {"ORIGINAL_DRAFT", "FINAL_DIMENSIONS"} & set(packet):
+                drafting.set()
+                assert charting.wait(20), "The first drafts must not start after the charts step"
+            return super().generate(messages, schema, timeout)
+    def charts(base):
+        charting.set()
+        assert drafting.wait(20), "Charts must render while the drafts are being written"
+        return {"visualizations": {}, "figure_metadata": {}}
+    monkeypatch.setattr(light_graph, "render_figures", charts)
+    assert light_service.run_mfi_report_generation(**args, client=Drafting())["success"]
 
 
-def test_map_preflight_reports_same_configuration_error_in_api_and_streamlit(setup, monkeypatch):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+def test_map_preflight_reports_same_configuration_error_in_api_and_streamlit(args, api, monkeypatch):
     from app.services.mfi_drafter import router, map_basemap
     from app.streamlit_backend import dispatcher
-    from app.shared import async_runs
-    _, args = setup
-    monkeypatch.setenv('MFI_DRAFTER_ANALYSIS_VERSION', '2')
-    monkeypatch.setattr(async_runs, '_BACKEND', 'memory')
     monkeypatch.setattr(router, 'load_mfi_from_csv', lambda **kw: args['csv_data'])
     monkeypatch.setattr(dispatcher, 'load_mfi_from_csv', lambda **kw: args['csv_data'])
     monkeypatch.setattr(map_basemap, 'verified_manifest', lambda: (_ for _ in ()).throw(map_basemap.MFICartographyError('MFI offline cartography is corrupt')))
-    app = FastAPI(); app.include_router(router.router, prefix='/mfi-drafter')
-    reply = TestClient(app).post('/mfi-drafter/generate-from-csv-async', files={'file': ('input.csv', b'placeholder', 'text/csv')})
+    reply = api.post('/mfi-drafter/generate-from-csv-async', files={'file': ('input.csv', b'placeholder', 'text/csv')})
     assert reply.status_code == 503 and 'cartography' in reply.json()['detail']
     monkeypatch.setattr(dispatcher, '_extract_file', lambda *a: SimpleNamespace(filename='input.csv',content=b'placeholder'))
     with pytest.raises(dispatcher.LocalHTTPException) as error:
@@ -150,92 +132,101 @@ def test_map_preflight_reports_same_configuration_error_in_api_and_streamlit(set
     assert error.value.status_code == 503 and 'cartography' in error.value.detail
 
 
-def test_corrections_start_without_waiting_for_other_review_or_charts(setup, monkeypatch):
-    _, args = setup
-    corrected = threading.Event()
-    drafts = threading.Barrier(2)
-    reviews = threading.Barrier(2)
-    class Concurrent(Client):
-        def generate(self, messages, schema, timeout):
-            response = super().generate(messages, schema, timeout)
-            packet = json.loads(messages[0].content.split("\nREQUEST:\n", 1)[1])
-            family = "dimensions" if isinstance(packet["requested_sections"][0], dict) and packet["requested_sections"][0]["section_id"] == "Assortment" else "markets"
-            if "needs_revision" in schema["properties"]:
-                reviews.wait(timeout=20)
-                if family == "markets": assert corrected.wait(20), "Correction unnecessarily waited for other review"
-            elif "REVIEW_REPORT" in packet:
-                if family == "dimensions": corrected.set()
-            elif "FINAL_DIMENSIONS" not in packet:
-                drafts.wait(timeout=20)
-            return response
-    def charts(base, execution):
-        assert corrected.wait(40), "Drafting unnecessarily waited for charts"
-        return {"visualizations": {}, "figure_metadata": {}}
-    monkeypatch.setattr(light_graph, "render_figures", charts)
-    assert light_service.run_mfi_report_generation(**args, client=Concurrent(["dimensions"]))["success"]
-
-
-def test_http_and_streamlit_share_results_and_draft_lock(setup, monkeypatch):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from app.services.mfi_drafter import router, execution, execution_service, drafts
+def test_http_and_streamlit_share_results_and_recovery_endpoints_are_gone(args, api):
     from app.streamlit_backend import dispatcher
     from app.shared import async_runs
-    from app.shared.docx_export import build_docx_bytes_from_report_blocks
     from docx import Document
     from io import BytesIO
-    store, args = setup
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    for module in (execution, execution_service, drafts): monkeypatch.setattr(module, "recovery_store", lambda: store)
     result = light_service.run_mfi_report_generation(**args, client=Client())
-    app = FastAPI(); app.include_router(router.router, prefix="/mfi-drafter")
-    http = TestClient(app)
-    reply = http.get("/mfi-drafter/result/"+args["run_id"])
+    async_runs.create_run(args["run_id"])
+    async_runs.set_run_completed(args["run_id"], result=result)
+    reply = api.get("/mfi-drafter/result/"+args["run_id"])
     assert reply.status_code == 200, reply.text
     assert reply.json()["narrative_schema_version"] == "3.0"
     local = dispatcher._mfi_drafter_result(args["run_id"])
     assert json.loads(local.content)["light_narrative"] == reply.json()["light_narrative"]
-    for suffix, method in (("draft", http.get), ("export-draft-docx", http.post)):
-        assert method(f"/mfi-drafter/{suffix}/{args['run_id']}").status_code == 409
-    response = http.post("/mfi-drafter/export-docx/"+args["run_id"], json={})
+    status = api.get("/mfi-drafter/status/"+args["run_id"]).json()
+    assert status["status"] == "completed" and status["progress_pct"] == 100
+    assert not {"resumable", "draft_available", "recovery_limitation", "light_progress"} & set(status)
+    for path, method in (("resume", "post"), ("draft", "get"), ("analysis", "get"), ("export-draft-docx", "post")):
+        assert getattr(api, method)(f"/mfi-drafter/{path}/{args['run_id']}").status_code == 404
+        assert dispatcher.dispatch_request(method.upper(), f"/mfi-drafter/{path}/{args['run_id']}").status_code == 404
+    response = api.post("/mfi-drafter/export-docx/"+args["run_id"], json={})
     assert response.status_code == 200, response.text[:300]
-    doc = Document(BytesIO(response.content))
-    text = "\n".join(p.text for p in doc.paragraphs)
+    text = "\n".join(p.text for p in Document(BytesIO(response.content)).paragraphs)
     assert "Analytical annex" in text and "INCOMPLETE" not in text
     assert all(d in text for d in result["light_narrative"]["dimensions"])
 
 
-def test_light_resume_endpoint_idempotent_and_failed_report_locked(setup, monkeypatch):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from app.services.mfi_drafter import router, execution, execution_service, drafts
-    from app.shared import async_runs
-    store, args = setup
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    for module in (execution, execution_service, drafts): monkeypatch.setattr(module, "recovery_store", lambda: store)
-    with pytest.raises(TimeoutError): light_service.run_mfi_report_generation(**args, client=Client(fail="review_dimensions"))
-    scheduled=[]
-    monkeypatch.setattr(light_service, "execute_resumed", lambda *args: scheduled.append(args))
-    app=FastAPI();app.include_router(router.router,prefix="/mfi-drafter");http=TestClient(app)
-    status=http.get("/mfi-drafter/status/"+args["run_id"]).json()
-    assert status["resumable"] and not status["draft_available"]
-    for prefix in ("draft", "analysis", "result"):
-        assert http.get(f"/mfi-drafter/{prefix}/{args['run_id']}").status_code == (400 if prefix == "result" else 409)
-    body={"expected_revision":status["run_revision"],"idempotency_key":"repeat"}
-    first=http.post("/mfi-drafter/resume/"+args["run_id"],json=body)
-    second=http.post("/mfi-drafter/resume/"+args["run_id"],json=body)
-    assert first.status_code == second.status_code == 202
-    assert first.json() == second.json() and len(scheduled) == 1
+def test_failed_async_run_is_reported_without_a_result(args, api, monkeypatch):
+    from app.services.mfi_drafter import router
+    monkeypatch.setattr(router, "load_mfi_from_csv", lambda **kw: args["csv_data"])
+    monkeypatch.setattr(router, "run_mfi_report_generation",
+        lambda **kw: light_service.run_mfi_report_generation(**kw, client=Client(fail="review_markets")))
+    run_id = api.post("/mfi-drafter/generate-from-csv-async", files={"file": ("input.csv", b"placeholder", "text/csv")}).json()["run_id"]
+    status = api.get(f"/mfi-drafter/status/{run_id}").json()
+    assert status["status"] == "failed" and "injected transient provider failure" in status["error"]
+    phases = {p["node"]: p["status"] for p in status["metadata"]["generation_diagnostics"]["phases"]}
+    assert phases["review_markets"] == "failed"
+    assert api.get(f"/mfi-drafter/result/{run_id}").status_code == 400
+
+
+def test_json_generation_requires_explicit_mock_data(args, api):
+    from app.services.mfi_drafter.errors import MFIRunError
+    from app.streamlit_backend import dispatcher
+    body = {k: args[k] for k in ("country", "data_collection_start", "data_collection_end", "markets")}
+    for path in ("/mfi-drafter/generate", "/mfi-drafter/generate-async"):
+        reply = api.post(path, json=body)
+        assert reply.status_code == 400 and "use_mock_data" in reply.json()["detail"]
+        assert dispatcher.dispatch_request("POST", path, json_body=body).status_code == 400
+    with pytest.raises(MFIRunError) as error:
+        light_service.run_mfi_report_generation(**{**args, "csv_data": None}, client=Client())
+    assert error.value.status_code == 400
+    # With the flag, synthetic data feeds the analysis. (The full synthetic report already failed
+    # before this refactor while building the annex; see the plan's Phase 2 notes.)
+    inputs = {**{k: args[k] for k in ("country", "markets", "data_collection_start", "data_collection_end", "run_id")},
+              "csv_data": None, "release_control": RELEASE.model_dump()}
+    assert light_graph.prepare_analysis(inputs)["score_authority"] == "synthetic_mock"
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "streamlit"])
+@pytest.mark.parametrize("dataset", ["synthetic", "Benin"])
+def test_csv_submission_schedules_exactly_one_run(api, monkeypatch, entrypoint, dataset):
+    from pathlib import Path
+    from fastapi import BackgroundTasks
+    from app.streamlit_backend import dispatcher
+    if dataset == "Benin":
+        path = Path(__file__).resolve().parents[1] / "MFI Test Databases/MFI_Full_Benin_surveyid5896.csv"
+        if not path.exists():
+            pytest.skip("Local Benin benchmark absent")
+        content = path.read_bytes()
+    else:
+        content = build_csv_bytes(SyntheticSpec(market_count=1, region_count=1))
+    scheduled = []
+    if entrypoint == "api":
+        monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, target: scheduled.append(target))
+        submit = api.post("/mfi-drafter/generate-from-csv-async", files={"file": ("mfi.csv", content, "text/csv")})
+        get_status = lambda run_id: api.get(f"/mfi-drafter/status/{run_id}")
+    else:
+        monkeypatch.setattr(dispatcher, "threading", SimpleNamespace(
+            Thread=lambda target, **kwargs: SimpleNamespace(start=lambda: scheduled.append(target))))
+        submit = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv-async",
+                                             files={"file": ("mfi.csv", content, "text/csv")})
+        get_status = lambda run_id: dispatcher.dispatch_request("GET", f"/mfi-drafter/status/{run_id}")
+    assert submit.status_code == 200, submit.json()
+    assert len(scheduled) == 1
+    status = get_status(submit.json()["run_id"])
+    assert status.status_code == 200 and status.json()["status"] == "pending"
+    assert status.json()["metadata"]["workflow_revision"] == "mfi-light-v1"
 
 
 @pytest.mark.parametrize("country,survey", [("Benin",5896), ("Haiti",5899)])
-def test_full_country_packages_and_unchanged_analysis(setup, country, survey):
+def test_full_country_packages_and_unchanged_analysis(args, country, survey):
     from pathlib import Path
     from app.services.mfi_drafter.data_loader import load_mfi_from_csv
     root=Path(__file__).resolve().parents[1]
     path=root/f"MFI Test Databases/MFI_Full_{country}_surveyid{survey}.csv"
     if not path.exists(): pytest.skip("Local confidential benchmark absent")
-    store,args=setup
     data=load_mfi_from_csv(path)
     args.update(csv_data=data,country=country,markets=data["markets"],data_collection_start=data["data_collection_start"],data_collection_end=data["data_collection_end"])
     client=Client(["dimensions", "markets"])
@@ -263,8 +254,7 @@ def test_full_country_packages_and_unchanged_analysis(setup, country, survey):
     assert result["coverage"]["complete"]
 
 
-def test_oversized_groups_split_without_repeating_successful_sections(setup):
-    _,args=setup
+def test_oversized_groups_split_without_repeating_successful_sections(args):
     class Limited(Client):
         def count(self,messages,schema,timeout):
             packet=json.loads(messages[0].content.split("\nREQUEST:\n",1)[1])
@@ -277,10 +267,9 @@ def test_oversized_groups_split_without_repeating_successful_sections(setup):
 
 
 @pytest.mark.parametrize("variant", ["renamed", "unicode", "sparse"])
-def test_country_identity_and_sparse_variants_preserve_official_scores(setup, loaded, variant):
+def test_country_identity_and_sparse_variants_preserve_official_scores(args, loaded, variant):
     from app.services.mfi_drafter.synthetic_fixtures import build_dataframe
     from app.services.mfi_drafter.data_loader import load_mfi_from_dataframe
-    _,args=setup
     frame=build_dataframe(SyntheticSpec(country="Alternative Country",market_count=2,region_count=1,
         include_item_drivers=variant != "sparse", include_category_drivers=variant != "sparse"))
     if variant == "unicode":

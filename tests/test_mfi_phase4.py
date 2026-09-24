@@ -339,6 +339,7 @@ def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch):
             "data_collection_start": "2026-01-01",
             "data_collection_end": "2026-01-31",
             "markets": ["Central"],
+            "use_mock_data": True,
         }
     )
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "invalid")
