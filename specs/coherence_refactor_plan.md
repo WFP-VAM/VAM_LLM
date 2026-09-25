@@ -1,6 +1,6 @@
 # Coherence refactor plan (GCP): LangGraph for Seasonal, no checkpoint layer, dead-code removal
 
-**Status: Phases 0–5 done on `refactor/gcp-coherence` (not pushed); Phases 6–7 to do.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them. Each phase records what was built under its **Done** heading.
+**Status: Phases 0–6 done on `refactor/gcp-coherence` (not pushed); Phase 7 (GCP verification) to do.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them. Each phase records what was built under its **Done** heading.
 
 ---
 
@@ -342,14 +342,38 @@ Tests were classified one by one, not by file. A test was removed when it import
 - Add a "Historical — superseded 2026-09" header to `specs/mfi_reliable_workflow.md`, `mfi_drafter_fail_closed_qa.md`, `mfi_drafter_r0_regression_tooling.md`, `mfi_drafter_r2_semantics.md`, `mfi_drafter_r3_narrative_safety.md` and `mfi_drafter_phase4_*`.
 - `.env.example`: drop `SEASONAL_JOB` and `SEASONAL_JOB_REGION` and the two MFI timeout settings; add `MFI_DRAFTER_ANALYSIS_VERSION=2`, which MFI needs and which is missing today.
 
+**Done 2026-09-25.**
+- **Current-state docs:**
+  - `README.md`, and `docs/app-overview.md` (architecture, shared layer, integrations, tech stack, layout, pipelines, deployment) rewritten for three checkpoint-free graphs. The overview had also drifted before the refactor: it still described MFI as a Red-Team QA workflow reading DataBridges on Gemini 2.5 Pro.
+  - `specs/mfi_light_workflow.md` and `specs/seasonal_outlook_implementation.md` updated (execution, persistence, concurrency, API, deployment, release gate; a new verification entry).
+  - In `specs/llm_call_observability.md`, `specs/mfi_offline_map.md` and the release runbook in `docs/second_food_basket.md`: the MFI timeouts, the resume path and the second live DataBridges test are gone.
+  - The How-To page mentions **Retry failed operation**.
+- **Deploy:**
+  - `deploy/seasonal-outlook/main.tf` no longer creates the Job or the dispatcher role. It grants the app identity Vertex AI, keeps the old worker account as the download-link signer with bucket read access only, and renames `job_region` to `region`. Its header gives the upgrade path from a state with the Job (which has deletion protection) and when to apply it: only after the new revision is accepted, with the app's Vertex grant made by hand before deploying.
+  - `terraform.tfvars.example` matches.
+  - `CONSOLE_SETUP.md` (Italian) describes the Job-free setup, the Cloud Run settings the background phases need, and how to upgrade an existing Job-based configuration.
+  - Terraform is not installed here, so the HCL was reviewed but not validated.
+- **`.env.example`:** as planned, plus the unused `GOOGLE_API_KEY` removed. The run-store note no longer mentions MFI recovery.
+- **Historical headers:** added to the six superseded MFI specs. `mfi_drafter_r2_semantics.md` is marked *partly* historical, because its ledger fields still describe the analysis layer.
+- **Left untouched:** dated plans, audits and roadmaps (`specs/phase_*`, `repo_split_plan.md`, the Seasonal integration assessment), as the README already states for dated records.
+- **Found during the docs pass (separate commit):** `LLMTraceSession.invoke_json` still took `response_sink` and `response_parser`. They were added for the deleted MFI response runtime, and nothing has passed either since Phase 3; the Phase 5 scan looked at symbols, not parameters. Both are removed, with the always-zero `response_persistence_failed_calls` field of the run diagnostics. A test comment naming the deleted `report_inspector` is reworded.
+- Output: the `llm_diagnostics` of MM and MFI runs no longer include `response_persistence_failed_calls`.
+- Verification:
+  - Full suite: **846 tests: 843 passed, 3 skipped, 0 failed**, as in Phase 5. No retained test changed outcome.
+  - MFI regression gate (`scripts/check_mfi_reliable.py`, which the docs now point to): 520 passed.
+  - MFI and Seasonal snapshots identical; every page renders.
+  - The live docs no longer mention a deleted module or setting, or the Job, except in the upgrade instructions.
+
 ### Phase 7 — Verification and release
 
 - **Automated:** full suite with the expected count changes; no reference to deleted modules; `import main`; dispatcher and FastAPI smoke tests; AppTest on every page.
+- **Before deploying:** grant the app identity `roles/aiplatform.user` in `SEASONAL_PROJECT` by hand (unless it is the MM/MFI Vertex project), not by applying `main.tf`, which also removes the Job; check CPU always allocated and the memory for Seasonal exports; set `MFI_DRAFTER_ANALYSIS_VERSION=2` if it is not already set.
 - **On GCP:** deploy the branch as a **Cloud Run revision with no traffic**, then run:
   - one MM bulletin;
   - one MFI report (Benin CSV);
   - one full Seasonal cycle (extract → feedback → confirm → report → downloads);
   - one Seasonal retry after a forced failure.
+- **After acceptance only:** delete the Seasonal Job and its dispatcher role (`deploy/seasonal-outlook/CONSOLE_SETUP.md`, section 8), or apply `deploy/seasonal-outlook/main.tf`. The previous revision still needs them. The `SEASONAL_JOB*` variables can be dropped from the new revision when it is deployed, since each revision keeps its own.
 - **Rollback:** route traffic back to the previous revision. Seasonal analyses created by the new version will not display in the old one, because the operation format changes.
 
 ---

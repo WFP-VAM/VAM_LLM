@@ -63,19 +63,20 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 ## Layout
 
 - `app/services/market_monitor/`, `app/services/mfi_drafter/`,
-  `app/services/seasonal_outlook/` — one package per drafter (LangGraph state
-  machine or service, FastAPI router, schemas).
+  `app/services/seasonal_outlook/` — one package per drafter (LangGraph graph
+  without checkpointer, FastAPI router, schemas). The Seasonal Outlook keeps an
+  analysis record for its analyst review; see `docs/app-overview.md`.
 - `app/services/price_cache/` — DataBridges price cache (SQLite or Cloud SQL)
-  behind the Price Bulletin Drafter.
+  and its DataBridges client, behind the Price Bulletin Drafter.
 - `app/shared/` — Vertex LLM configuration, LLM call observability, async run
-  store, DataBridges client, GCS helpers, country/ISO3 mapping, report blocks
-  and the DOCX exporter.
+  store and live run metadata, retrievers, country/ISO3 mapping, report blocks,
+  the DOCX exporter and the Price Bulletin basket UI helpers.
 - `app/streamlit_backend/dispatcher.py` — in-process request dispatcher used by
   the Streamlit UI.
 - `pages/` + `streamlit_app.py` + `streamlit_shared.py` — Streamlit UI (WFP
   theme, onboarding, instructions, one page per drafter).
 - `deploy/seasonal-outlook/` — Terraform and console setup for the Seasonal
-  Outlook Cloud Run Job.
+  Outlook's storage, indexes and IAM.
 - `tests/` — pytest suite; `scripts/check_mfi_reliable.py` runs the MFI subset
   as a regression gate.
 
@@ -83,7 +84,10 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 
 - `docs/app-overview.md` — architecture, integrations, pipelines.
 - `specs/` — dated design and assessment documents, including
-  `seasonal_outlook_implementation.md` and `repo_split_plan.md`.
+  `seasonal_outlook_implementation.md`, `mfi_light_workflow.md`,
+  `repo_split_plan.md` and `coherence_refactor_plan.md` (the September 2026
+  refactor that moved all three drafters to checkpoint-free LangGraph graphs).
+  Specs marked *Historical* describe code that no longer exists.
 - `evals/` — alpha-test evaluation framework (bug reports, surveys, time
   savings). Written when the app had four services; from the split onwards the
   two validators are evaluated in the MarketAIssist context.

@@ -1,5 +1,7 @@
 # MFI reliable workflow
 
+> **Historical — superseded 2026-09.** This document describes the claim-based MFI workflow, which the September 2026 coherence refactor removed (`coherence_refactor_plan.md`, Phase 3). It is kept as a dated record; the current workflow is described in `mfi_light_workflow.md`.
+
 This revision implements the coordinated `mfi-reliable-v1` workflow for newly loaded processed CSVs. Keep `MFI_DRAFTER_ANALYSIS_VERSION=2`. Methodology remains `databridge-current`; analytical and narrative schema versions are 2.1. Existing 2.0 reports remain readable through the existing compatibility path. No SDK or model migration is included.
 
 ## Response contract bundle v2

@@ -208,6 +208,8 @@ st.markdown(
 4. **Review the extracted evidence** in the *Evidence and analyst review* tab, side by side with the original map it came from. Compare versions if you have asked for revisions before.
 5. **Either revise or confirm.** Writing comments and clicking **Revise evidence** produces a new evidence version and another pause. **Confirm evidence and draft report** locks the version you are looking at and starts the drafting phases.
 6. **Collect the report** in the *Report and downloads* tab.
+
+If a step fails or is interrupted, open *Operations and review decisions* and click **Retry failed operation**: it runs that operation again from the same inputs.
     """
 )
 

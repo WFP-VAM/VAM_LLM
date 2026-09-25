@@ -1,4 +1,4 @@
-"""Run the reliable MFI regression gate on Windows or Linux."""
+"""Run the MFI regression gate (the MFI tests plus the shared ones they rely on) on Windows or Linux."""
 from pathlib import Path
 import subprocess
 import sys

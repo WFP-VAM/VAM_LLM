@@ -1,5 +1,7 @@
 # MFI Drafter — R0 regression tooling
 
+> **Historical — superseded 2026-09.** This document describes the claim-based MFI workflow, which the September 2026 coherence refactor removed (`coherence_refactor_plan.md`, Phase 3). It is kept as a dated record; the current workflow is described in `mfi_light_workflow.md`.
+
 Phase R0 of the MFI Drafter 2.0 remediation (`MFI Manuals/MFI_Drafter_2_0_fix.html`,
 section 17) builds the measuring instruments every later phase is gated on. It changes no
 production behaviour. This document is the contract those phases rely on.

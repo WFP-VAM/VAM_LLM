@@ -1,9 +1,7 @@
 project_id                 = "REPLACE_COMPANY_PROJECT"
-job_region                 = "REPLACE_JOB_REGION"
+region                     = "REPLACE_REGION"
 bucket_name                = "REPLACE_SEASONAL_BUCKET"
 worker_service_account_id  = "seasonal-outlook-worker"
 app_service_account_email  = "REPLACE_EXISTING_APP_IDENTITY"
-job_name                   = "seasonal-outlook-worker"
-image                      = "REPLACE_SAME_APP_IMAGE_DIGEST"
 firestore_database         = "REPLACE_EXISTING_DATABASE"
 enabled                    = true

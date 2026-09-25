@@ -1,42 +1,48 @@
-# MFI light workflow: experimental branch
+# MFI light workflow
 
-Branch: `phase_3_faster_MFI`, based on `phase_3` / `48e5c6e`. This branch does not deploy or merge itself.
+The MFI Drafter's only workflow since the September 2026 coherence refactor (`coherence_refactor_plan.md`, Phases 1–3). It started on the experimental branch `phase_3_faster_MFI`; the earlier claim-based workflow and its recovery layer were removed.
 
 ## Contracts and model
 
-New submissions use `mfi-light-v1`, `mfi-light-contracts-v1`, narrative schema `3.0`, analytical schema `2.1`, and `databridge-current`. The existing enablement remains `MFI_DRAFTER_ANALYSIS_VERSION=2`. Memory deployments continue to work; already-configured Firestore/GCS deployments keep their backend. No SDK, resource or required environment-variable migration is introduced.
+Submissions use `mfi-light-v1`, `mfi-light-contracts-v1`, narrative schema `3.0`, analytical schema `2.1`, and `databridge-current`. Generation is enabled by `MFI_DRAFTER_ANALYSIS_VERSION=2`. The only input is the processed MFI CSV (`/generate-from-csv`, `/generate-from-csv-async`). Memory deployments work; already-configured Firestore/GCS deployments keep their backend for run records.
 
 The dedicated cached Vertex client uses `gemini-3.1-pro-preview`, `global`, temperature `1.0`, default thinking, 65,536 maximum output tokens, a 600-second deadline (180 seconds for synthesis) and zero SDK generative retries. Existing project discovery is reused. The configured profile is exposed in MFI health/info; access is verified on invocation, not implied by health status.
 
 Five ordinary calls: two drafts, two reviews and synthesis. One or both correction calls bring the total to six or seven. Actual oversized packages and retries add calls and are reported separately. No LLM call follows correction except the final synthesis.
 
-## Coordination and ownership
+## Graph and run state
 
-The eleven LangGraph nodes are prepare_analysis, context_retrieval, charts, draft_dimensions, draft_markets, review_dimensions, review_markets, correct_dimensions, correct_markets, executive_summary and assemble_report.
+The eleven LangGraph nodes are prepare_analysis, context_retrieval, charts, draft_dimensions, draft_markets, review_dimensions, review_markets, correct_dimensions, correct_markets, executive_summary and assemble_report. They are connected by native LangGraph edges and the graph is compiled without a checkpointer:
 
-LangGraph coordinates explicit dependencies. Each node schedules one owned result into a bounded executor, and dependent work awaits only the inputs it needs. This avoids LangGraph superstep barriers unnecessarily holding a correction behind the other review or holding drafting behind rendering. Future handles exist only in the in-process graph; checkpoints contain resolved immutable outputs. The executor drains independent work before reporting failure so successful sibling results remain reusable.
+```
+prepare_analysis -> context_retrieval -> charts, draft_dimensions, draft_markets   (same step)
+both drafts      -> review_dimensions, review_markets
+review_x         -> correct_x
+both corrections -> executive_summary
+executive_summary and charts -> assemble_report
+```
 
-Both reviewers receive both original drafts but review only their own sections. The correction drafter receives its saved original draft, reviewer report, evidence and substantive narrative restrictions. Authoritative evidence takes precedence over reviewer suggestions. A clean review promotes the original draft with no model call. The final summary awaits both definitive branches; assembly also awaits charts.
+Charts render alongside the drafts, so drafting never waits for them. Each correction starts once both reviews have finished.
 
-All journal changes use the existing fenced transactions. Each phase and model batch owns its record. Token-count results are cached by request fingerprint. Responses are captured before parsing; accepted sections, reviews and corrected sections are stored separately. Resume uses the original validated inputs, reuses committed matching outputs and retries unfinished work within a new execution epoch. Lost ownership prevents late commits.
+Both reviewers receive both original drafts but review only their own sections. The correction drafter receives its original draft, reviewer report, evidence and substantive narrative restrictions. Authoritative evidence takes precedence over reviewer suggestions. A clean review promotes the original draft with no model call. The final summary awaits both definitive branches; assembly also awaits charts.
+
+A run keeps its bookkeeping in memory (`light_runtime.RunLedger`): phase status and progress, token counts cached by request fingerprint, attempts per work item, and call diagnostics. Nothing is checkpointed. A failed phase marks the whole report failed, and the analyst generates it again from the CSV; there is no resume and no partial-draft download.
 
 ## Evidence and response handling
 
 The analytical engine is unchanged. Compact packages retain complete assessed-market score comparisons, dimension distributions and regional facts, indicator/component relationships, coverage, applicability, eligible items and context. Local evidence uses the existing selection projection and analytical ledger; scores and ranks have separate tables instead of appearing again in a claim catalogue. The annex remains generated by application code.
 
-The provider schema is either a sections array (`section_id`, `text_markdown`, `notes`) or a review (`needs_revision`, `review_markdown`). Essential checks cover required/known unique sections, nonempty readable text, available citations, JSON and truncation. No claim-level semantic validation, typed patches, numerical authorization or post-correction verification is applied to the new prose.
+The provider schema is either a sections array (`section_id`, `text_markdown`, `notes`) or a review (`needs_revision`, `review_markdown`). Essential checks cover required/known unique sections, nonempty readable text, available citations, JSON and truncation. No claim-level semantic validation, typed patches, numerical authorization or post-correction verification is applied to the prose.
 
 Every outgoing package includes instructions and schema in its budget: at most 1,200,000 serialized characters and 250,000 input tokens. Vertex CountTokens includes generation configuration and response schema. Oversized groups split deterministically by whole dimensions or markets, never by claims; an indivisible request fails explicitly. An oversized repair never triggers regeneration of already accepted sections.
 
-Each work item gets at most two generative attempts per execution epoch. Transient failures retry once with bounded delay. Invalid responses retain valid sections and request only the remaining sections (or the envelope alone if every section is valid). Syntax and structural failures share that one allowance. Access, configuration, storage and ownership errors do not trigger text-repair calls. Metadata exposes counts, sizes, attempts and outcomes, not captured raw responses.
+Each work item gets at most two generative attempts per run. Transient failures retry once with bounded delay. Invalid responses retain valid sections and request only the remaining sections (or the envelope alone if every section is valid). Syntax and structural failures share that one allowance. Access and configuration errors do not trigger text-repair calls. Metadata exposes counts, sizes, attempts and outcomes, not raw responses.
 
-## Delivery and compatibility
+## Delivery
 
-New draft and draft-DOCX endpoints return 409. Analytical download is also locked until completion. Final result/export remains gated by completed execution. Missing required narratives, reviews, synthesis or charts prevent completion. Source-document artifacts remain source documents, not report exports.
+Result and DOCX export are available only for completed runs. Missing required narratives, reviews, synthesis or charts prevent completion. Source-document artifacts remain source documents, not report exports.
 
-The section presentation adapter produces existing report blocks and DOCX exports, including the analytical annex and `[S1]`-style source labels. Historical results retain their existing reader and export path. Prior incompatible checkpoints are inspectable but cannot resume under this bundle. Old checkpoints are not relabelled or rewritten.
-
-Memory recovery is process-local, as before: server restart or routing to another instance cannot recover those checkpoints. There is no new infrastructure prerequisite, and this revision does not claim cross-process recovery for memory storage.
+The section presentation adapter produces report blocks and DOCX exports, including the analytical annex and `[S1]`-style source labels; the blocks are stored with the result. Results of the previous claim-based workflow are no longer readable: `/result` and `/export-docx` return 410 for them.
 
 ## Automated and live acceptance
 
@@ -46,7 +52,7 @@ Run the shared regression command on Windows or Linux:
 python scripts/check_mfi_reliable.py
 ```
 
-The tests use the actual analytical engine, provider schema conversion and response validators with controlled model responses. They cover 5/6/7 calls, branch concurrency, malformed responses, partial repair, truncation, access failures, captured-response recovery, fencing, old checkpoint incompatibility, API/Streamlit outputs, final-only exports and full Benin/Haiti baselines. Original analytical and historical QA tests remain in the suite.
+The tests use the actual analytical engine, provider schema conversion and response validators with controlled model responses. They cover 5/6/7 calls, charts running alongside the drafts, malformed responses, partial repair, truncation, access failures, failure reporting, API/Streamlit outputs, final-only exports and full Benin/Haiti baselines.
 
 Prepare ten private test inputs locally (real datasets are never committed):
 
@@ -60,12 +66,10 @@ This creates three Benin runs, three Haiti runs, a renamed country, Unicode/shar
 python scripts/mfi_light_acceptance.py run --url https://YOUR-TEST-DEPLOYMENT
 ```
 
-`--resume-failed` explicitly allows one Resume per eligible failed case. Saved run IDs are reused if the local harness is restarted. Responses, timings and results stay in the private test directory. The harness verifies workflow, coverage and reference analytical invariants; its output intentionally leaves semantic acceptance pending manual review.
+Saved run IDs are reused if the local harness is restarted. Responses, timings and results stay in the private test directory. The harness verifies workflow, coverage and reference analytical invariants; its output intentionally leaves semantic acceptance pending manual review.
 
 For promotion, the owner must confirm model access and inspect all nine dimensions, the selected markets and summary in every report. Check Service 37/53 (ties), Infrastructure below 3 in seven Benin markets, Oueme Food Quality approximately 4.79, incorrect subjects/denominators/ranks, subsection relationships, unsupported causality, regional context relevance, and recommendation restrictions. In particular, reject a review suggestion replacing 37/53 by approximately half. Semantic correctness cannot be certified by stubbed model responses.
 
-Introduce a controlled provider failure in a test execution, exhaust its retry, then Resume and verify only unfinished work calls the model again. Automated tests cover this without adding production fault switches. Inspect original drafts, reviewer feedback and corrected artifacts through authorized internal storage during live debugging.
+Introduce a controlled provider failure in a test run and exhaust its retry: the run must fail with that phase marked failed, and generating the report again from the CSV must succeed. Automated tests cover this without adding production fault switches.
 
-Promotion targets remain: ten completed reports without irrecoverable failure, no High semantic errors or analytical regressions, 5–7 ordinary calls on the reference datasets, median at most 600 seconds, at least nine runs within 900 seconds, and successful recovery of only the failed step. Local test timings are not live model/deployment performance measurements.
-
-Rollback changes new submissions only. Retain checkpoints; an incompatible deployment must report them as non-resumable. No branch push constitutes promotion.
+Promotion targets remain: ten completed reports without irrecoverable failure, no High semantic errors or analytical regressions, 5–7 ordinary calls on the reference datasets, median at most 600 seconds, and at least nine runs within 900 seconds. Local test timings are not live model/deployment performance measurements. No branch push constitutes promotion.

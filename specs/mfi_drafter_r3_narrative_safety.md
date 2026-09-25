@@ -1,5 +1,7 @@
 # MFI Drafter — R3 narrative safety contracts
 
+> **Historical — superseded 2026-09.** This document describes the claim-based MFI workflow, which the September 2026 coherence refactor removed (`coherence_refactor_plan.md`, Phase 3). It is kept as a dated record; the current workflow is described in `mfi_light_workflow.md`.
+
 Phase R3 of the MFI Drafter 2.0 remediation (`MFI Manuals/MFI_Drafter_2_0_fix.html`,
 section 17) stops the report stating conclusions the assessment cannot support. It closes
 **FIX-02** (modality, affordability and causal overreach), **FIX-08** (Markdown leakage),

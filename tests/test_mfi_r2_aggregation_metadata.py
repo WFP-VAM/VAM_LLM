@@ -24,8 +24,7 @@ from app.services.mfi_drafter.synthetic_fixtures import (
     build_profile,
 )
 
-# Mirrors report_inspector.pooled_population_pattern: nouns that imply a respondent
-# denominator the processed data cannot supply.
+# Nouns that imply a respondent denominator the processed data cannot supply.
 RESPONDENT_NOUNS = re.compile(r"traders|respondents|responses|vendors", re.IGNORECASE)
 
 PARTIAL_SPEC = SyntheticSpec(item_market_ratio=0.5)

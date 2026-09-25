@@ -1,5 +1,7 @@
 # MFI Drafter 2.0 Phase 4 Release Checklist
 
+> **Historical — superseded 2026-09.** This document describes the claim-based MFI workflow, which the September 2026 coherence refactor removed (`coherence_refactor_plan.md`, Phase 3). It is kept as a dated record; the current workflow is described in `mfi_light_workflow.md`.
+
 Release ID:
 
 Candidate revision:

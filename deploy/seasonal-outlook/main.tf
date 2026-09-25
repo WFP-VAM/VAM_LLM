@@ -8,18 +8,32 @@ terraform {
   }
 }
 
+# Seasonal Outlook storage, indexes and IAM. Since September 2026 the phases run in a
+# background thread of the existing app service, so there is no Cloud Run Job.
+#
+# Upgrading a state that still has the Job: apply this file only after the new app
+# revision has been accepted, because the previous revision still dispatches the Job
+# and applying moves the Vertex grant from the worker to the app. Before deploying the
+# new revision, grant the app identity roles/aiplatform.user by hand
+# (CONSOLE_SETUP.md, section 8). The Job was created with deletion protection: either
+# set `deletion_protection = false` on it and apply once before applying this file, or
+# delete the Job in the console and run
+# `terraform state rm google_cloud_run_v2_job.worker`. Rename `job_region` to `region`
+# in terraform.tfvars and drop `job_name` and `image`.
+
 provider "google" {
   project = var.project_id
-  region  = var.job_region
+  region  = var.region
 }
 
 variable "project_id" { type = string }
-variable "job_region" { type = string }
+variable "region" { type = string }
 variable "bucket_name" { type = string }
-variable "worker_service_account_id" { type = string }
+variable "worker_service_account_id" {
+  type        = string
+  description = "Account that signs download links (its historical name is the former Job worker's)."
+}
 variable "app_service_account_email" { type = string }
-variable "job_name" { type = string }
-variable "image" { type = string }
 variable "firestore_database" {
   type        = string
   description = "Existing company Firestore Native database; this module does not replace it."
@@ -43,7 +57,7 @@ resource "google_service_account" "worker" {
 
 resource "google_storage_bucket" "artifacts" {
   name                        = var.bucket_name
-  location                    = var.job_region
+  location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
   force_destroy               = false
@@ -51,9 +65,10 @@ resource "google_storage_bucket" "artifacts" {
 }
 
 locals {
-  identities = {
-    app    = var.app_service_account_email
-    worker = google_service_account.worker.email
+  # A signed URL grants the access of the identity that signs it, so the signer reads the bucket.
+  bucket_roles = {
+    app    = { member = var.app_service_account_email, role = "roles/storage.objectUser" }
+    signer = { member = google_service_account.worker.email, role = "roles/storage.objectViewer" }
   }
   environment = {
     SEASONAL_DRAFTER_ENABLED = tostring(var.enabled)
@@ -62,8 +77,6 @@ locals {
     SEASONAL_DATABASE        = var.firestore_database
     SEASONAL_COLLECTION      = "seasonal_outlook_runs"
     SEASONAL_PREFIX          = "seasonal-outlook"
-    SEASONAL_JOB             = var.job_name
-    SEASONAL_JOB_REGION      = var.job_region
     SEASONAL_SIGNER          = google_service_account.worker.email
     SEASONAL_MODEL           = "gemini-3.1-pro-preview"
     SEASONAL_LOCATION        = "global"
@@ -80,29 +93,24 @@ locals {
 }
 
 resource "google_project_iam_member" "firestore" {
-  for_each = local.identities
+  for_each = { app = var.app_service_account_email }
   project  = var.project_id
   role     = "roles/datastore.user"
   member   = "serviceAccount:${each.value}"
 }
 
 resource "google_storage_bucket_iam_member" "objects" {
-  for_each = local.identities
+  for_each = local.bucket_roles
   bucket   = google_storage_bucket.artifacts.name
-  role     = "roles/storage.objectUser"
-  member   = "serviceAccount:${each.value}"
+  role     = each.value.role
+  member   = "serviceAccount:${each.value.member}"
 }
 
+# The app service calls Gemini for the Seasonal phases.
 resource "google_project_iam_member" "vertex" {
   project = var.project_id
   role    = "roles/aiplatform.user"
-  member  = "serviceAccount:${google_service_account.worker.email}"
-}
-
-resource "google_project_iam_custom_role" "dispatch" {
-  role_id     = "seasonalJobDispatcher"
-  title       = "Execute Seasonal job with run identifiers"
-  permissions = ["run.jobs.run", "run.jobs.runWithOverrides"]
+  member  = "serviceAccount:${var.app_service_account_email}"
 }
 
 resource "google_project_iam_custom_role" "sign" {
@@ -115,42 +123,6 @@ resource "google_service_account_iam_member" "sign" {
   service_account_id = google_service_account.worker.name
   role               = google_project_iam_custom_role.sign.name
   member             = "serviceAccount:${var.app_service_account_email}"
-}
-
-resource "google_cloud_run_v2_job" "worker" {
-  name                = var.job_name
-  location            = var.job_region
-  deletion_protection = true
-  depends_on          = [google_project_service.apis]
-  template {
-    task_count  = 1
-    parallelism = 1
-    template {
-      service_account = google_service_account.worker.email
-      timeout         = "7200s"
-      max_retries     = 0
-      containers {
-        image   = var.image
-        command = ["python"]
-        args    = ["-m", "app.services.seasonal_outlook.worker", "--help"]
-        resources { limits = { cpu = "2", memory = "4Gi" } }
-        dynamic "env" {
-          for_each = local.environment
-          content {
-            name  = env.key
-            value = env.value
-          }
-        }
-      }
-    }
-  }
-}
-
-resource "google_cloud_run_v2_job_iam_member" "dispatch" {
-  name     = google_cloud_run_v2_job.worker.name
-  location = var.job_region
-  role     = google_project_iam_custom_role.dispatch.name
-  member   = "serviceAccount:${var.app_service_account_email}"
 }
 
 resource "google_firestore_index" "history" {

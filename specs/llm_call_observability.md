@@ -1,16 +1,18 @@
 # LLM call observability operations
 
-MFI Drafter and Market Monitor emit metadata-only LLM diagnostics by default.
-Full prompt and response capture is opt-in and must use a private Google Cloud
-Storage prefix that is not served by any report or artifact endpoint.
+Market Monitor emits metadata-only LLM diagnostics by default. Full prompt and
+response capture is opt-in and must use a private Google Cloud Storage prefix
+that is not served by any report or artifact endpoint.
+
+The MFI Drafter's light workflow reports its own metadata-only call diagnostics
+(counts, sizes, attempts and outcomes) and never stores prompts or responses;
+its info and health endpoints still show the tracing configuration. The
+Seasonal Outlook keeps each request and response in its private bucket as part
+of the analysis audit trail.
 
 ## Runtime configuration
 
 - `LLM_TIMEOUT_SECONDS=90`: per-attempt deadline for ordinary LLM calls.
-- `MFI_MARKET_DRAFT_TIMEOUT_SECONDS=180`: per-attempt deadline for budgeted MFI
-  selected-market drafting calls.
-- `MFI_RED_TEAM_TIMEOUT_SECONDS=180`: per-attempt deadline for the compact MFI
-  Red-Team review.
 - `LLM_MAX_RETRIES=2`: provider retry limit shared by traced calls.
 - `LLM_TRACE_PAYLOADS=false` (default): structured call metadata only.
 - `LLM_TRACE_PAYLOADS=true`: persist gzip-compressed private payloads.

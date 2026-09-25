@@ -1,5 +1,7 @@
 # MFI Drafter — R2 aggregation and representation semantics
 
+> **Partly historical — superseded 2026-09.** The aggregation and representation fields on `MFIMetricLedgerEntry` ("What each entry now carries", "How the values are derived", "Representation basis") still describe the analysis layer. The claim catalogue, phrase rules, prompt exposure and evidence-note renderers belonged to the claim-based workflow, which the September 2026 coherence refactor removed; see `mfi_light_workflow.md`.
+
 Phase R2 of the MFI Drafter 2.0 remediation (`MFI Manuals/MFI_Drafter_2_0_fix.html`,
 section 17) records, for every number the system can cite, what population that number
 describes and how it should be worded. R2 enforces nothing — R3 does that. This document

@@ -1054,7 +1054,7 @@ $env:TEST_POSTGRES_DATABASE_URL='<runtime-only disposable URL>'
 & 'venv\Scripts\python.exe' -m pytest -q -rs
 ```
 
-The PostgreSQL migration/repository test must execute during release qualification. Only the two credential-gated live DataBridges tests may remain skipped.
+The PostgreSQL migration/repository test must execute during release qualification. Only the credential-gated live DataBridges test (`tests/test_databridges_adapter.py`) may remain skipped; the second one went with the unused DataBridges client in September 2026.
 
 ### Populated migration rehearsals
 

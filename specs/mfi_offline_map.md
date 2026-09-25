@@ -43,21 +43,19 @@ side legend. The new map is exported at 6.5 inches with a 9-point legend. The
 caption explains the scale, selected-market numbers and coordinate coverage.
 There are no inset maps, automatic cluster zooms or new administrative layers.
 
-## Preflight, recovery and compatibility
+## Preflight and compatibility
 
-Before scheduling CSV generation, the shared execution service checks that the
-required local asset is readable, has the expected checksum and contains valid
-geometry. Both API and Streamlit return an explicit 503 cartography error on
-failure. Direct execution also checks before the graph or any model call.
+Before scheduling CSV generation, `light_service.validate_submission` checks that
+the required local asset is readable, has the expected checksum and contains
+valid geometry. Both API and Streamlit return an explicit 503 cartography error
+on failure. Direct execution also checks before the graph or any model call.
 Runs without any valid coordinate do not require a map.
 
 `mfi-map-v2`, the Natural Earth version and asset checksum form the map's
-rendering contract. That contract participates in both the graph's charts-phase
-dependency and the individual map job fingerprint. A changed map revision on
-Resume recomputes the map and report assembly; other figures and completed model
-outputs retain their existing dependencies and are reused. Workflow/model
-contracts remain unchanged. Completed historical reports keep their saved
-figures and export behavior.
+rendering contract. The contract travels in the map job's data, so it is part of
+the job's fingerprint, and rendering refuses a job whose contract does not match
+the installed asset. Workflow/model contracts remain unchanged. Completed
+reports keep their saved figures and export behavior.
 
 Figure metadata records rendering/asset versions, highlighted and intersecting
 countries, original coordinates, coverage, identity-to-number mappings,
