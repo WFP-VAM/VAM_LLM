@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.shared import async_runs
-from app.shared.llm_observability import LLMCallError
+from app.shared.llm import LLMCallError
 from app.services.market_monitor import router as market_router
 from app.services.mfi_drafter import router as mfi_router
 from app.services.mfi_drafter.features import MFI_DRAFTER_ANALYSIS_VERSION_ENV

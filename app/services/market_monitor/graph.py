@@ -29,15 +29,15 @@ import pandas as pd
 import numpy as np
 
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage
 
-from app.shared.llm import get_model
-from app.shared.llm_observability import (
+from app.shared.llm import (
     LLMCallError,
-    TraceSink,
-    get_trace_session,
-    llm_trace_session,
+    LLMClient,
+    current_tracer,
+    default_provider,
     log_llm_run_summary,
+    market_monitor_profile,
+    tracing_run,
 )
 from app.shared.retrievers import ReliefWebRetriever, SeeristRetriever
 
@@ -63,6 +63,21 @@ from .prompt_registry import render_prompt
 logger = logging.getLogger(__name__)
 
 OnStepCallback = Callable[[str, Dict[str, Any]], None]
+
+
+def llm_provider():
+    """The provider Market Monitor's calls go through; tests replace it."""
+    return default_provider()
+
+
+def llm_client(state: Dict[str, Any]) -> LLMClient:
+    """The model client of this report run, recording into the run's trace."""
+    tracer = current_tracer(
+        service="market-monitor",
+        run_id=str(state.get("run_id") or "market-monitor-direct"),
+        initial=state.get("llm_diagnostics"),
+    )
+    return LLMClient(market_monitor_profile(), tracer=tracer, provider=llm_provider())
 
 CURRENCY_SYMBOLS = {
     "SDG": "USDSDG:CUR",
@@ -1231,14 +1246,8 @@ class ExchangeRateModule(ReportModule):
         }
         prompt = render_prompt("exchange_rate", language, prompt_context)
         
-        trace = get_trace_session(
-            service="market-monitor",
-            run_id=str(state.get("run_id") or "market-monitor-direct"),
-            initial=state.get("llm_diagnostics"),
-        )
-        traced = trace.invoke_text(
-            model=llm,
-            messages=[HumanMessage(content=prompt)],
+        traced = llm.generate_text(
+            prompt=prompt,
             node="module_orchestrator",
             operation="market_monitor.exchange_rate_module.v1",
             artifact_type="module",
@@ -1303,14 +1312,8 @@ class FuelEnergyModule(ReportModule):
             },
         )
 
-        trace = get_trace_session(
-            service="market-monitor",
-            run_id=str(state.get("run_id") or "market-monitor-direct"),
-            initial=state.get("llm_diagnostics"),
-        )
-        traced = trace.invoke_text(
-            model=llm,
-            messages=[HumanMessage(content=prompt)],
+        traced = llm.generate_text(
+            prompt=prompt,
             node="module_orchestrator",
             operation="market_monitor.fuel_energy_module.v1",
             artifact_type="module",
@@ -1422,14 +1425,8 @@ class LivestockAnimalProductsModule(ReportModule):
             },
         )
 
-        trace = get_trace_session(
-            service="market-monitor",
-            run_id=str(state.get("run_id") or "market-monitor-direct"),
-            initial=state.get("llm_diagnostics"),
-        )
-        traced = trace.invoke_text(
-            model=llm,
-            messages=[HumanMessage(content=prompt)],
+        traced = llm.generate_text(
+            prompt=prompt,
             node="module_orchestrator",
             operation="market_monitor.livestock_module.v1",
             artifact_type="module",
@@ -1539,14 +1536,8 @@ class LabourMarketModule(ReportModule):
             },
         )
 
-        trace = get_trace_session(
-            service="market-monitor",
-            run_id=str(state.get("run_id") or "market-monitor-direct"),
-            initial=state.get("llm_diagnostics"),
-        )
-        traced = trace.invoke_text(
-            model=llm,
-            messages=[HumanMessage(content=prompt)],
+        traced = llm.generate_text(
+            prompt=prompt,
             node="module_orchestrator",
             operation="market_monitor.labour_module.v1",
             artifact_type="module",
@@ -2647,13 +2638,9 @@ def node_event_mapper(state: MarketReportState) -> dict:
     """Nodo: Estrae eventi dai documenti."""
     logger.info("[EventMapper] Extracting events")
     
-    llm = get_model()
     documents = state.get("documents", [])
-    trace = get_trace_session(
-        service="market-monitor",
-        run_id=str(state.get("run_id") or "market-monitor-direct"),
-        initial=state.get("llm_diagnostics"),
-    )
+    llm = llm_client(state)
+    trace = llm.tracer
     
     if not documents:
         trace.record_skip(
@@ -2718,9 +2705,8 @@ Return JSON with events:
                 raise ValueError(f"events[{index}].source_ids must be a list")
         return events
 
-    traced = trace.invoke_json(
-        model=llm,
-        messages=[HumanMessage(content=prompt)],
+    traced = llm.generate_json(
+        prompt=prompt,
         node="event_mapper",
         operation="market_monitor.event_extraction.v1",
         artifact_type="context",
@@ -2756,15 +2742,11 @@ def node_trend_analyst(state: MarketReportState) -> dict:
     """Nodo: Analizza i trend."""
     logger.info("[TrendAnalyst] Analyzing trends")
     
-    llm = get_model()
     stats = state.get("data_statistics", {})
     events = state.get("events", [])
     basket_context = build_basket_context(state)
-    trace = get_trace_session(
-        service="market-monitor",
-        run_id=str(state.get("run_id") or "market-monitor-direct"),
-        initial=state.get("llm_diagnostics"),
-    )
+    llm = llm_client(state)
+    trace = llm.tracer
     
     prompt = f"""Analyze the market trend based on these inputs.
 
@@ -2831,9 +2813,8 @@ Return JSON:
             raise ValueError("outlook must be non-empty text")
         return result
 
-    traced = trace.invoke_json(
-        model=llm,
-        messages=[HumanMessage(content=prompt)],
+    traced = llm.generate_json(
+        prompt=prompt,
         node="trend_analyst",
         operation="market_monitor.trend_analysis.v1",
         artifact_type="analysis",
@@ -2861,11 +2842,8 @@ def node_module_orchestrator(state: MarketReportState) -> dict:
     logger.info("[ModuleOrchestrator] Running optional modules")
     
     enabled_modules = state.get("enabled_modules", [])
-    trace = get_trace_session(
-        service="market-monitor",
-        run_id=str(state.get("run_id") or "market-monitor-direct"),
-        initial=state.get("llm_diagnostics"),
-    )
+    llm = llm_client(state)
+    trace = llm.tracer
     language = _state_language(state)
     targets = set(state.get("correction_targets") or [])
     correction_mode = bool(targets)
@@ -2901,7 +2879,6 @@ def node_module_orchestrator(state: MarketReportState) -> dict:
             "llm_diagnostics": trace.snapshot(),
         }
     
-    llm = None
     module_sections = dict(state.get("module_sections") or {})
     updates = {}
     llm_calls = 0
@@ -2996,8 +2973,6 @@ def node_module_orchestrator(state: MarketReportState) -> dict:
                 state.update(data_update)
             
             # Generate section
-            if llm is None:
-                llm = get_model()
             output = module.generate_section(state, llm)
             module_sections[module_id] = output.get("narrative", "")
             llm_calls += 1
@@ -3044,18 +3019,14 @@ def node_highlights_drafter(state: MarketReportState) -> dict:
     if state.get("correction_targets") and not _targeted(state, "HIGHLIGHTS"):
         return {"current_node": "highlights_drafter"}
     
-    llm = get_model()
     language = _state_language(state)
     stats = state.get("data_statistics", {})
     trend = state.get("trend_analysis", {})
     exchange_data = state.get("exchange_rate_data", {}) or {}
     currency_code = _state_currency_code(state)
     basket_context = build_basket_context(state)
-    trace = get_trace_session(
-        service="market-monitor",
-        run_id=str(state.get("run_id") or "market-monitor-direct"),
-        initial=state.get("llm_diagnostics"),
-    )
+    llm = llm_client(state)
+    trace = llm.tracer
  
     validation_warnings: List[str] = []
     if exchange_data and exchange_data.get("trend") == "stable":
@@ -3109,9 +3080,8 @@ def node_highlights_drafter(state: MarketReportState) -> dict:
             raise ValueError("HIGHLIGHTS is empty after normalization")
         return {"text": normalized, "warnings": warnings}
 
-    traced = trace.invoke_json(
-        model=llm,
-        messages=[HumanMessage(content=prompt)],
+    traced = llm.generate_json(
+        prompt=prompt,
         node="highlights_drafter",
         operation="market_monitor.highlights_drafting.v1",
         artifact_type="report_section",
@@ -3177,11 +3147,8 @@ def node_narrative_drafter(state: MarketReportState) -> dict:
     result: Dict[str, Any] = {}
     llm_calls = 0
     normalization_warnings: List[str] = []
-    trace = get_trace_session(
-        service="market-monitor",
-        run_id=str(state.get("run_id") or "market-monitor-direct"),
-        initial=state.get("llm_diagnostics"),
-    )
+    llm = llm_client(state)
+    trace = llm.tracer
     if sections_to_generate:
         prompt = render_prompt(
             "narrative",
@@ -3214,9 +3181,8 @@ def node_narrative_drafter(state: MarketReportState) -> dict:
                 warnings.extend(section_warnings)
             return {"sections": normalized_sections, "warnings": warnings}
 
-        traced = trace.invoke_json(
-            model=get_model(),
-            messages=[HumanMessage(content=prompt)],
+        traced = llm.generate_json(
+            prompt=prompt,
             node="narrative_drafter",
             operation="market_monitor.narrative_drafting.v1",
             artifact_type="report",
@@ -3277,12 +3243,8 @@ def node_red_team(state: MarketReportState) -> dict:
     """Nodo: Quality Assurance - verifica il draft."""
     logger.info("[RedTeam] Fact-checking draft")
     
-    llm = get_model()
-    trace = get_trace_session(
-        service="market-monitor",
-        run_id=str(state.get("run_id") or "market-monitor-direct"),
-        initial=state.get("llm_diagnostics"),
-    )
+    llm = llm_client(state)
+    trace = llm.tracer
     language = _state_language(state)
     sections = state.get("report_draft_sections", {})
     stats = state.get("data_statistics", {})
@@ -3355,9 +3317,8 @@ def node_red_team(state: MarketReportState) -> dict:
                     raise ValueError(f"flags[{index}].{field} must be text")
         return _normalized_qa_flags(flags)
 
-    traced = trace.invoke_json(
-        model=llm,
-        messages=[HumanMessage(content=prompt)],
+    traced = llm.generate_json(
+        prompt=prompt,
         node="red_team",
         operation="market_monitor.red_team_review.v1",
         artifact_type="global",
@@ -3486,7 +3447,7 @@ def run_report_generation(
     language: str = "auto",
     on_step: Optional[OnStepCallback] = None,
     run_id: Optional[str] = None,
-    llm_trace_sink: Optional[TraceSink] = None,
+    llm_trace_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> dict:
     """
     Entry point per la generazione del Market Monitor.
@@ -3522,11 +3483,11 @@ def run_report_generation(
     )
     
     agent = build_graph(on_step=on_step)
-    with llm_trace_session(
+    with tracing_run(
         service="market-monitor",
         run_id=initial_state["run_id"],
         initial=initial_state.get("llm_diagnostics"),
-        sink=llm_trace_sink,
+        live=llm_trace_sink,
     ) as trace:
         try:
             result = agent.invoke(initial_state)

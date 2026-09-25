@@ -36,8 +36,7 @@ from app.shared.report_blocks import (
     build_market_monitor_report_blocks,
     resolve_mfi_report_blocks,
 )
-from app.shared.llm_observability import LLMCallError, observability_config
-from app.shared.llm import llm_runtime_status
+from app.shared.llm import LLMCallError, llm_runtime_status, observability_config
 
 from app.services.mfi_drafter.data_loader import (
     load_mfi_from_csv,

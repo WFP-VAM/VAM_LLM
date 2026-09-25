@@ -61,7 +61,7 @@ Each service is a self-contained FastAPI router whose workflow is a **LangGraph 
 
 The shared layer provides:
 
-- **Vertex model factory** (`llm.py`) -- the Market Monitor's Gemini models (Gemini 2.5 Pro by default), zero temperature, cached per timeout and retry setting. The MFI drafter and the Seasonal Outlook configure their own Vertex clients.
+- **LLM client** (`llm/`) -- one client for model calls, on the google-genai SDK. Each drafter has a model profile; every call is retried only on transient errors and traced the same way (records, JSON logs, optional payload capture). The Market Monitor uses it (Gemini 2.5 Pro by default, zero temperature); the MFI drafter and the Seasonal Outlook still have their own Vertex clients and move onto it next (`specs/shared_layer_rationalization.md`).
 - **Retrievers** -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries.
 - **Async run manager** -- tracks long-running jobs with progress, warnings, and artifacts; pluggable backend (in-memory for dev, Firestore + GCS for production).
 - **DOCX exporter** -- converts an abstract `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) into a branded Word document with embedded visualisations.
@@ -98,7 +98,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 | **Seerist** | Intelligence/news aggregation. Provides contextual documents on markets, prices, inflation, currency, and trade for a given country and time window. |
 | **ReliefWeb** | UN humanitarian reporting. Supplements Seerist with reports on food security and market conditions. |
 | **Trading Economics** | Exchange-rate data for 15+ currencies used in the Market Monitor. |
-| **Google Vertex AI** | LLM backend. Gemini 2.5 Pro for the Market Monitor; Gemini 3.1 Pro for the MFI drafter (LangChain Vertex client) and for the Seasonal Outlook (Google Gen AI SDK). Powers narrative generation, event extraction, trend analysis, map evidence extraction, review and QA. |
+| **Google Vertex AI** | LLM backend. Gemini 2.5 Pro for the Market Monitor (shared LLM client, Google Gen AI SDK); Gemini 3.1 Pro for the MFI drafter (LangChain Vertex client) and for the Seasonal Outlook (Google Gen AI SDK). Powers narrative generation, event extraction, trend analysis, map evidence extraction, review and QA. |
 | **Google Cloud Storage** | Stores run artifacts, Seasonal Outlook inputs, evidence versions and exports, and cached reference data in production. |
 | **Google Firestore** | Persistent run records and Seasonal Outlook analysis records in production. |
 
@@ -111,7 +111,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 | Frontend | Streamlit (WFP-branded theme) |
 | Backend API | FastAPI, Uvicorn |
 | Workflow orchestration | LangGraph (one graph per service, no checkpointer) |
-| LLM integration | LangChain (langchain-core, langchain-google-vertexai); Google Gen AI SDK for the Seasonal Outlook |
+| LLM integration | Google Gen AI SDK (`google-genai`) behind the shared LLM client; LangChain's Vertex client for the MFI drafter until it moves to the shared client |
 | Data processing | Pandas, NumPy |
 | Visualisation | Matplotlib (charts exported as Base64 PNG) |
 | Report export | python-docx |
@@ -137,8 +137,7 @@ UNIFIED APP/
     shared/
       config.py                # Process set-up: .env, logging, Google Cloud project
       util.py                  # Small shared helpers (secret redaction)
-      llm.py                   # Vertex model factory (Market Monitor)
-      llm_observability.py     # LLM call tracing
+      llm/                     # LLM client, profiles, google-genai provider, call tracing
       async_runs.py            # Run lifecycle & artifact management
       retrievers.py            # Seerist and ReliefWeb clients
       countries.py             # Country name/ISO3 resolution

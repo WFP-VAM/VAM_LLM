@@ -67,8 +67,7 @@ from app.shared.live_outputs import (
 
 from app.shared.docx_export import build_content_disposition, build_docx_bytes_from_report_blocks
 from app.shared.report_blocks import build_market_monitor_report_blocks
-from app.shared.llm_observability import LLMCallError, observability_config
-from app.shared.llm import llm_runtime_status
+from app.shared.llm import LLMCallError, llm_runtime_status, observability_config
 from .i18n import resolve_report_language, t
 
 logger = logging.getLogger(__name__)

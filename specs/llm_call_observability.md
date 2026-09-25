@@ -1,19 +1,25 @@
 # LLM call observability operations
 
-Market Monitor emits metadata-only LLM diagnostics by default. Full prompt and
-response capture is opt-in and must use a private Google Cloud Storage prefix
-that is not served by any report or artifact endpoint.
+Model calls made through the shared LLM client (`app/shared/llm/`, today the
+Market Monitor's) emit metadata-only diagnostics by default: one record per
+attempt, JSON log lines on the `app.llm_trace` logger, and a run snapshot for
+APIs and the live view. Full prompt and response capture is opt-in and must use
+a private Google Cloud Storage prefix that is not served by any report or
+artifact endpoint.
 
-The MFI Drafter's light workflow reports its own metadata-only call diagnostics
-(counts, sizes, attempts and outcomes) and never stores prompts or responses;
-its info and health endpoints still show the tracing configuration. The
-Seasonal Outlook keeps each request and response in its private bucket as part
-of the analysis audit trail.
+The MFI Drafter's light workflow still reports its own metadata-only call
+diagnostics (counts, sizes, attempts and outcomes) and never stores prompts or
+responses; its info and health endpoints still show the tracing configuration.
+The Seasonal Outlook keeps each request and response in its private bucket as
+part of the analysis audit trail. Both move onto the shared client next
+(`shared_layer_rationalization.md`).
 
 ## Runtime configuration
 
 - `LLM_TIMEOUT_SECONDS=90`: per-attempt deadline for ordinary LLM calls.
-- `LLM_MAX_RETRIES=2`: provider retry limit shared by traced calls.
+- `LLM_MAX_RETRIES=2`: attempts per call, retried only on transient errors
+  (timeouts, rate limits, server-side and network failures). As before the
+  shared client, 2 means one retry, and 0 or 1 mean a single attempt.
 - `LLM_TRACE_PAYLOADS=false` (default): structured call metadata only.
 - `LLM_TRACE_PAYLOADS=true`: persist gzip-compressed private payloads.
 - `LLM_TRACE_GCS_URI=gs://<private-bucket>/<optional-prefix>`: private storage

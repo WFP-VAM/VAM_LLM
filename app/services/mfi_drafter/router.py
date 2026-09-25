@@ -45,7 +45,7 @@ from app.shared.live_outputs import (
 
 from app.shared.docx_export import build_content_disposition, build_docx_bytes_from_report_blocks
 from app.shared.report_blocks import resolve_mfi_report_blocks
-from app.shared.llm_observability import observability_config
+from app.shared.llm import observability_config
 
 logger = logging.getLogger(__name__)
 

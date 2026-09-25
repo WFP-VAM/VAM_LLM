@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Optional, List, Dict, Any, Literal
 
 from app.shared.report_blocks import ReportBlock
-from app.shared.llm_observability import LLMRunDiagnostics
+from app.shared.llm import LLMRunDiagnostics
 from .methodology import ANALYSIS_SCHEMA_VERSION, DISPLAY_DIMENSIONS
 
 

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from types import SimpleNamespace
 
-from app.shared.llm_observability import LLMCallError
+from app.shared.llm import LLMCallError, LLMClient, market_monitor_profile
 from app.shared.report_blocks import build_market_monitor_report_blocks
 from app.services.market_monitor import graph as market_graph
 
@@ -670,8 +670,8 @@ def test_market_monitor_report_blocks_use_human_module_heading():
     ],
 )
 def test_optional_module_llm_failure_interrupts_instead_of_using_fallback(module, state):
-    class FailingLLM:
-        def invoke(self, *_args, **_kwargs):
+    class FailingProvider:
+        def generate(self, *_args, **_kwargs):
             raise RuntimeError("offline")
 
     call_state = {
@@ -681,7 +681,7 @@ def test_optional_module_llm_failure_interrupts_instead_of_using_fallback(module
         **state,
     }
     with pytest.raises(LLMCallError) as caught:
-        module.generate_section(call_state, FailingLLM())
+        module.generate_section(call_state, LLMClient(market_monitor_profile(), provider=FailingProvider()))
     assert caught.value.failure_code == "llm_transport_error"
     assert caught.value.node == "module_orchestrator"
 
@@ -725,7 +725,6 @@ def test_exchange_rate_module_falls_back_to_te_when_state_has_no_fx(monkeypatch)
 
 def test_exchange_rate_module_skip_warning_when_no_databridges_fx_or_te(monkeypatch):
     monkeypatch.delenv("TE_API_KEY", raising=False)
-    monkeypatch.setattr(market_graph, "get_model", lambda: None)
 
     result = market_graph.node_module_orchestrator(
         {

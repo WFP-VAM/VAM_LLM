@@ -1,67 +1,77 @@
+"""The shared LLM client and tracer: stable failure codes, sanitized records, retries, payload capture and logs."""
 import gzip
 import hashlib
 import json
 import logging
-from io import StringIO
 import threading
+from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 
+import httpx
 import pytest
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
+from google.oauth2.credentials import Credentials
 
-from app.shared import llm_observability as observability
-from app.shared.llm_observability import (
+from app.shared.llm import (
+    FilePart,
     LLMCallError,
-    LLMTraceSession,
-    extract_response_text,
+    LLMClient,
+    LLMRequest,
+    LLMResponse,
+    ModelProfile,
+    Tracer,
     parse_json_object,
 )
+from app.shared.llm import tracing
+from app.shared.llm.vertex import VertexProvider, reply_from
+
+PROFILE = ModelProfile(service="test-service", model="gemini-test", location="global",
+                       temperature=0.0, timeout_seconds=90.0)
+USAGE = {"prompt_tokens": 11, "candidate_tokens": 7, "thought_tokens": 3, "total_tokens": 21}
 
 
-class FakeResponse:
-    def __init__(self, content, *, response_id="response-1"):
-        self.content = content
-        self.id = response_id
-        self.response_metadata = {"finish_reason": "STOP"}
-        self.usage_metadata = {
-            "input_tokens": 11,
-            "output_tokens": 7,
-            "thoughts_token_count": 3,
-            "total_tokens": 21,
-        }
+class FakeProvider:
+    """Replies in order (text, or an exception to raise); the last reply repeats. Records every request."""
+
+    def __init__(self, *replies, finish_reason="STOP"):
+        self.replies = list(replies)
+        self.finish_reason = finish_reason
+        self.requests = []
+
+    def generate(self, _profile, request):
+        self.requests.append(request)
+        reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+        if isinstance(reply, BaseException):
+            raise reply
+        return LLMResponse(text=reply, finish_reason=self.finish_reason, response_id="response-1", usage=dict(USAGE))
 
 
-class FakeModel:
-    def __init__(self, response=None, error=None):
-        self.response = response
-        self.error = error
-        self.calls = 0
-
-    def invoke(self, _messages):
-        self.calls += 1
-        if self.error is not None:
-            raise self.error
-        return self.response
+def make_client(provider, *, run_id="run_public", live=None, audit=None, profile=PROFILE):
+    tracer = Tracer(service=profile.service, run_id=run_id, live=live, audit=audit)
+    return LLMClient(profile, tracer=tracer, provider=provider, sleep=lambda _seconds: None)
 
 
-def test_extract_response_text_supports_strings_and_langchain_blocks():
-    assert extract_response_text(FakeResponse(" hello "))[:2] == ("hello", "string")
-    text, shape, raw = extract_response_text(
-        FakeResponse(
-            [
-                {"type": "text", "text": "first"},
-                {"type": "output_text", "text": "second"},
-            ]
-        )
-    )
-    assert text == "first\nsecond"
-    assert shape == "content_blocks"
-    assert raw[0]["text"] == "first"
+def make_request(prompt="prompt", **fields):
+    return LLMRequest(operation="test.operation.v1", node="test_node", parts=[prompt], **fields)
 
 
-@pytest.mark.parametrize("content", ["", "   ", [], [{"type": "image"}], 42])
-def test_extract_response_text_rejects_empty_or_unsupported_content(content):
-    with pytest.raises((TypeError, ValueError)):
-        extract_response_text(FakeResponse(content))
+def test_reply_keeps_the_answer_without_thoughts_and_reads_usage():
+    response = types.GenerateContentResponse(
+        candidates=[types.Candidate(
+            content=types.Content(role="model", parts=[types.Part(text="reasoning", thought=True), types.Part(text="answer")]),
+            finish_reason=types.FinishReason.MAX_TOKENS)],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=11, candidates_token_count=7, thoughts_token_count=3, total_token_count=21),
+        response_id="r-1", model_version="gemini-test-001")
+    reply = reply_from(response)
+    assert (reply.text, reply.finish_reason, reply.response_id, reply.model_version) == (
+        "answer", "MAX_TOKENS", "r-1", "gemini-test-001")
+    assert reply.usage == USAGE
+    blocked = reply_from(types.GenerateContentResponse())
+    assert (blocked.text, blocked.finish_reason) == ("", "BLOCKED")
 
 
 def test_parse_json_object_accepts_fences_and_rejects_non_objects():
@@ -75,37 +85,20 @@ def test_parse_json_object_accepts_fences_and_rejects_non_objects():
 def test_successful_json_call_records_sanitized_metadata(monkeypatch):
     monkeypatch.delenv("LLM_TRACE_PAYLOADS", raising=False)
     snapshots = []
-    session = LLMTraceSession(service="mfi-drafter", run_id="mfi_public", sink=snapshots.append)
-    model = FakeModel(FakeResponse('{"value": 4}'))
-    messages = [{"role": "user", "content": "private prompt"}]
+    client = make_client(FakeProvider('{"value": 4}'), run_id="mfi_public", live=snapshots.append)
 
-    result = session.invoke_json(
-        model=model,
-        messages=messages,
-        node="dimension_drafter",
-        operation="mfi.dimension_drafting.v2",
-        artifact_type="dimension",
-        artifact_id="Price",
-        validator=lambda payload: payload["value"],
-    )
+    result = client.generate(make_request("private prompt", artifact_type="dimension", artifact_id="Price"),
+                             parse=parse_json_object, validate=lambda payload, _response: payload["value"])
 
     assert result.value == 4
-    diagnostic = session.snapshot()
+    diagnostic = client.tracer.snapshot()
     assert diagnostic["run_id"] == "mfi_public"
     assert diagnostic["succeeded_calls"] == 1
-    assert diagnostic["calls"][0]["sequence"] == 1
-    assert diagnostic["calls"][0]["prompt_sha256"] == hashlib.sha256(
-        json.dumps(messages[0], ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    assert diagnostic["calls"][0]["response_sha256"] == hashlib.sha256(
-        b'{"value": 4}'
-    ).hexdigest()
-    assert diagnostic["calls"][0]["token_usage"] == {
-        "prompt_tokens": 11,
-        "candidate_tokens": 7,
-        "thought_tokens": 3,
-        "total_tokens": 21,
-    }
+    call = diagnostic["calls"][0]
+    assert call["sequence"] == 1 and call["attempt"] == 1
+    assert call["prompt_sha256"] == hashlib.sha256(b"private prompt").hexdigest()
+    assert call["response_sha256"] == hashlib.sha256(b'{"value": 4}').hexdigest()
+    assert call["token_usage"] == USAGE
     public_json = json.dumps(diagnostic)
     assert "private prompt" not in public_json
     assert '{"value": 4}' not in public_json
@@ -114,32 +107,23 @@ def test_successful_json_call_records_sanitized_metadata(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("response", "error", "expected_code", "expected_stage"),
+    ("reply", "expected_code", "expected_stage"),
     [
-        (None, RuntimeError("provider token=secret"), "llm_transport_error", "transport"),
-        (FakeResponse(""), None, "llm_empty_or_unreadable_response", "response_extraction"),
-        (FakeResponse("not json"), None, "llm_invalid_json", "json_parse"),
-        (FakeResponse('{"wrong": true}'), None, "llm_response_contract_error", "contract_validation"),
+        (RuntimeError("provider token=secret"), "llm_transport_error", "transport"),
+        ("", "llm_empty_or_unreadable_response", "response_extraction"),
+        ("not json", "llm_invalid_json", "json_parse"),
+        ('{"wrong": true}', "llm_response_contract_error", "contract_validation"),
     ],
 )
-def test_json_failures_raise_typed_error_and_preserve_diagnostics(
-    response, error, expected_code, expected_stage
-):
-    session = LLMTraceSession(service="market-monitor", run_id="run_public")
-    model = FakeModel(response, error=error)
+def test_failures_raise_a_typed_error_and_keep_sanitized_diagnostics(reply, expected_code, expected_stage):
+    client = make_client(FakeProvider(reply))
 
     with pytest.raises(LLMCallError) as caught:
-        session.invoke_json(
-            model=model,
-            messages=[{"role": "user", "content": "prompt"}],
-            node="trend_analyst",
-            operation="market_monitor.trend_analysis.v1",
-            validator=lambda payload: payload["required"],
-        )
+        client.generate(make_request(), parse=parse_json_object, validate=lambda payload, _response: payload["required"])
 
     assert caught.value.failure_code == expected_code
     assert caught.value.stage == expected_stage
-    diagnostic = session.snapshot()
+    diagnostic = client.tracer.snapshot()
     assert diagnostic["status"] == "failed"
     assert diagnostic["failed_calls"] == 1
     call = diagnostic["calls"][0]
@@ -151,80 +135,124 @@ def test_json_failures_raise_typed_error_and_preserve_diagnostics(
 
 def test_invalid_concatenated_json_records_content_free_structure():
     raw = '{"flags": []}\n{"flags": []}'
-    session = LLMTraceSession(service="mfi-drafter", run_id="mfi-json-shape")
+    client = make_client(FakeProvider(raw), run_id="json-shape")
 
     with pytest.raises(LLMCallError) as caught:
-        session.invoke_json(
-            model=FakeModel(FakeResponse(raw)),
-            messages=[{"role": "user", "content": "private prompt"}],
-            node="red_team",
-            operation="mfi.red_team_review.v6",
-            validator=lambda payload: payload,
-        )
+        client.generate(make_request("private prompt"), parse=parse_json_object)
 
     assert caught.value.failure_code == "llm_invalid_json"
     assert caught.value.raw_text == raw
     assert "raw_text" not in caught.value.to_public_dict()
-    diagnostic = session.snapshot()
-    call = diagnostic["calls"][0]
+    call = client.tracer.snapshot()["calls"][0]
     assert call["json_root_value_count"] == 2
     assert call["json_trailing_character_count"] > 0
     assert call["json_error_line"] == 2
     assert call["json_error_column"] == 1
-    public_json = json.dumps(diagnostic)
+    public_json = json.dumps(client.tracer.snapshot())
     assert raw not in public_json
     assert '"flags"' not in public_json
 
 
-def test_recovered_call_is_successful_at_run_level_but_remains_auditable():
-    session = LLMTraceSession(service="mfi-drafter", run_id="mfi-recovered")
-    with pytest.raises(LLMCallError) as caught:
-        session.invoke_json(
-            model=FakeModel(FakeResponse('{"flags": []}{"flags": []}')),
-            messages=[{"role": "user", "content": "prompt"}],
-            node="red_team",
-            operation="mfi.red_team_review.v6",
-            validator=lambda payload: payload,
-        )
-    session.mark_recovered(caught.value.call_id)
+def test_public_error_names_the_call_and_its_artifact_only():
+    error = LLMCallError(failure_code="llm_transport_error", call_id="llm-1", node="red_team",
+                         operation="market_monitor.red_team_review.v1", stage="transport", raw_text="private",
+                         artifact_type="global", artifact_id="qa_review")
+    assert error.to_public_dict() == {
+        "code": "llm_call_failed", "failure_code": "llm_transport_error", "call_id": "llm-1", "node": "red_team",
+        "operation": "market_monitor.red_team_review.v1", "stage": "transport",
+        "artifact_type": "global", "artifact_id": "qa_review"}
+    assert "private" not in str(error)
 
-    diagnostic = session.snapshot()
+
+def test_recovered_call_is_successful_at_run_level_but_remains_auditable():
+    client = make_client(FakeProvider('{"flags": []}{"flags": []}'), run_id="recovered")
+    with pytest.raises(LLMCallError) as caught:
+        client.generate(make_request(), parse=parse_json_object)
+    client.tracer.mark_recovered(caught.value.call_id, disposition="recovered_by_repair")
+
+    diagnostic = client.tracer.snapshot()
     assert diagnostic["status"] == "completed"
-    assert diagnostic["succeeded_calls"] == 1
-    assert diagnostic["recovered_calls"] == 1
-    assert diagnostic["failed_calls"] == 0
-    assert diagnostic["contract_failed_calls"] == 0
+    assert (diagnostic["succeeded_calls"], diagnostic["recovered_calls"]) == (1, 1)
+    assert (diagnostic["failed_calls"], diagnostic["contract_failed_calls"]) == (0, 0)
     assert diagnostic["calls"][0]["status"] == "recovered"
     assert diagnostic["calls"][0]["failure_code"] == "llm_invalid_json"
 
 
-def test_started_snapshot_is_visible_before_blocking_model_returns():
-    entered = threading.Event()
-    release = threading.Event()
-    snapshots = []
+def test_transient_errors_are_retried_and_the_failed_attempt_recovered():
+    busy = genai_errors.ServerError(503, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+    provider = FakeProvider(busy, "done")
+    client = make_client(provider, profile=replace(PROFILE, attempts=2))
 
-    class BlockingModel:
-        def invoke(self, _messages):
+    assert client.generate(make_request()).value == "done"
+
+    diagnostic = client.tracer.snapshot()
+    assert diagnostic["status"] == "completed" and diagnostic["total_calls"] == 2
+    first, second = diagnostic["calls"]
+    assert (first["status"], first["disposition"], first["transient"]) == ("recovered", "recovered_by_retry", True)
+    assert (second["attempt"], second["retry_of"], second["status"]) == (2, first["call_id"], "succeeded")
+
+
+@pytest.mark.parametrize("error", [
+    genai_errors.ClientError(403, {"error": {"code": 403, "message": "denied", "status": "PERMISSION_DENIED"}}),
+    genai_errors.ClientError(400, {"error": {"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}}),
+])
+def test_permission_and_argument_errors_are_not_retried(error):
+    provider = FakeProvider(error, "never reached")
+    client = make_client(provider, profile=replace(PROFILE, attempts=3))
+    with pytest.raises(LLMCallError) as caught:
+        client.generate(make_request())
+    assert (caught.value.stage, caught.value.transient, len(provider.requests)) == ("transport", False, 1)
+
+
+def test_truncated_reply_fails_only_when_the_request_says_so():
+    client = make_client(FakeProvider("cut mid-sen", finish_reason="MAX_TOKENS"))
+    assert client.generate(make_request()).value == "cut mid-sen"
+    with pytest.raises(LLMCallError) as caught:
+        client.generate(make_request(fail_on_truncation=True))
+    assert (caught.value.failure_code, caught.value.stage) == ("llm_response_truncated", "response_extraction")
+
+
+def test_audit_failures_fail_the_call_with_the_original_error():
+    class Audit:
+        def __init__(self, fail_at):
+            self.fail_at = fail_at
+
+        def requested(self, record, request):
+            if self.fail_at == "request":
+                raise OSError("request store down")
+
+        def responded(self, record, response):
+            if self.fail_at == "response":
+                raise OSError("response store down")
+
+    for fail_at, code in (("request", "llm_request_persistence_error"), ("response", "llm_response_persistence_error")):
+        provider = FakeProvider("reply")
+        client = make_client(provider, audit=Audit(fail_at))
+        with pytest.raises(OSError):
+            client.generate(make_request())
+        call = client.tracer.snapshot()["calls"][0]
+        assert (call["status"], call["failure_code"]) == ("failed", code)
+        assert len(provider.requests) == (0 if fail_at == "request" else 1)
+
+
+def test_started_snapshot_is_visible_before_a_blocking_provider_returns():
+    entered, release, snapshots = threading.Event(), threading.Event(), []
+
+    class BlockingProvider:
+        def generate(self, _profile, _request):
             entered.set()
             assert release.wait(timeout=2)
-            return FakeResponse("ready")
+            return LLMResponse(text="ready")
 
-    session = LLMTraceSession(service="mfi-drafter", run_id="mfi_block", sink=snapshots.append)
-    thread = threading.Thread(
-        target=lambda: session.invoke_text(
-            model=BlockingModel(),
-            messages=[{"role": "user", "content": "prompt"}],
-            node="red_team",
-            operation="mfi.red_team_review.v6",
-        )
-    )
+    client = make_client(BlockingProvider(), live=snapshots.append)
+    thread = threading.Thread(target=lambda: client.generate(make_request()))
     thread.start()
     assert entered.wait(timeout=2)
     assert snapshots[0]["status"] == "running"
-    assert snapshots[0]["current_call_id"]
+    assert snapshots[0]["current_call_id"] == snapshots[0]["active_call_ids"][0]
     release.set()
     thread.join(timeout=2)
-    assert session.snapshot()["status"] == "completed"
+    assert client.tracer.snapshot()["status"] == "completed"
 
 
 def test_payload_capture_uses_deterministic_private_gzip_path(monkeypatch):
@@ -235,45 +263,28 @@ def test_payload_capture_uses_deterministic_private_gzip_path(monkeypatch):
     def fake_persist(**kwargs):
         stored.update(kwargs)
         stored["gzip"] = gzip.compress(json.dumps(kwargs["payload"]).encode("utf-8"))
-        return (
-            "gs://private-bucket/operator-prefix/llm-traces/v1/"
-            f"{kwargs['service']}/{kwargs['run_id']}/{kwargs['sequence']:04d}-{kwargs['call_id']}.json.gz"
-        )
+        return ("gs://private-bucket/operator-prefix/llm-traces/v1/"
+                f"{kwargs['service']}/{kwargs['run_id']}/{kwargs['sequence']:04d}-{kwargs['call_id']}.json.gz")
 
-    monkeypatch.setattr(observability, "_persist_payload", fake_persist)
-    session = LLMTraceSession(service="market-monitor", run_id="run-private")
-    session.invoke_text(
-        model=FakeModel(FakeResponse("response body")),
-        messages=[{"role": "user", "content": "prompt body"}],
-        node="module_orchestrator",
-        operation="market_monitor.exchange_rate_module.v1",
-    )
+    monkeypatch.setattr(tracing, "_persist_payload", fake_persist)
+    client = make_client(FakeProvider("response body"), run_id="run-private")
+    client.generate(make_request("prompt body"))
 
-    diagnostic = session.snapshot()
-    assert diagnostic["calls"][0]["payload_persistence_status"] == "stored"
+    assert client.tracer.snapshot()["calls"][0]["payload_persistence_status"] == "stored"
     payload = json.loads(gzip.decompress(stored["gzip"]))
-    assert payload["request"]["messages"][0]["content"] == "prompt body"
-    assert payload["response"]["normalized_text"] == "response body"
+    assert payload["request"]["parts"] == ["prompt body"]
+    assert payload["response"]["text"] == "response body"
     assert payload["diagnostic"]["status"] == "succeeded"
 
 
-def test_payload_storage_failure_does_not_change_valid_llm_result(monkeypatch):
+def test_payload_storage_failure_does_not_change_a_valid_result(monkeypatch):
     monkeypatch.setenv("LLM_TRACE_PAYLOADS", "true")
     monkeypatch.setenv("LLM_TRACE_GCS_URI", "gs://private-bucket")
-    monkeypatch.setattr(
-        observability,
-        "_persist_payload",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("storage unavailable")),
-    )
-    session = LLMTraceSession(service="mfi-drafter", run_id="mfi-storage")
-    result = session.invoke_text(
-        model=FakeModel(FakeResponse("valid prose")),
-        messages=[{"role": "user", "content": "prompt"}],
-        node="dimension_drafter",
-        operation="mfi.dimension_drafting.v2",
-    )
-    assert result.value == "valid prose"
-    diagnostic = session.snapshot()
+    monkeypatch.setattr(tracing, "_persist_payload",
+                        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("storage unavailable")))
+    client = make_client(FakeProvider("valid prose"), run_id="storage")
+    assert client.generate(make_request()).value == "valid prose"
+    diagnostic = client.tracer.snapshot()
     assert diagnostic["succeeded_calls"] == 1
     assert diagnostic["payload_persistence_failures"] == 1
 
@@ -281,7 +292,7 @@ def test_payload_storage_failure_does_not_change_valid_llm_result(monkeypatch):
 def test_observability_configuration_fails_closed_for_invalid_payload_uri(monkeypatch):
     monkeypatch.setenv("LLM_TRACE_PAYLOADS", "true")
     monkeypatch.setenv("LLM_TRACE_GCS_URI", "https://public.example/traces")
-    config = observability.observability_config()
+    config = tracing.observability_config()
     assert config.payload_capture_enabled is True
     assert config.payload_storage_configured is False
     assert config.configuration_status == "invalid"
@@ -290,17 +301,11 @@ def test_observability_configuration_fails_closed_for_invalid_payload_uri(monkey
 def test_structured_logs_never_include_prompt_or_response_bodies():
     stream = StringIO()
     handler = logging.StreamHandler(stream)
-    observability._TRACE_LOGGER.addHandler(handler)
+    tracing._TRACE_LOGGER.addHandler(handler)
     try:
-        session = LLMTraceSession(service="mfi-drafter", run_id="mfi-log")
-        session.invoke_text(
-            model=FakeModel(FakeResponse("TOP SECRET RESPONSE")),
-            messages=[{"role": "user", "content": "TOP SECRET PROMPT"}],
-            node="dimension_drafter",
-            operation="mfi.dimension_drafting.v2",
-        )
+        make_client(FakeProvider("TOP SECRET RESPONSE"), run_id="log").generate(make_request("TOP SECRET PROMPT"))
     finally:
-        observability._TRACE_LOGGER.removeHandler(handler)
+        tracing._TRACE_LOGGER.removeHandler(handler)
     lines = [line for line in stream.getvalue().splitlines() if line]
     assert lines
     log_text = "\n".join(lines)
@@ -308,6 +313,108 @@ def test_structured_logs_never_include_prompt_or_response_bodies():
     assert "TOP SECRET RESPONSE" not in log_text
     for line in lines:
         json.loads(line)
+
+
+@pytest.fixture
+def vertex_wire(monkeypatch):
+    """google-genai against a local HTTP transport: every request as sent, no network."""
+    calls, replies = [], []
+    real_client = genai.Client
+
+    def transport(request):
+        calls.append({"url": str(request.url), "body": json.loads(request.content), "headers": request.headers,
+                      "timeout": (request.extensions.get("timeout") or {}).get("read")})
+        if replies:
+            return replies.pop(0)
+        return httpx.Response(200, json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 4}})
+
+    def factory(**kwargs):
+        options = kwargs.pop("http_options")
+        options.httpx_client = httpx.Client(transport=httpx.MockTransport(transport))
+        return real_client(credentials=Credentials(token="offline-test-token"), http_options=options, **kwargs)
+
+    monkeypatch.setattr(genai, "Client", factory)
+    return calls, replies
+
+
+def test_vertex_provider_sends_the_profile_settings_and_nothing_else(vertex_wire):
+    calls, _ = vertex_wire
+    profile = replace(PROFILE, project="proj", candidate_count=1)
+    reply = VertexProvider().generate(profile, make_request("hello"))
+
+    assert "/projects/proj/locations/global/publishers/google/models/gemini-test:generateContent" in calls[0]["url"]
+    assert calls[0]["body"] == {"contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+                                "generationConfig": {"temperature": 0.0, "candidateCount": 1}}
+    assert calls[0]["timeout"] == 90.0
+    assert (reply.text, reply.finish_reason, reply.usage["total_tokens"]) == ("ok", "STOP", 4)
+
+
+def test_vertex_provider_sends_system_files_schema_thinking_and_headers(vertex_wire):
+    calls, _ = vertex_wire
+    profile = replace(PROFILE, project="proj", temperature=1.0, thinking_level="HIGH", include_thoughts=False,
+                      media_resolution="MEDIA_RESOLUTION_HIGH", headers=(("X-Vertex-AI-LLM-Request-Type", "shared"),))
+    request = LLMRequest(operation="o", node="n", system="rules", parts=["payload", FilePart("gs://bucket/map", "image/png")],
+                         response_schema={"type": "OBJECT", "properties": {"a": {"type": "STRING"}}}, json_output=True,
+                         max_output_tokens=32768, timeout_seconds=1200)
+    VertexProvider().generate(profile, request)
+
+    body = calls[0]["body"]
+    assert body["systemInstruction"]["parts"] == [{"text": "rules"}]
+    # google-genai keeps the spelling of some nested fields; Vertex accepts both.
+    assert body["contents"][0]["parts"][1]["fileData"] in ({"fileUri": "gs://bucket/map", "mimeType": "image/png"},
+                                                         {"file_uri": "gs://bucket/map", "mime_type": "image/png"})
+    config = body["generationConfig"]
+    assert (config["responseMimeType"], config["maxOutputTokens"], config["mediaResolution"]) == (
+        "application/json", 32768, "MEDIA_RESOLUTION_HIGH")
+    assert config["thinkingConfig"] in ({"thinkingLevel": "HIGH", "includeThoughts": False},
+                                        {"thinking_level": "HIGH", "include_thoughts": False})
+    assert calls[0]["headers"]["X-Vertex-AI-LLM-Request-Type"] == "shared"
+    assert calls[0]["timeout"] == 1200.0
+
+
+def test_vertex_provider_leaves_retries_to_the_client(vertex_wire):
+    calls, replies = vertex_wire
+    replies.append(httpx.Response(503, json={"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}}))
+    with pytest.raises(genai_errors.ServerError):
+        VertexProvider().generate(replace(PROFILE, project="proj"), make_request())
+    assert len(calls) == 1
+
+
+def test_vertex_provider_reuses_one_sdk_client_per_project_location_and_headers(monkeypatch):
+    created = []
+
+    class FakeSdkClient:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    monkeypatch.setattr(genai, "Client", FakeSdkClient)
+    provider = VertexProvider()
+    first = provider._client(replace(PROFILE, project="proj"))
+    assert provider._client(replace(PROFILE, project="proj", timeout_seconds=600)) is first
+    assert provider._client(replace(PROFILE, project="other")) is not first
+    assert len(created) == 2
+    assert created[0]["http_options"].retry_options.attempts == 1
+
+
+# Model SDKs may be used only by the shared LLM package; the drafters listed here move onto it in their own steps.
+_SDK_IMPORTS = ("google.genai", "from google import genai", "langchain_google_vertexai", "import vertexai",
+                "from vertexai", "google.cloud.aiplatform")
+_NOT_YET_MIGRATED = {"app/services/mfi_drafter/light_runtime.py", "app/services/mfi_drafter/light_contracts.py",
+                     "app/services/seasonal_outlook/provider.py"}
+
+
+def test_only_the_shared_client_talks_to_the_model_sdk():
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for path in (root / "app").rglob("*.py"):
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith("app/shared/llm/") or relative in _NOT_YET_MIGRATED:
+            continue
+        source = path.read_text(encoding="utf-8")
+        offenders += [f"{relative}: {name}" for name in _SDK_IMPORTS if name in source]
+    assert offenders == []
 
 
 def test_report_workflows_have_no_direct_model_invocations():
@@ -319,8 +426,6 @@ def test_report_workflows_have_no_direct_model_invocations():
     ):
         source = (root / relative).read_text(encoding="utf-8")
         direct_invocations = [
-            line.strip()
-            for line in source.splitlines()
-            if ".invoke(" in line and permitted not in line
+            line.strip() for line in source.splitlines() if ".invoke(" in line and permitted not in line
         ]
         assert direct_invocations == []

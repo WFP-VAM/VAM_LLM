@@ -1,19 +1,11 @@
-"""Validated, cache-safe Vertex LLM configuration."""
+"""Market Monitor's validated model settings: LLM_MODEL, VERTEX_LOCATION, LLM_TIMEOUT_SECONDS and so on."""
 from __future__ import annotations
 
 import math
 import os
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Dict, Literal, Optional
 
-from dotenv import load_dotenv
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_google_vertexai import ChatVertexAI
 from pydantic import BaseModel, Field
-
-from app.shared.config import resolve_project
-
-
-load_dotenv()
 
 DEFAULT_LLM_TIMEOUT_SECONDS = 90.0
 DEFAULT_LLM_MAX_RETRIES = 2
@@ -53,9 +45,6 @@ class LLMRuntimeStatus(BaseModel):
     max_retries: Optional[int] = None
     error_code: Optional[str] = None
     error_field: Optional[str] = None
-
-
-_model_instances: Dict[Tuple[Any, ...], BaseChatModel] = {}
 
 
 def _float_setting(name: str, default: float) -> float:
@@ -137,49 +126,3 @@ def llm_runtime_status() -> LLMRuntimeStatus:
         default_timeout_seconds=config.default_timeout_seconds,
         max_retries=config.max_retries,
     )
-
-
-def get_model(
-    *,
-    timeout_seconds: Optional[float] = None,
-    max_retries: Optional[int] = None,
-) -> BaseChatModel:
-    """Return a Vertex model cached by every effective invocation setting."""
-    config = llm_runtime_config()
-    timeout = (
-        config.default_timeout_seconds
-        if timeout_seconds is None
-        else float(timeout_seconds)
-    )
-    retries = config.max_retries if max_retries is None else int(max_retries)
-    if timeout <= 0 or timeout > MAX_LLM_TIMEOUT_SECONDS:
-        raise LLMRuntimeConfigurationError(
-            "timeout_seconds",
-            f"must be greater than 0 and at most {MAX_LLM_TIMEOUT_SECONDS:g}",
-        )
-    if retries < 0 or retries > MAX_LLM_RETRIES:
-        raise LLMRuntimeConfigurationError(
-            "max_retries",
-            f"must be at least 0 and at most {MAX_LLM_RETRIES}",
-        )
-
-    project = resolve_project()
-    key = (
-        config.model,
-        project,
-        config.location,
-        timeout,
-        retries,
-        config.max_output_tokens,
-    )
-    if key not in _model_instances:
-        _model_instances[key] = ChatVertexAI(
-            model_name=config.model,
-            project=project,
-            location=config.location,
-            temperature=0,
-            timeout=timeout,
-            max_retries=retries,
-            max_output_tokens=config.max_output_tokens,
-        )
-    return _model_instances[key]

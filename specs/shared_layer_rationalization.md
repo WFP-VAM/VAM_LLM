@@ -381,6 +381,29 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - `cloud.py` arrives with its first users in Phases 2–3 rather than empty.
 - Verification: full suite 855 tests, 852 passed, 3 skipped, with no outcome changed from the fix branch. MFI and Seasonal snapshots identical. Every page renders, and all first-party imports resolve.
 
+**Phase 2, step 1 (the client; Market Monitor), done 2026-09-25:**
+- **New package `app/shared/llm/`:**
+  - `protocol`: request and response types.
+  - `profiles`: each drafter's model settings.
+  - `settings`: the `LLM_*` settings, moved from `llm.py` without its LangChain factory or its import-time `.env` loading.
+  - `errors`: stable failure codes and the transient-error classification.
+  - `schema`: JSON parsing.
+  - `vertex`: the only google-genai code. One SDK client per project, location and header set, SDK retries off, and a timeout on each request.
+  - `tracing`: moved from `llm_observability.py`. Records, logs, payload capture and the live sink keep their behaviour. It adds one record per attempt, retry and repair links, the list of active calls and a mandatory audit hook.
+  - `client`: `LLMClient`. It retries transient transport errors only, and parsing and validation run inside the call's record.
+- **Market Monitor** calls go through `LLMClient` with its profile. `llm.py` and `llm_observability.py` no longer exist; they moved into the package. Its tests replace the model through `graph.llm_provider`.
+- **Wire comparison:** the 12 requests of the mock-data bulletin, in English and French, are identical to LangChain's: prompts, generation settings, timeouts, model and location. The reports built from them are identical too. For this, the harness now seeds the mock prices, pins the `LLM_*` settings, and runs the old code from a temporary worktree of the pre-migration commit.
+- **Behaviour changes, as decided:**
+  - only transient errors are retried (D3);
+  - a truncated reply fails the call (D5);
+  - each attempt is its own record, and a failed attempt that a retry fixed shows as recovered;
+  - `configured_max_retries` now shows the real retry count: 1 for the default two attempts.
+- **SDK guard:** a test fails if any module outside `app/shared/llm/` imports a model SDK. MFI's `light_runtime.py` and `light_contracts.py` and Seasonal's `provider.py` are exempt until their steps.
+- **Verification:**
+  - full suite 860 tests, 857 passed, 3 skipped, with no outcome changed;
+  - 15 tests replaced (LangChain-specific, or checking `batch_id`, which no app code set) and 20 added (retries, truncation, audit hook, the provider's wire format and client reuse);
+  - MFI and Seasonal snapshots identical; every page renders; imports resolve.
+
 ---
 
 ## 6. Decisions

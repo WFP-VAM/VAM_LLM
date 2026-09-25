@@ -42,7 +42,7 @@ PHASE_DESCRIPTIONS = {
 
 def service_info():
     """Service metadata shared by the HTTP router and the in-process dispatcher."""
-    from app.shared.llm_observability import observability_config
+    from app.shared.llm import observability_config
     from .features import mfi_release_control
     from .schemas import MFI_DIMENSIONS
     release_control = mfi_release_control()

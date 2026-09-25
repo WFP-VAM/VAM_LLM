@@ -69,9 +69,9 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 - `app/services/price_cache/` — DataBridges price cache (SQLite or Cloud SQL)
   and its DataBridges client, behind the Price Bulletin Drafter.
 - `app/shared/` — process set-up (environment, logging, Google Cloud project),
-  Vertex LLM configuration, LLM call observability, async run store and live
-  run metadata, retrievers, country/ISO3 mapping, report blocks and the DOCX
-  exporter.
+  the LLM client (`llm/`: model profiles, the google-genai provider, call
+  tracing), async run store and live run metadata, retrievers, country/ISO3
+  mapping, report blocks and the DOCX exporter.
 - `app/streamlit_backend/dispatcher.py` — in-process request dispatcher used by
   the Streamlit UI.
 - `pages/` + `streamlit_app.py` + `streamlit_shared.py` — Streamlit UI (WFP
