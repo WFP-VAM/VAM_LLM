@@ -225,6 +225,32 @@ def test_invalid_response_saved_before_failure(service, finish):
     assert not run['versions']
 
 
+def test_phase_errors_are_stored_without_credentials(service):
+    class Leaky(FakeProvider):
+        def complete(self, request, timeout):
+            raise RuntimeError('upstream rejected api_key=AIzaSECRET, token: abc123')
+    run = action(service, prepared(service), 'extract')
+    op = run['active']
+    with pytest.raises(RuntimeError):
+        perform(service, run, Leaky())
+    failed = service.get(run['id'])['operations'][op]
+    for error in (failed['error'], failed['calls'][-1]['error']):
+        assert 'AIzaSECRET' not in error and 'abc123' not in error
+        assert 'api_key=[redacted]' in error
+
+
+def test_api_replies_do_not_expose_storage_uris(service, monkeypatch):
+    from app.services.seasonal_outlook import api
+    monkeypatch.setattr(api, 'get_service', lambda: service)
+    run = perform(service, action(service, prepared(service), 'extract'))
+    op = next(iter(run['operations']))
+    assert 'gs://' in json.dumps(run)  # The stored record keeps them: the provider sends maps by URI.
+    for parts in (['runs', run['id']], ['runs', run['id'], 'operations'], ['runs', run['id'], 'operations', op],
+                  ['runs', run['id'], 'versions']):
+        reply = api.handle('GET', parts)
+        assert reply.status == 200 and 'gs://' not in json.dumps(reply.data), parts
+
+
 def test_confirmation_invalidated_and_old_report_cannot_be_retried(service):
     run = perform(service, action(service, prepared(service), 'extract'))
     evidence = run['current_evidence']

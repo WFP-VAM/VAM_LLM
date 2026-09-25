@@ -7,6 +7,8 @@ partial state); the analyst retries it from the same inputs.
 """
 import time
 
+from app.shared.util import redact_secrets
+
 from .exports import build
 from .graph import build_graph
 from .provider import VertexProvider, digest
@@ -96,7 +98,7 @@ def run_phase(service, run_id, operation_id, provider=None):
             run.update(active=None, status='completed' if artifacts else 'awaiting_review', artifacts=artifacts)
         _update(service, run_id, operation_id, finish)
     except Exception as exc:
-        error = type(exc).__name__ + ': ' + str(exc)[:1500]
+        error = type(exc).__name__ + ': ' + redact_secrets(str(exc))[:1500]
 
         def fail(run, op):
             op.update(status='failed', error=error, finished_at=service.clock())

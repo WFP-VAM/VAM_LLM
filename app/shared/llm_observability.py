@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, Generic, Iterator, List, Literal, Mappin
 from pydantic import BaseModel, Field
 
 from app.shared.llm import llm_runtime_config
+from app.shared.util import redact_secrets
 
 
 TRACE_SCHEMA_VERSION = "1.0"
@@ -172,10 +173,6 @@ class TracedLLMResult(BaseModel, Generic[T]):
 TraceSink = Callable[[Dict[str, Any]], None]
 
 
-_SECRET_PATTERN = re.compile(
-    r"(?i)(authorization|api[_-]?key|api[_-]?secret|client[_-]?secret|token)"
-    r"(\s*[:=]\s*)([^\s,;]+)"
-)
 _SAFE_SLUG_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
 _CURRENT_SESSION: ContextVar[Optional["LLMTraceSession"]] = ContextVar(
     "llm_trace_session", default=None
@@ -218,9 +215,7 @@ def _safe_slug(value: Any) -> str:
 
 
 def _sanitize_error(value: Any) -> str:
-    text = str(value or "").strip()
-    text = _SECRET_PATTERN.sub(lambda match: f"{match.group(1)}{match.group(2)}[redacted]", text)
-    return text[:1000]
+    return redact_secrets(str(value or "").strip())[:1000]
 
 
 def _json_safe(value: Any) -> Any:
