@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,10 @@ import streamlit as st
 from app.services.mfi_drafter.table_projection import build_mfi_raw_table_downloads
 from app.shared.report_blocks import basket_definition_table_display
 from app.streamlit_backend.dispatcher import dispatch_request
+
+# Streamlit configures only its own loggers, so without this the Streamlit process
+# (the one the container runs) drops application INFO logs. Same format as main.py.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 WFP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/WFP_Logo.svg/512px-WFP_Logo.svg.png"
 INSTRUCTIONS_PAGE_URL = "/How_To_Use_The_Tools"
