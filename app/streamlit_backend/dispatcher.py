@@ -97,6 +97,7 @@ from app.services.market_monitor.features import (
     normalize_secondary_request,
     second_basket_feature_metadata,
 )
+from app.services.market_monitor.i18n import resolve_report_language, t
 from app.services.market_monitor.schemas import GenerateReportInput, ReportableMonthsInput
 
 logger = logging.getLogger(__name__)
@@ -1035,9 +1036,11 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
     except BasketValidationError as exc:
         raise LocalHTTPException(400, str(exc))
 
+    language_info = resolve_report_language(input_data.country, input_data.language)
+    language = language_info["language"]
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     create_run(run_id)
-    initial_metadata: Dict[str, Any] = {"feature_flags": submission_feature_flags}
+    initial_metadata: Dict[str, Any] = {**language_info, "feature_flags": submission_feature_flags}
     if basket_selection is not None:
         initial_metadata["basket_selection"] = basket_selection.to_metadata()
     update_run(run_id, metadata=initial_metadata)
@@ -1113,19 +1116,23 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
                             rows=rows,
                         )
                         section_updates["databridges"] = build_databridges_live_output(
-                            title="Price Data",
+                            title=t(language, "live.price_data.title"),
                             summary=(
-                                f"{len(rows)} price row(s) retrieved for "
-                                f"{input_data.country} ({input_data.time_period}) "
-                                "from cache plus any targeted backfill."
+                                t(
+                                    language,
+                                    "live.price_data.summary",
+                                    rows=len(rows),
+                                    country=input_data.country,
+                                    period=input_data.time_period,
+                                )
                             ),
                             rows=rows,
                             download_artifacts=artifacts,
                         )
                     elif input_data.use_mock_data:
                         section_updates["databridges"] = build_databridges_live_output(
-                            title="Price Data",
-                            summary="Mock data is enabled for this run, so no price rows were read.",
+                            title=t(language, "live.price_data.title"),
+                            summary=t(language, "live.price_data.mock"),
                             rows=[],
                             download_artifacts=[],
                             status="skipped",
@@ -1143,11 +1150,11 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
                             documents=seerist_docs,
                         )
                         section_updates["seerist"] = build_document_live_output(
-                            title="Seerist Documents",
+                            title=t(language, "live.seerist.title"),
                             summary=(
-                                f"Seerist retrieval unavailable: {seerist_error}"
+                                t(language, "live.docs.unavailable", source="Seerist", error=seerist_error)
                                 if seerist_error
-                                else f"{len(seerist_docs)} Seerist documents retrieved."
+                                else t(language, "live.docs.summary", count=len(seerist_docs), source="Seerist")
                             ),
                             documents=seerist_previews,
                             status="failed" if seerist_error else "completed",
@@ -1161,11 +1168,11 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
                             documents=reliefweb_docs,
                         )
                         section_updates["reliefweb"] = build_document_live_output(
-                            title="ReliefWeb Documents",
+                            title=t(language, "live.reliefweb.title"),
                             summary=(
-                                f"ReliefWeb retrieval unavailable: {reliefweb_error}"
+                                t(language, "live.docs.unavailable", source="ReliefWeb", error=reliefweb_error)
                                 if reliefweb_error
-                                else f"{len(reliefweb_docs)} ReliefWeb documents retrieved."
+                                else t(language, "live.docs.summary", count=len(reliefweb_docs), source="ReliefWeb")
                             ),
                             documents=reliefweb_previews,
                             status="failed" if reliefweb_error else "completed",
@@ -1220,6 +1227,10 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
             set_run_completed(run_id, result=result)
         except Exception as exc:
             tb_str = None if isinstance(exc, LLMCallError) else traceback.format_exc()
+            if isinstance(exc, LLMCallError):
+                logger.error("Report generation stopped for %s: %s", run_id, exc)
+            else:
+                logger.exception("Report generation failed for %s: %s", run_id, exc)
             current_node = (
                 exc.node
                 if isinstance(exc, LLMCallError)
@@ -1319,6 +1330,7 @@ def _market_monitor_export_docx(run_id: str, *, json_body: Any) -> LocalResponse
             visualizations=result.get("visualizations", {}),
             include_sources=include_sources,
             include_visualizations=include_visualizations,
+            language=result.get("language", "en"),
         )
     except Exception as exc:
         raise LocalHTTPException(500, f"DOCX generation failed: {str(exc)}")
@@ -1366,6 +1378,15 @@ def _market_monitor_info() -> Dict[str, Any]:
                 "required": True,
                 "label": "Time Period",
                 "description": "Period in YYYY-MM format (e.g., '2025-01')",
+            },
+            {
+                "name": "language",
+                "type": "string",
+                "required": False,
+                "label": "Language",
+                "description": "Report language: auto country default, English, French, or Spanish",
+                "default": "auto",
+                "options": ["auto", "en", "fr", "es"],
             },
             {
                 "name": "commodity_list",
