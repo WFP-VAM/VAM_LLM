@@ -46,6 +46,11 @@ class RunRecord:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
+
+class RunStoreUnavailable(RuntimeError):
+    """Durable run storage is configured but cannot be written, so the run is not started."""
+
+
 _RUNS: Dict[str, RunRecord] = {}
 _RUN_ARTIFACTS: Dict[str, Dict[str, RunArtifact]] = {}
 _LOCK = threading.Lock()
@@ -390,12 +395,11 @@ def create_run(run_id: str) -> None:
             _RUN_ARTIFACTS[run_id] = {}
         return
 
+    # A run kept in memory while the durable store is selected would be invisible
+    # to get_run, so storage problems stop the run instead of hiding it.
     doc_ref = _firestore_doc_ref(run_id)
     if doc_ref is None:
-        with _LOCK:
-            _RUNS[run_id] = RunRecord(status="pending", current_node=None, progress_pct=0, metadata={}, artifacts=[])
-            _RUN_ARTIFACTS[run_id] = {}
-        return
+        raise RunStoreUnavailable("Run storage is unavailable; the run was not started.")
 
     now = time.time()
     try:
@@ -415,13 +419,9 @@ def create_run(run_id: str) -> None:
             },
             merge=True,
         )
-    except Exception:
-        logger.exception("Failed to create run in Firestore; falling back to in-memory")
-        global _BACKEND
-        _BACKEND = "memory"
-        with _LOCK:
-            _RUNS[run_id] = RunRecord(status="pending", current_node=None, progress_pct=0, metadata={}, artifacts=[])
-            _RUN_ARTIFACTS[run_id] = {}
+    except Exception as exc:
+        logger.exception("Failed to create run %s in Firestore", run_id)
+        raise RunStoreUnavailable("Run storage is unavailable; the run was not started.") from exc
 
 def get_run(run_id: str) -> Optional[RunRecord]:
     if not _use_durable_store():

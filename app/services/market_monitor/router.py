@@ -49,6 +49,7 @@ from .schemas import (
     ReportStatusOutput
 )
 from app.shared.async_runs import (
+    RunStoreUnavailable,
     create_run,
     get_run,
     get_run_artifact,
@@ -308,7 +309,10 @@ async def generate_market_monitor_async(
     language = language_info["language"]
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
-    create_run(run_id)
+    try:
+        create_run(run_id)
+    except RunStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     initial_metadata = {**language_info, "feature_flags": submission_feature_flags}
     if basket_selection is not None:
         initial_metadata["basket_selection"] = basket_selection.to_metadata()

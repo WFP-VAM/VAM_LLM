@@ -1,6 +1,10 @@
 import pytest
+from fastapi.testclient import TestClient
 
+import main
+from app.services.market_monitor import router as market_monitor_router
 from app.shared import async_runs
+from app.streamlit_backend import dispatcher
 
 
 @pytest.mark.parametrize("backend", [None, "memory", " MEMORY "])
@@ -120,3 +124,42 @@ def test_add_and_get_run_artifact_with_durable_backend(monkeypatch):
     assert artifact is not None
     assert artifact.file_name == "preview.txt"
     assert artifact.content == b"hello durable world"
+
+
+class _FailingDocRef:
+    def set(self, payload, merge=True):
+        raise RuntimeError("firestore unavailable")
+
+
+@pytest.mark.parametrize("doc_ref", [None, _FailingDocRef()], ids=["no client", "write fails"])
+def test_durable_store_failure_stops_the_run_without_switching_to_memory(monkeypatch, doc_ref):
+    monkeypatch.setattr(async_runs, "_BACKEND", "firestore_gcs")
+    monkeypatch.setattr(async_runs, "_RUNS", {})
+    monkeypatch.setattr(async_runs, "_firestore_doc_ref", lambda run_id: doc_ref)
+
+    with pytest.raises(async_runs.RunStoreUnavailable):
+        async_runs.create_run("lost-run")
+
+    assert async_runs._BACKEND == "firestore_gcs"
+    assert async_runs._RUNS == {}
+
+
+_MOCK_REPORT_REQUEST = {
+    "country": "South Sudan", "time_period": "2025-01", "commodity_list": ["Maize"],
+    "admin1_list": [], "currency_code": "SSP", "enabled_modules": [], "use_mock_data": True,
+}
+
+
+def _unavailable(_run_id):
+    raise async_runs.RunStoreUnavailable("Run storage is unavailable; the run was not started.")
+
+
+def test_report_request_gets_503_when_run_storage_is_unavailable(monkeypatch):
+    monkeypatch.setattr(dispatcher, "create_run", _unavailable)
+    monkeypatch.setattr(market_monitor_router, "create_run", _unavailable)
+
+    local = dispatcher.dispatch_request("POST", "/market-monitor/generate-async", json_body=_MOCK_REPORT_REQUEST)
+    api = TestClient(main.app).post("/market-monitor/generate-async", json=_MOCK_REPORT_REQUEST)
+
+    assert local.status_code == api.status_code == 503
+    assert "Run storage is unavailable" in local.json()["detail"]

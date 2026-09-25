@@ -16,6 +16,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from app.shared.async_runs import (
+    RunStoreUnavailable,
     create_run,
     get_run,
     get_run_artifact,
@@ -597,7 +598,10 @@ def _mfi_drafter_generate_from_csv_async(
         raise LocalHTTPException(400, str(exc))
 
     run_id = f"mfi_{uuid.uuid4().hex[:8]}"
-    create_run(run_id)
+    try:
+        create_run(run_id)
+    except RunStoreUnavailable as exc:
+        raise LocalHTTPException(503, str(exc)) from exc
     try:
         validate_submission(csv_data)
     except MFIRunError as exc:
@@ -1039,7 +1043,10 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
     language_info = resolve_report_language(input_data.country, input_data.language)
     language = language_info["language"]
     run_id = f"run_{uuid.uuid4().hex[:8]}"
-    create_run(run_id)
+    try:
+        create_run(run_id)
+    except RunStoreUnavailable as exc:
+        raise LocalHTTPException(503, str(exc)) from exc
     initial_metadata: Dict[str, Any] = {**language_info, "feature_flags": submission_feature_flags}
     if basket_selection is not None:
         initial_metadata["basket_selection"] = basket_selection.to_metadata()

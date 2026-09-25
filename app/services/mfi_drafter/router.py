@@ -29,6 +29,7 @@ from .schemas import (
 )
 
 from app.shared.async_runs import (
+    RunStoreUnavailable,
     create_run,
     get_run,
     get_run_artifact,
@@ -237,7 +238,10 @@ async def generate_mfi_report_from_csv_async(
         raise HTTPException(status_code=400, detail=str(e))
 
     run_id = f"mfi_{uuid_module.uuid4().hex[:8]}"
-    create_run(run_id)
+    try:
+        create_run(run_id)
+    except RunStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     try:
         validate_submission(csv_data)
     except MFIRunError as exc:
