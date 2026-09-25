@@ -1,0 +1,391 @@
+# Shared layer rationalization: one LLM client, one observability layer, one run infrastructure
+
+**Status: approved 25 September 2026, except D1 (SDK), which is still open (§6).** Based on a read-only analysis of `VAM-LLM-Sep2026` @ `41d76af`, after the coherence refactor (`coherence_refactor_plan.md`). Branches:
+- The existing defects of §3.6 that D8 covers are fixed on `fix/post-phase7`. They ship once the coherence refactor is accepted on GCP (its Phase 7).
+- The refactor itself happens on `refactor/shared-layer`, which is based on those fixes. Nothing from it is merged or deployed before that acceptance.
+
+---
+
+## 1. Summary
+
+Today each drafter calls the model, records its calls and manages its runs in its own way:
+
+- **Three LLM stacks.**
+  - Market Monitor (MM) goes through `app/shared/llm.py`, using LangChain `ChatVertexAI`.
+  - MFI builds its own `ChatVertexAI` and relies on private helpers of the shared module and of LangChain.
+  - Seasonal Outlook uses a different SDK (`google-genai`) and imports nothing from `app/shared`.
+- **Three call recorders.**
+  - Only MM uses `llm_observability.py`.
+  - MFI copies its field names but gives some of them different meanings.
+  - Seasonal has an audit recorder without call ids, failure codes or logs.
+- **Two run infrastructures.** MM and MFI use `async_runs.py`, a simple status store. Seasonal built a more robust store of its own.
+- **Duplicated endpoints.** MM and MFI implement every endpoint twice, once in the FastAPI router and once in the Streamlit dispatcher. Production uses the dispatcher copy, and it has drifted from the router.
+
+The proposal, in one line per area:
+
+1. **One LLM client** (`app/shared/llm/`). Every model call goes through `LLMClient`, using a per-drafter model profile and one SDK. Drafters keep their prompts, schemas, validators and domain repair logic.
+2. **Observability built into that client.** Every call produces the same record and reaches the same outputs: the live run view, structured logs and optional payload capture. Seasonal's mandatory audit becomes one more output. No call can bypass it.
+3. **One run infrastructure** (`app/shared/runs/`).
+   - Seasonal's store, launcher, deadlines and late-write guards become shared.
+   - MM and MFI runs are rebuilt on them, replacing `async_runs.py`.
+   - Seasonal keeps its own record format on the same primitives.
+4. **One implementation per endpoint** (recommended, outside `app/shared`). The dispatcher stops re-implementing MM and MFI.
+5. **`app/shared` holds only shared code.** Drafter-specific code moves into its drafter, and shared code stops importing drafters.
+
+§3.3 explains why Seasonal does not use `async_runs`.
+
+## 2. Principles
+
+1. **One way to call a model.** A model call outside `app/shared/llm/` is a test failure.
+2. **Every call is observed the same way.** There is one record schema and one tracer. Where the records go (UI, logs, payload capture, audit) is configured per drafter.
+3. **One run infrastructure.** MM and MFI get the guarantees Seasonal already has.
+4. **Behaviour-preserving migration.** Each drafter moves separately. Each move is checked against snapshots of the exact model requests, using the tooling from the coherence refactor.
+5. **Portability seams for the later AWS move** (`aws_step_functions_assessment.md`). The model provider, the store and the background executor are each an interface with one GCP implementation today. A later Bedrock provider, DynamoDB/S3 store or Step Functions runner would then replace one implementation, not three drafters.
+6. **Nothing visible changes unless it is listed.** Prompts, models, analytics, reports, environment variable names and stored data stay as they are, except for the changes in §6.
+
+---
+
+## 3. Current state
+
+### 3.1 LLM access
+
+| | Market Monitor | MFI Drafter | Seasonal Outlook |
+|---|---|---|---|
+| Entry point | `app/shared/llm.py` `get_model()` | its own client in `light_runtime.py` | `VertexProvider` in `provider.py` |
+| SDK | LangChain `ChatVertexAI` | LangChain `ChatVertexAI`, plus private LangChain/GAPIC calls for token counting and schema checks | `google-genai` |
+| Client reuse | cache keyed by settings | `lru_cache` | new client for every call |
+| Model | `LLM_MODEL` (default `gemini-2.5-pro`) | `gemini-3.1-pro-preview`, hard-coded | `SEASONAL_MODEL` (default `gemini-3.1-pro-preview`) |
+| Location | `VERTEX_LOCATION` (default `us-central1`) | `global`, hard-coded | `global` |
+| Project | env chain, then ADC | the shared *private* helper | `SEASONAL_PROJECT` only |
+| Generation settings | temperature 0; JSON requested in the prompt text | temperature 1.0; 65,536 output tokens; response schema | temperature 1.0; thinking HIGH; media resolution HIGH; response schema |
+| Timeout | 90 s (`LLM_TIMEOUT_SECONDS`) | 600 s (180 s for the summary) | 600 s (1200 or 1800 s on retry) |
+| Retries | SDK: `LLM_MAX_RETRIES=2` total attempts, on *any* Google API error, including permission denied | 2 attempts on transient errors, repairing missing sections | none; the analyst retries the whole phase |
+| Token budget | none | character budget and CountTokens; oversized requests are split | none |
+| Truncated response | recorded, not checked | detected and repaired | fails the phase |
+| Pydantic-to-Gemini schema | not used | its own converter | a second, different converter |
+| Calls | up to ~30 per report, sequential | 5–7 per report, 2 in parallel | 3 (extract), 1 (feedback), 3 (report) |
+
+Each of the following is implemented two or three times:
+- project discovery;
+- configuration reading;
+- client caching;
+- response-text extraction;
+- JSON parsing (three levels of leniency);
+- finish-reason checks;
+- retry loops;
+- error classification;
+- prompt hashing;
+- token-usage normalisation;
+- timestamps.
+
+### 3.2 Observability
+
+| | Market Monitor | MFI | Seasonal |
+|---|---|---|---|
+| Recorder | shared `LLMTraceSession` | own `RunLedger` (same field names, some with other meanings) | own `Recorder` |
+| Call ids | yes | yes, in a different format | none |
+| Failure codes | 4 codes × 4 stages | 2 generic codes, no stage | free text |
+| Tokens | normalised, but thought tokens are always empty (bug) | prompt, candidate, total | raw provider dictionary |
+| Structured logs | `app.llm_trace` JSON lines | none | none |
+| Payloads | opt-in capture to a private GCS prefix (30 days) | none, yet `/info` reports the shared capture settings | always stored, kept permanently, included in the audit ZIP |
+| Live view | current call, counters, last failure | counters only, no current call; a failed run's last update still says "running" | stage progress; calls shown as raw JSON |
+| `/info` and `/health` | both | both | `/info` only |
+| Error text | sanitised | exception class name only | not sanitised; may contain model output |
+
+Only `main.py` configures logging. Production runs the Streamlit process, which configures none, so application INFO logs are probably not emitted there. The exception is `app.llm_trace`, which installs its own handler.
+
+### 3.3 Runs, and why Seasonal does not use `async_runs`
+
+| | `async_runs.py` (MM, MFI) | Seasonal store (`storage.py`, `service.py`, `runner.py`) |
+|---|---|---|
+| Model | one job: pending → running → completed or failed | an analysis with several operations, human pauses and evidence versions |
+| Writes | read, then merge; no transaction | Firestore transactions, revision numbers, 409 on conflict |
+| Background launch | 4 places: 2 `BackgroundTasks`, 2 dispatcher threads | one launcher |
+| Worker dies | the run stays "running" forever | the deadline passes, the run shows "interrupted", and late threads are blocked from writing |
+| Repeated requests | none | idempotent request ids |
+| History | none; the UI remembers only the last run | filtered list backed by composite indexes |
+| Large downloads | streamed through the app | signed URLs |
+| Storage error | one failed write switches the whole process to memory, silently, and earlier runs become invisible | fails closed |
+| Completion | two separate writes | one transaction |
+
+Seasonal does not use `async_runs` because `async_runs` cannot hold what Seasonal needs:
+- an analysis spans several operations separated by human review;
+- evidence versions must be immutable;
+- two analysts may act on the same analysis at once;
+- actions must be idempotent;
+- analyses must be searchable;
+- large files are downloaded through signed URLs;
+- every model request and response is kept as an audit trail.
+
+Its own store ended up more robust than `async_runs` on every row above. **So Seasonal does not need `async_runs`, but the app should not keep two run infrastructures.** The proposal reverses the direction: Seasonal's primitives become the shared infrastructure (§4.4).
+
+### 3.4 Duplicated endpoints
+
+The dispatcher (`app/streamlit_backend/dispatcher.py`, 1,793 lines) re-implements every MM and MFI endpoint next to the FastAPI routers. Only Seasonal delegates both transports to one implementation (`seasonal_outlook/api.handle`). Since the container runs Streamlit only, production uses the dispatcher copies, which have drifted from the routers:
+- MM Word export ignores the report language, so the "References" heading is English in French and Spanish bulletins downloaded from the app.
+- MM runs omit the language from their metadata, and their live-output titles are not translated.
+- MM `/info` lacks the `language` input.
+- MM `/cache/refreshes` is missing.
+- Responses are never validated.
+
+The background-run code, the status, artifact and export routes, and the live-output blocks exist in 2–4 copies each.
+
+### 3.5 The rest of `app/shared`
+
+| Module | Lines | Used by | Issue |
+|---|---:|---|---|
+| `__init__.py` | 22 | nobody | lazy exports that nothing imports |
+| `llm.py` | 208 | MM (MFI borrows a private helper) | MM-only in practice; loads `.env` as an import side effect |
+| `llm_observability.py` | 1,103 | MM (MFI uses only its schema and settings) | MM-only in practice; `invoke_json` and `invoke_text` are near copies that have drifted |
+| `async_runs.py` | 843 | MM, MFI | see §3.3 |
+| `live_outputs.py` | 263 | MM, MFI | the DataBridges part is MM-only |
+| `report_blocks.py` | 592 | MM, MFI | about 70% is the MM report builder; the MFI layout contract is also here |
+| `docx_export.py` | 557 | MM, MFI | contains MFI styling and the MM basket table; imports MM's i18n, so shared depends on a drafter |
+| `retrievers.py` | 699 | MM, MFI | loads `.env` at import; MM and MFI each re-implement fetch, merge and dedupe around it |
+| `countries.py` | 164 | MM, MFI, price cache, retrievers | fine |
+| `market_monitor_basket_ui.py` | 430 | the Price Bulletin page | drafter page code in shared |
+
+Small helpers are duplicated across the whole app:
+
+| Helper | Copies |
+|---|---:|
+| boolean env parsers | 5 |
+| "serialise anything" JSON encoders | 4 |
+| fingerprint functions | 4 |
+| "UTC now" helpers | 6 |
+| `gs://` parsers | 2 |
+| GCS writers | 3 |
+| slug helpers | 6 |
+| secret redactors | 3 |
+
+Seasonal writes its Word documents with raw python-docx. `streamlit_shared.py` (1,129 lines) mixes generic UI with MM and MFI specifics. The three pages poll for progress in three different ways.
+
+### 3.6 Existing defects found during the analysis
+
+Independent of the refactor; most are small fixes. Items 1–4 and 9 are fixed on `fix/post-phase7` (D8). The others are handled by the phases noted in brackets.
+
+1. MM Word export from the app ignores the language (§3.4).
+2. MM runs started from the app omit the language from their metadata, leave live-output titles untranslated, and `/info` lacks the `language` input.
+3. `async_runs` switches the whole process to memory after one failed Firestore write, and runs stored before that become invisible.
+4. No logging configuration in the Streamlit process.
+5. `LLM_MAX_RETRIES` [Phase 2]:
+   - In the installed LangChain it is a *total* number of attempts, so 2 means one retry.
+   - It retries every Google API error, including permission denied and invalid argument, with 4–10 s backoff.
+6. MM diagnostics: `thought_tokens` is always empty, and `provider_response_id` holds a LangChain run id [Phase 2].
+7. MFI live diagnostics [Phase 2]:
+   - A failed run's last update still says "running".
+   - When one parallel branch fails, the other branch still finishes its paid call.
+8. MFI (FastAPI path only): model output errors come back as a 400 "CSV validation error" [Phase 4].
+9. Seasonal:
+   - `GET /runs/{id}` exposes `gs://` URIs, including the bucket name.
+   - Call errors are stored unsanitised.
+10. From Phase 7: `requirements.txt` is unpinned. MFI's private LangChain calls are the most exposed to an upgrade. You chose not to pin; the Cloud Build log is compared with the tested versions instead.
+
+---
+
+## 4. Target design
+
+### 4.1 Layout
+
+```
+app/shared/
+  config.py          .env loading at the entry points, typed env readers, project resolution, logging setup
+  util.py            canonical JSON, fingerprints, UTC timestamps, slugs, secret redaction
+  cloud.py           cached Firestore/Storage clients, gs:// parsing, blob writes and reads, signed URLs
+  llm/
+    __init__.py      public API
+    profiles.py      one model profile per drafter, with its env overrides; status for /info
+    client.py        LLMClient: generate, generate_json, count_tokens; retry policy; tracing hooks
+    vertex.py        google-genai provider: the only SDK-specific code
+    schema.py        Pydantic → Gemini schema, response text, JSON parsing, finish reasons
+    errors.py        error taxonomy, transient classification, HTTP mapping
+    tracing.py       call record, run trace, sinks (live, logs, payload capture, audit)
+  runs/
+    store.py         transactional document store + content-addressed blob store; GCP and memory backends
+    executor.py      background launch, deadlines → interrupted, guards against late writers
+    report_runs.py   the MM/MFI run record (replaces async_runs.py)
+    live_outputs.py  live previews and their artifacts (generic part)
+  documents/
+    blocks.py        ReportBlock
+    docx.py          generic Word renderer; drafters supply a theme and labels
+  context/
+    retrievers.py    Seerist, ReliefWeb
+    news.py          shared fetch, merge and dedupe of context documents (MM and MFI)
+  countries.py
+```
+
+"One place" here means one package per concern, each with one public entry point. It does not mean one file: together these concerns are several thousand lines.
+
+What leaves `app/shared`:
+
+| Today | Moves to |
+|---|---|
+| `market_monitor_basket_ui.py` | `market_monitor/basket_ui.py` |
+| MM report builder in `report_blocks.py`; the MM basket table in `docx_export.py` | `market_monitor/report_blocks.py` |
+| MFI layout contract in `report_blocks.py`; MFI styling in `docx_export.py` | `mfi_drafter/report_layout.py`, which hands a theme to the shared renderer |
+| the import of MM's i18n inside shared | labels passed in as parameters |
+| MM and MFI branches of `streamlit_shared.py` | drafter UI modules, as Seasonal already does with `ui.py` |
+
+### 4.2 LLM client
+
+```python
+from app.shared.llm import LLMClient, LLMRequest, profiles
+
+client = LLMClient(profiles.MFI, tracer=tracer)          # one client per run, passed explicitly
+reply = client.generate(LLMRequest(
+    operation="mfi.light.draft_dimensions.v1", node="draft_dimensions", work_item=work_id,
+    contents=[prompt], response_schema=SectionsResponse))
+# reply: text, finish_reason, usage (prompt/candidate/thought/total), response_id, served_model
+value = client.generate_json(request, validator=inspect_sections)   # parse and validate, or raise LLMError
+tokens = client.count_tokens(request)
+```
+
+- **Profiles reproduce today's settings exactly** (table in §3.1).
+  - MM keeps `gemini-2.5-pro`, `us-central1`, temperature 0 and 90 s.
+  - MFI keeps its fixed contract.
+  - Seasonal keeps its `SEASONAL_*` settings.
+  - Existing environment variable names do not change.
+- **One SDK: `google-genai`** (D1).
+  - Seasonal already uses it.
+  - It covers everything the three drafters need: thinking, media resolution, response schemas, CountTokens, `gs://` image parts, per-request timeouts and retry options.
+  - It removes MFI's calls to private LangChain and GAPIC functions, which any upgrade can break.
+  - It lets us drop `langchain-google-vertexai` and `google-cloud-aiplatform` if nothing else needs them. LangGraph keeps `langchain-core`.
+  - MM sends single user messages without tools, so LangChain adds nothing there.
+- **Retries belong to the client** (D3).
+  - SDK retries are always off. The client retries only transient errors (timeouts, 429, 500, 503, aborted, connection errors), up to the profile's attempts, with backoff, and records each attempt.
+  - Permission denied, invalid argument and blocked responses fail immediately.
+- **Truncated and blocked responses are reported the same way everywhere.** Each drafter decides what to do: MFI repairs, Seasonal fails, MM per D5.
+- **MFI's content repair stays in MFI.** Re-requesting missing sections is domain logic. It calls the client again, and the record links the repair to the failed attempt.
+- **Token counting and budgets** are available to every drafter.
+- **Optional concurrency limit** per model, to protect quota when several reports run at once.
+- **Explicit wiring.** The client reaches graph nodes explicitly, through the graph builder or the LangGraph config, not through a ContextVar.
+- **Test guard.** A test fails if any module outside `app/shared/llm/` imports `google.genai`, `langchain_google_vertexai`, `vertexai` or `google.cloud.aiplatform`.
+
+### 4.3 Observability
+
+- **One call record for every call.** It extends today's `LLMCallDiagnostic` with these fields:
+  - identity: call id, sequence, service, run id, operation, node, work item (MFI work id or Seasonal stage), attempt, link to the attempt being repaired;
+  - model: requested and served model, location, timeout;
+  - timing: start, end, duration;
+  - outcome: status, failure code, stage, transient flag, sanitised error;
+  - content: prompt and response sizes and hashes, finish reason, normalised token usage (including thought tokens), response id.
+- **One run trace.** It holds counters, token totals and the list of active calls; MFI runs two at once, so a single "current call" is not enough. A failed attempt followed by a successful retry counts as *recovered*, not as a failure.
+- **Sinks, configured per run:**
+
+| Sink | MM | MFI | Seasonal |
+|---|---|---|---|
+| Live run view | run record | run record | the operation's `calls` |
+| Structured logs (`app.llm_trace`) | yes | yes (new) | yes (new) |
+| Payload capture: opt-in, private GCS prefix, 30-day lifecycle | yes | yes, new (D4) | not needed |
+| Audit: mandatory, written before validation; if it cannot be written, the call fails | – | – | yes (today's behaviour) |
+
+- **Same privacy rules everywhere.** Error text is sanitised the same way, and bucket names never appear in API responses.
+- **Status endpoints.** One `llm_status()` feeds `/info` and `/health` for all three services; Seasonal gains `/health`.
+- **UI.** One diagnostics panel for all three pages.
+- **Logging.** Logging is configured once for the Streamlit process, as JSON on stdout, which Cloud Logging collects.
+- **Compatibility.**
+  - Stored MM and MFI results still load, because trace schema 1.0 is still accepted.
+  - Seasonal's call entries only gain fields. There is no workflow-revision bump, so existing analyses stay open.
+
+### 4.4 Runs
+
+- **`store.py`**, extracted from `seasonal_outlook/storage.py`:
+  - a document store: get, transactional mutate, filtered and ordered list, size guard;
+  - a blob store: content-addressed create-only writes, checksum-verified reads, signed URLs;
+  - Firestore/GCS and memory backends.
+- **`executor.py`**, extracted from Seasonal's `service.py` and `runner.py`:
+  - `launch()`: a daemon thread today. The Step Functions/ECS runner of the AWS assessment would implement the same interface.
+  - Deadline expiry into "interrupted", checked when a run is read.
+  - A transactional guard that blocks late writers.
+- **`report_runs.py`** replaces `async_runs.py` for MM and MFI.
+  - It keeps the same function names (`create_run`, `get_run`, `update_run`, `set_run_completed`, `set_run_failed`, `add_run_artifact`, `get_run_artifact`), so call sites barely change.
+  - New: service and id fields.
+  - New: a per-drafter deadline after which the run shows "interrupted".
+  - New: completion in one write.
+  - New: `list_runs(service)` for history.
+  - New: when durable storage is configured but unreachable, it fails instead of falling back silently. Without durable storage it uses memory, as today.
+  - Records written by `async_runs` stay readable.
+- **Seasonal** keeps its analysis record, operations, versions and API. It swaps its private store, launcher and guards for the shared ones, with identical behaviour checked by snapshot.
+- **Later option (D6).** MM and MFI runs could become single-operation records with Seasonal's shape. One status, progress, diagnostics and history UI would then serve all three drafters.
+
+### 4.5 One implementation per endpoint (recommended; outside `app/shared`)
+
+- **(a) Seasonal's pattern.** Each drafter exposes one `api.handle(...)`, and FastAPI and the dispatcher are thin adapters around it.
+- **(b) FastAPI as the only implementation.** The typed FastAPI routers stay, and the dispatcher calls the FastAPI app in-process over ASGI, with no network. Background work moves from `BackgroundTasks` to the shared launcher. This keeps OpenAPI docs and request and response validation for all drafters.
+
+Recommendation: (b), after a short spike confirming that the in-process call works from Streamlit's threads; otherwise (a). Either option removes about 1,500 duplicated dispatcher lines and the drift listed in §3.4.
+
+### 4.6 Other modules
+
+- **documents.** `ReportBlock` stays shared. The builders move into the drafters, and the renderer takes a theme and labels. Seasonal's Word export can adopt it later (optional).
+- **context.** A shared `news.py` does fetch, merge and dedupe for MM and MFI. The retrievers log through the standard logger.
+- **config, util, cloud.** One copy of each helper. Call sites move in the modules the phases already touch; untouched domain helpers (for example in the price cache) stay as they are.
+- **Streamlit.** The generic UI stays in `streamlit_shared.py`, and drafter-specific parts move to drafter UI modules. All pages poll with the same fragment-based mechanism.
+
+### 4.7 What does not change
+
+- Prompts, schemas, validators, graphs, analytics and report content.
+- Environment variable names, Firestore collections and buckets.
+- Readability of stored records.
+- UI flows, apart from the added diagnostics and history.
+
+---
+
+## 5. Migration plan
+
+Work happens on `refactor/shared-layer`, which is based on `fix/post-phase7`. Merging and deploying wait until Phase 7 of the coherence refactor is accepted and the D8 fixes have shipped.
+
+| Phase | Content | Verification | Size |
+|---|---|---|---|
+| 0 | **Baselines.** Exact provider requests for all three drafters through fake transports (new for MM), plus the current diagnostics and run records | – | S |
+| 1 | **Foundations.** `config` (env loading at the entry points, logging, which moves out of `streamlit_shared.py`), `util` (started by D8) and `cloud`; move `market_monitor_basket_ui.py`; drop the `__init__` exports | full suite; snapshots unchanged | S |
+| 2 | **LLM client and tracing on `google-genai`.** Migrate Seasonal first (already on `google-genai`), then MFI, then MM. Retire `llm.py`, `llm_observability.py`, MFI's client and Seasonal's provider and `Recorder` | requests identical to the baselines (MM: same prompt text and parameters); outputs identical; complete diagnostics for all three | L |
+| 3 | **Runs.** Shared store, launcher and guards extracted from Seasonal; Seasonal on them; `report_runs.py` replaces `async_runs.py` | Seasonal snapshots identical; MM/MFI lifecycle tests including "interrupted"; old records readable | M |
+| 4 | **One implementation per endpoint** (D7) | API smoke tests over both transports; AppTest on every page | M–L |
+| 5 | **Documents, context and UI consolidation** | Word output identical (text and styles); pages render | M |
+| 6 | **Close-out.** Docs, `.env.example`, requirements; container build and suite; a no-traffic GCP revision with one run of each drafter | as in Phase 7 of the coherence refactor | S |
+
+Each phase is a set of commits that can be released on its own. Phases 4 and 5 can be deferred without blocking 1–3.
+
+---
+
+## 6. Decisions
+
+Taken on 25 September 2026, except D1.
+
+| # | Question | Decision |
+|---|---|---|
+| D1 | SDK behind the client | **Open.** Recommended: `google-genai` for all three drafters. Alternative: keep LangChain for MM and MFI as a second provider behind the same client. Needed before Phase 2. |
+| D2 | Models and parameters | Unchanged per drafter (MM stays on Gemini 2.5 Pro, temperature 0). Model changes are a separate, evaluated decision. |
+| D3 | Automatic retries | Transient errors only, each attempt recorded. MM: 2 attempts (as today, but no longer on permission or invalid-argument errors). MFI: unchanged. Seasonal: 2 attempts per call on transient errors, so a single 503 no longer forces the analyst to rerun the whole phase. |
+| D4 | Payload capture for MFI | Opt-in, off by default, with the same controls as MM. |
+| D5 | MM truncated responses | Fail the call, as MFI and Seasonal do. |
+| D6 | Runs | MM and MFI runs move to the shared store; a common record shape is decided later. |
+| D7 | Duplicated endpoints | Included. Option (b) of §4.5 after a spike, otherwise (a). |
+| D8 | Existing defects (§3.6) | 1–4 and 9 are fixed on `fix/post-phase7` and ship right after Phase 7 acceptance, before this refactor. |
+| D9 | Timing | Work starts now on `refactor/shared-layer`. Nothing is merged or deployed before Phase 7 acceptance and the release of D8. |
+
+**What D1 changes.** For analysts, nothing: the same models, prompts and settings either way, and in both cases every call goes through the same client with the same tracing, retries and errors. The difference is inside the client.
+
+| | A: `google-genai` everywhere (recommended) | B: LangChain kept for MM and MFI |
+|---|---|---|
+| Implementations inside the client | one | two (LangChain for MM and MFI, `google-genai` for Seasonal) |
+| MM and MFI requests | sent through new code; proven unchanged by request snapshots and one live run each | keep today's exact path |
+| MFI token counting and schema check | public `google-genai` calls | still LangChain internals, which any upgrade can break |
+| Dependencies | `langchain-google-vertexai` and `google-cloud-aiplatform` can go (LangGraph stays) | both stay |
+| Converters, response formats, error families | one of each | two of each, permanently |
+| New features (for example thinking settings for MM) | implemented once | implemented twice |
+
+A carries a one-off migration risk, and snapshots measure it. B carries a permanent maintenance cost.
+
+## 7. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Switching SDK changes what the model receives | Transport-level snapshots of exact requests per drafter; migrate one drafter at a time; MM prompt text and parameters compared byte for byte |
+| The two schema converters produce different MFI or Seasonal schemas | Golden files of the generated schemas; the unified converter must reproduce both |
+| Stored records stop loading (MM/MFI results, `async_runs` documents, Seasonal calls) | Additive changes only; readers accept the old trace schema; no Seasonal workflow-revision bump |
+| Retry changes affect cost and latency | Every attempt is recorded; D3 keeps today's attempt counts except Seasonal |
+| In-process FastAPI calls misbehave in Streamlit threads (D7) | Spike first; fall back to option (a) |
+| Scope creep | Phases are independent; 1–3 deliver what was asked (LLM, observability, runs) |
+| Overlap with the release being verified | Separate branch; nothing is merged or deployed before Phase 7 acceptance and the D8 release |
