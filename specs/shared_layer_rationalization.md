@@ -460,6 +460,14 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - added: a transient failure retried within the phase, the retry-or-refusal rule on the wire, no workstation project, the audit hooks and payload capture turned off;
   - every page renders and all modules import.
 
+**Phase 2 cleanup, done 2026-09-25** (Phase 2 is complete):
+- `requirements.txt` drops `langchain-google-vertexai`, `google-cloud-aiplatform` and `langchain-core`, which no module imports any more. LangGraph still installs `langchain-core` for itself.
+- The image loses 11 packages: the two SDKs and what only they needed (the BigQuery, Resource Manager, Vector Search and IAM clients, `httpx-sse`, `docstring-parser`, `validators`, and pandas' optional `numexpr` and `bottleneck`, which the app does not use).
+- **Verification:**
+  - An image was built from the staged tree with `git -c core.autocrlf=false archive`, so files keep the repository's LF endings, as in Cloud Build. A plain `git archive` on Windows converts them to CRLF and breaks the prompt-manifest hashes.
+  - It passes `pip check` and the suite with the versions installed today (langgraph 1.2.12, langchain-core 1.6.5, google-genai 1.75.0): 846 passed, 30 skipped (the tests that need the confidential datasets).
+  - The app starts and answers its health check.
+
 ---
 
 ## 6. Decisions
