@@ -1,6 +1,6 @@
 # Coherence refactor plan (GCP): LangGraph for Seasonal, no checkpoint layer, dead-code removal
 
-**Status: Phases 0–6 done on `refactor/gcp-coherence` (not pushed); Phase 7 (GCP verification) to do.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them. Each phase records what was built under its **Done** heading.
+**Status: Phases 0–6 done on `refactor/gcp-coherence` (not pushed); Phase 7's automated checks done, its GCP verification to do.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them. Each phase records what was built under its **Done** heading.
 
 ---
 
@@ -352,7 +352,7 @@ Tests were classified one by one, not by file. A test was removed when it import
   - `deploy/seasonal-outlook/main.tf` no longer creates the Job or the dispatcher role. It grants the app identity Vertex AI, keeps the old worker account as the download-link signer with bucket read access only, and renames `job_region` to `region`. Its header gives the upgrade path from a state with the Job (which has deletion protection) and when to apply it: only after the new revision is accepted, with the app's Vertex grant made by hand before deploying.
   - `terraform.tfvars.example` matches.
   - `CONSOLE_SETUP.md` (Italian) describes the Job-free setup, the Cloud Run settings the background phases need, and how to upgrade an existing Job-based configuration.
-  - Terraform is not installed here, so the HCL was reviewed but not validated.
+  - Terraform is not installed here, so the HCL was reviewed but not validated (Phase 7 validated it in a container).
 - **`.env.example`:** as planned, plus the unused `GOOGLE_API_KEY` removed. The run-store note no longer mentions MFI recovery.
 - **Historical headers:** added to the six superseded MFI specs. `mfi_drafter_r2_semantics.md` is marked *partly* historical, because its ledger fields still describe the analysis layer.
 - **Left untouched:** dated plans, audits and roadmaps (`specs/phase_*`, `repo_split_plan.md`, the Seasonal integration assessment), as the README already states for dated records.
@@ -372,9 +372,29 @@ Tests were classified one by one, not by file. A test was removed when it import
   - one MM bulletin;
   - one MFI report (Benin CSV);
   - one full Seasonal cycle (extract → feedback → confirm → report → downloads);
-  - one Seasonal retry after a forced failure.
+  - one Seasonal retry after a forced failure. No fault switch is needed: deploy a first tagged test revision with `SEASONAL_MODEL` set to a model that does not exist and start an extraction, which fails at its first stage; then open the same analysis on the correctly configured test revision and use **Retry failed operation**. The model is read from the service settings when a phase runs, so the retry uses the right one.
+- **Switch traffic** once these pass. Let analysts finish any Seasonal analysis in progress on the old revision first: after the switch, analyses created before it stay in the history list but no longer open (D4).
 - **After acceptance only:** delete the Seasonal Job and its dispatcher role (`deploy/seasonal-outlook/CONSOLE_SETUP.md`, section 8), or apply `deploy/seasonal-outlook/main.tf`. The previous revision still needs them. The `SEASONAL_JOB*` variables can be dropped from the new revision when it is deployed, since each revision keeps its own.
 - **Rollback:** route traffic back to the previous revision. Seasonal analyses created by the new version will not display in the old one, because the operation format changes.
+
+**Automated checks done 2026-09-25**, on `4fb3541`:
+- Full suite in the local venv (Windows): 846 tests, 843 passed, 3 skipped. This is the Phase 6 run; the code has not changed since.
+- **Linux image** built from the committed tree (`git archive HEAD`, the files Cloud Build checks out): Python 3.11.16, clean install of `requirements.txt`, `pip check` clean. It boots with `start.sh`: `/_stcore/health` answers `ok` and the pages load in a browser.
+- **In that image**, with the local MFI benchmark CSVs mounted read-only: **843 passed, 3 skipped**, the same skips as on Windows (live DataBridges, two Postgres). Without the CSVs, 27 more tests skip, as they would in Cloud Build.
+- **Snapshots** taken in the image match the Windows ones. The only differences are:
+  - float noise around 1e-15 in MFI scores, including the numbers inside the prompts;
+  - re-rendered figure bytes;
+  - the dependency versions each MFI result records;
+  - the hashes of the synthetic Seasonal maps, which the image encodes differently.
+
+  Report text, Word text and ZIP contents are identical.
+- **API and dispatcher** return the same status on `/`, `/health`, the MM and MFI `/info` and `/health`, and Seasonal `/info` and `/runs` (503 without storage). The one body difference predates the refactor (`eb667ab`): the dispatcher's MM `/info` omits the `language` input.
+- **Imports:** all 426 first-party imports and `app.…` references in live code resolve, including imports inside functions and patch targets. Nothing refers to a deleted module.
+- Every page renders (AppTest).
+- **Terraform:** `terraform validate` and `terraform fmt -check` pass on `deploy/seasonal-outlook/main.tf` (Terraform 1.9.8, Google provider 7.46.1, in a container). A real `terraform plan` needs the company credentials.
+- **Found (both predate the refactor):**
+  - `requirements.txt` pins almost nothing, so Cloud Build installs the latest releases. The image has pandas 3.0.6, Streamlit 1.64.0, LangGraph 1.2.12 and FastAPI 0.141.1; the local venv has 2.3.3, 1.53.1, 1.0.5 and 0.128.0. The image passes every check above, but a later build may resolve differently. Pinning to the tested image's `pip freeze` would make the deployed image the tested one.
+  - From FastAPI 0.141, each included router appears in `app.routes` as one entry without a path. `test_fastapi_has_no_validator_routes` therefore no longer sees the service routes; it passes without checking them.
 
 ---
 

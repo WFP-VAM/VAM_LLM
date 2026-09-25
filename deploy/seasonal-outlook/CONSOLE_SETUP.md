@@ -107,4 +107,4 @@ Se Seasonal era già attivo con il Cloud Run Job:
 
 Le analisi create prima dell'aggiornamento restano nello storico ma non possono più essere aperte. Per tornare indietro basta reindirizzare il traffico alla revisione precedente, finché il Job non è stato eliminato; le analisi create con la nuova versione non si aprono nella precedente.
 
-Verifica locale del 25 settembre 2026: **38 test Seasonal superati**. Build Linux e collaudo GCP rimangono da eseguire nell'ambiente aziendale (fase 7 del [piano di refactoring](../../specs/coherence_refactor_plan.md)). Nessuna risorsa GCP è stata creata o modificata durante il refactoring.
+Verifica locale del 25 settembre 2026: **38 test Seasonal superati**. L'immagine Linux costruita dal branch ha superato l'intera suite di test (Docker) e `terraform validate` è riuscito. `terraform plan` e il collaudo GCP rimangono da eseguire nell'ambiente aziendale (fase 7 del [piano di refactoring](../../specs/coherence_refactor_plan.md)). Nessuna risorsa GCP è stata creata o modificata durante il refactoring.
