@@ -339,7 +339,7 @@ Work happens on `refactor/shared-layer`, which is based on `fix/post-phase7`. Me
 |---|---|---|---|
 | 0 | **Baselines.** Exact provider requests for all three drafters through fake transports (new for MM), plus the current diagnostics and run records | – | S |
 | 1 | **Foundations.** `config` (env loading at the entry points, logging, which moves out of `streamlit_shared.py`), `util` (started by D8) and `cloud`; move `market_monitor_basket_ui.py`; drop the `__init__` exports | full suite; snapshots unchanged | S |
-| 2 | **LLM client and tracing on `google-genai`.** Migrate Seasonal first (already on `google-genai`), then MFI, then MM. Retire `llm.py`, `llm_observability.py`, MFI's client and Seasonal's provider and `Recorder` | requests identical to the baselines (MM: same prompt text and parameters); outputs identical; complete diagnostics for all three | L |
+| 2 | **LLM client and tracing on `google-genai`.** Migrate MM first, because `llm_observability.py` has no other user and can become the shared tracer instead of being duplicated; then MFI, then Seasonal. Retire `llm.py`, `llm_observability.py`, MFI's client and Seasonal's provider and `Recorder` | requests identical to the baselines (MM: same prompt text and parameters); outputs identical; complete diagnostics for all three | L |
 | 3 | **Runs.** Shared store, launcher and guards extracted from Seasonal; Seasonal on them; `report_runs.py` replaces `async_runs.py` | Seasonal snapshots identical; MM/MFI lifecycle tests including "interrupted"; old records readable | M |
 | 4 | **One implementation per endpoint** (D7) | API smoke tests over both transports; AppTest on every page | M–L |
 | 5 | **Documents, context and UI consolidation** | Word output identical (text and styles); pages render | M |
@@ -356,6 +356,19 @@ Each phase is a set of commits that can be released on its own. Phases 4 and 5 c
 - Seasonal: API replies carry no storage URIs, and phase errors are redacted.
 
 Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code before its fix.
+
+**Phase 0, done 2026-09-25.** The tooling lives in git-ignored `.tmp/shared-layer/`:
+- **What runs:** `wire_mm.py`, `wire_mfi.py` and `wire_seasonal.py` run each drafter end to end offline with its real SDK client. They record every request as it would leave for Vertex.
+- **How it intercepts:**
+  - LangChain: at its gRPC client, with each request converted to JSON; fields left at their default value are omitted, as they are on the wire.
+  - google-genai: at the HTTP transport, with the JSON body read as sent.
+- **Key spelling:** API field names are compared in camelCase, because Vertex accepts both spellings and google-genai sends dict-typed schemas and configs with the keys it was given.
+- **Baselines** (`before/`):
+  - MM: 12 requests, a mock-data bulletin in English and French, through LangChain.
+  - MFI: 14 generation requests and 28 token counts, Benin and Haiti, through LangChain.
+  - Seasonal: 21 requests, AFY, AMX and ASE, through google-genai.
+- **Comparison:** after each migration, rerun the drafter's script and compare with `compare_wire.py`.
+- **Deprecation:** the installed `langchain-google-vertexai` warns that `ChatVertexAI`, used by MM and MFI, is deprecated since 3.2.0 and will be removed in 4.0.
 
 **Phase 1, done 2026-09-25** on `refactor/shared-layer`:
 - `app/shared/config.py` provides `load_environment`, `configure_logging` and `resolve_project`.
