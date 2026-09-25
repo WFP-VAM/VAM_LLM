@@ -42,9 +42,9 @@ def _cached_model(project, timeout):
 
 class VertexClient:
     def model(self, timeout):
-        from app.shared.llm import _get_vertex_project_id
+        from app.shared.config import resolve_project
         with _client_lock:
-            return _cached_model(_get_vertex_project_id(), timeout)
+            return _cached_model(resolve_project(), timeout)
 
     def count(self, messages, schema, timeout):
         model = self.model(timeout)

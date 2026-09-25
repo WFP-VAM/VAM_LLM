@@ -78,7 +78,7 @@ def test_vertex_clients_are_cached_by_effective_settings(monkeypatch) -> None:
             created.append(kwargs)
 
     monkeypatch.setattr(llm, "ChatVertexAI", FakeVertex)
-    monkeypatch.setattr(llm, "_get_vertex_project_id", lambda: "project")
+    monkeypatch.setattr(llm, "resolve_project", lambda: "project")
     default_a = llm.get_model()
     default_b = llm.get_model()
     red_team_a = llm.get_model(timeout_seconds=180, max_retries=2)

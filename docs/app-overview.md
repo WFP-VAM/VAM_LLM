@@ -135,6 +135,8 @@ UNIFIED APP/
 
   app/
     shared/
+      config.py                # Process set-up: .env, logging, Google Cloud project
+      util.py                  # Small shared helpers (secret redaction)
       llm.py                   # Vertex model factory (Market Monitor)
       llm_observability.py     # LLM call tracing
       async_runs.py            # Run lifecycle & artifact management
@@ -143,13 +145,12 @@ UNIFIED APP/
       report_blocks.py         # Abstract report block model
       docx_export.py           # DOCX rendering engine
       live_outputs.py          # Real-time run metadata formatting
-      market_monitor_basket_ui.py # Price Bulletin basket configuration helpers
 
     services/
       mfi_drafter/             # MFI report generation
         router.py, light_graph.py, light_service.py, light_runtime.py, schemas.py, data_loader.py
       market_monitor/          # Market Monitor generation
-        router.py, graph.py, schemas.py, data_loader.py
+        router.py, graph.py, schemas.py, data_loader.py, basket_ui.py
       price_cache/             # DataBridges price cache used by Market Monitor
         config.py, sql_repository.py, databridges_adapter.py, refresh_worker.py, migrations/
       seasonal_outlook/        # Seasonal Outlook drafting

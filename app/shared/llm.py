@@ -10,6 +10,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_vertexai import ChatVertexAI
 from pydantic import BaseModel, Field
 
+from app.shared.config import resolve_project
+
 
 load_dotenv()
 
@@ -54,31 +56,6 @@ class LLMRuntimeStatus(BaseModel):
 
 
 _model_instances: Dict[Tuple[Any, ...], BaseChatModel] = {}
-
-
-def _get_vertex_project_id() -> str:
-    project_id = (os.getenv("VERTEX_PROJECT_ID") or "").strip()
-    if project_id:
-        return project_id
-
-    for key in ("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCP_PROJECT"):
-        candidate = (os.getenv(key) or "").strip()
-        if candidate:
-            return candidate
-
-    try:
-        import google.auth  # type: ignore
-
-        _, inferred_project_id = google.auth.default()
-        if inferred_project_id:
-            return str(inferred_project_id).strip()
-    except Exception:
-        pass
-
-    raise RuntimeError(
-        "Missing Vertex project id. Set VERTEX_PROJECT_ID (recommended) or "
-        "ensure GOOGLE_CLOUD_PROJECT is set."
-    )
 
 
 def _float_setting(name: str, default: float) -> float:
@@ -186,7 +163,7 @@ def get_model(
             f"must be at least 0 and at most {MAX_LLM_RETRIES}",
         )
 
-    project = _get_vertex_project_id()
+    project = resolve_project()
     key = (
         config.model,
         project,

@@ -1,17 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
 import os
 
-from app.services.market_monitor.router import router as market_monitor_router
-from app.services.mfi_drafter.router import router as mfi_drafter_router
-from app.services.seasonal_outlook.router import router as seasonal_outlook_router
+from app.shared.config import configure_logging, load_environment
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logging.getLogger().setLevel(logging.INFO)
+load_environment()
+configure_logging()
+
+from app.services.market_monitor.router import router as market_monitor_router  # noqa: E402
+from app.services.mfi_drafter.router import router as mfi_drafter_router  # noqa: E402
+from app.services.seasonal_outlook.router import router as seasonal_outlook_router  # noqa: E402
 
 _fastapi_root_path = (os.getenv("FASTAPI_ROOT_PATH") or "").strip()
 

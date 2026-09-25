@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.shared.market_monitor_basket_ui import (
+from app.services.market_monitor.basket_ui import (
     BasketUIValidationError,
     additional_commodity_ids,
     advance_report_iteration,

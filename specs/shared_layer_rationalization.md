@@ -1,6 +1,6 @@
 # Shared layer rationalization: one LLM client, one observability layer, one run infrastructure
 
-**Status: approved 25 September 2026, except D1 (SDK), which is still open (§6).** Based on a read-only analysis of `VAM-LLM-Sep2026` @ `41d76af`, after the coherence refactor (`coherence_refactor_plan.md`). Branches:
+**Status: approved 25 September 2026; all decisions taken (§6).** Based on a read-only analysis of `VAM-LLM-Sep2026` @ `41d76af`, after the coherence refactor (`coherence_refactor_plan.md`). Branches:
 - The existing defects of §3.6 that D8 covers are fixed on `fix/post-phase7`. They ship once the coherence refactor is accepted on GCP (its Phase 7).
 - The refactor itself happens on `refactor/shared-layer`, which is based on those fixes. Nothing from it is merged or deployed before that acceptance.
 
@@ -347,15 +347,36 @@ Work happens on `refactor/shared-layer`, which is based on `fix/post-phase7`. Me
 
 Each phase is a set of commits that can be released on its own. Phases 4 and 5 can be deferred without blocking 1–3.
 
+### Progress
+
+**D8 fixes, done 2026-09-25** on `fix/post-phase7` (4 commits, not pushed; they ship after Phase 7 acceptance):
+- MM from the app: Word export, run metadata, live-output titles and `/info` now follow the report language.
+- Run store: fails closed with a 503 instead of silently moving runs to memory.
+- Logging: configured in the Streamlit process.
+- Seasonal: API replies carry no storage URIs, and phase errors are redacted.
+
+Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code before its fix.
+
+**Phase 1, done 2026-09-25** on `refactor/shared-layer`:
+- `app/shared/config.py` provides `load_environment`, `configure_logging` and `resolve_project`.
+- `main.py` and `streamlit_shared.py` call the first two before importing any service. The Price Bulletin page now imports `streamlit_shared` first, like the other pages.
+- MFI uses `resolve_project` instead of a private helper of `llm.py`.
+- `market_monitor_basket_ui.py` is now `market_monitor/basket_ui.py`.
+- `app/shared/__init__.py` exports nothing.
+- Deferred on purpose:
+  - The import-time `load_dotenv()` in `llm.py` and `retrievers.py` stays until Phases 2 and 5 retire or move those modules, so no process loses its environment in between.
+  - `cloud.py` arrives with its first users in Phases 2–3 rather than empty.
+- Verification: full suite 855 tests, 852 passed, 3 skipped, with no outcome changed from the fix branch. MFI and Seasonal snapshots identical. Every page renders, and all first-party imports resolve.
+
 ---
 
 ## 6. Decisions
 
-Taken on 25 September 2026, except D1.
+Taken on 25 September 2026.
 
 | # | Question | Decision |
 |---|---|---|
-| D1 | SDK behind the client | **Open.** Recommended: `google-genai` for all three drafters. Alternative: keep LangChain for MM and MFI as a second provider behind the same client. Needed before Phase 2. |
+| D1 | SDK behind the client | `google-genai` for all three drafters (option A below). |
 | D2 | Models and parameters | Unchanged per drafter (MM stays on Gemini 2.5 Pro, temperature 0). Model changes are a separate, evaluated decision. |
 | D3 | Automatic retries | Transient errors only, each attempt recorded. MM: 2 attempts (as today, but no longer on permission or invalid-argument errors). MFI: unchanged. Seasonal: 2 attempts per call on transient errors, so a single 503 no longer forces the analyst to rerun the whole phase. |
 | D4 | Payload capture for MFI | Opt-in, off by default, with the same controls as MM. |
@@ -365,7 +386,7 @@ Taken on 25 September 2026, except D1.
 | D8 | Existing defects (§3.6) | 1–4 and 9 are fixed on `fix/post-phase7` and ship right after Phase 7 acceptance, before this refactor. |
 | D9 | Timing | Work starts now on `refactor/shared-layer`. Nothing is merged or deployed before Phase 7 acceptance and the release of D8. |
 
-**What D1 changes.** For analysts, nothing: the same models, prompts and settings either way, and in both cases every call goes through the same client with the same tracing, retries and errors. The difference is inside the client.
+**What D1 changed** (A was chosen). For analysts, nothing: the same models, prompts and settings either way, and in both cases every call goes through the same client with the same tracing, retries and errors. The difference is inside the client.
 
 | | A: `google-genai` everywhere (recommended) | B: LangChain kept for MM and MFI |
 |---|---|---|
