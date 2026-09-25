@@ -1,5 +1,4 @@
 """Offline cartography, identity and final display-space map contracts."""
-from copy import deepcopy
 from itertools import combinations
 import gzip
 import json

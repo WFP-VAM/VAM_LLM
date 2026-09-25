@@ -626,12 +626,6 @@ def format_currency_value(
         return f"{format_decimal_value(number, language, decimals=decimals)} {code}"
 
 
-def format_number_unit(value: Any, unit: Optional[str], language: Optional[str] = "en", *, decimals: int = 1) -> str:
-    unit_text = str(unit or "").strip()
-    number = format_decimal_value(value, language, decimals=decimals)
-    return f"{number} {unit_text}".strip()
-
-
 def format_month_label(value: Any, language: Optional[str] = "en", *, width: str = "wide") -> str:
     if value in (None, ""):
         return ""

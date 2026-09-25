@@ -3,13 +3,11 @@ uvicorn[standard]
 python-multipart
 python-dotenv
 langchain-core
-langchain-google-genai
 langchain-google-vertexai
 google-cloud-aiplatform
 langgraph
 pandas
 numpy
-chardet
 requests
 git+https://github.com/WFP-VAM/DataBridgesAPI.git@v8.0.0
 SQLAlchemy
@@ -20,5 +18,4 @@ python-docx
 google-cloud-firestore
 google-cloud-storage
 google-genai>=1.75.0,<2
-openpyxl
 streamlit

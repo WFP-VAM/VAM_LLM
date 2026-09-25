@@ -262,7 +262,7 @@ def test_country_metadata_endpoint_reads_cache_without_databridges(monkeypatch):
     def fail_if_live_client_is_used():
         raise AssertionError("DataBridges should not be called by cache-first metadata.")
 
-    monkeypatch.setattr(data_loader, "get_databridges_client", fail_if_live_client_is_used, raising=False)
+    monkeypatch.setattr(data_loader, "DataBridgesClientAdapter", fail_if_live_client_is_used)
     client = _client(monkeypatch)
 
     response = client.get("/countries/South%20Sudan/metadata")

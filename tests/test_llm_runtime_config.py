@@ -12,34 +12,24 @@ from app.services.mfi_drafter import router
 def _clean_runtime(monkeypatch):
     for name in (
         "LLM_TIMEOUT_SECONDS",
-        "MFI_MARKET_DRAFT_TIMEOUT_SECONDS",
-        "MFI_RED_TEAM_TIMEOUT_SECONDS",
         "LLM_MAX_RETRIES",
         "LLM_MAX_OUTPUT_TOKENS",
     ):
         monkeypatch.delenv(name, raising=False)
     llm._model_instances.clear()
-    llm._model_instance = None
     yield
     llm._model_instances.clear()
-    llm._model_instance = None
 
 
 def test_llm_runtime_defaults_and_overrides(monkeypatch) -> None:
     defaults = llm.llm_runtime_config()
     assert defaults.default_timeout_seconds == 90.0
-    assert defaults.mfi_market_draft_timeout_seconds == 180.0
-    assert defaults.mfi_red_team_timeout_seconds == 600.0
     assert defaults.max_retries == 2
 
     monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "120")
-    monkeypatch.setenv("MFI_MARKET_DRAFT_TIMEOUT_SECONDS", "210")
-    monkeypatch.setenv("MFI_RED_TEAM_TIMEOUT_SECONDS", "240")
     monkeypatch.setenv("LLM_MAX_RETRIES", "3")
     configured = llm.llm_runtime_config()
     assert configured.default_timeout_seconds == 120.0
-    assert configured.mfi_market_draft_timeout_seconds == 210.0
-    assert configured.mfi_red_team_timeout_seconds == 240.0
     assert configured.max_retries == 3
 
 
@@ -49,8 +39,7 @@ def test_llm_runtime_defaults_and_overrides(monkeypatch) -> None:
         ("LLM_TIMEOUT_SECONDS", "zero"),
         ("LLM_TIMEOUT_SECONDS", "NaN"),
         ("LLM_TIMEOUT_SECONDS", "0"),
-        ("MFI_MARKET_DRAFT_TIMEOUT_SECONDS", "601"),
-        ("MFI_RED_TEAM_TIMEOUT_SECONDS", "601"),
+        ("LLM_TIMEOUT_SECONDS", "601"),
         ("LLM_MAX_RETRIES", "-1"),
         ("LLM_MAX_RETRIES", "11"),
         ("LLM_MAX_OUTPUT_TOKENS", "0"),
@@ -63,7 +52,7 @@ def test_invalid_llm_runtime_configuration_fails_closed(
 ) -> None:
     monkeypatch.setenv(name, value)
     with pytest.raises(llm.LLMRuntimeConfigurationError) as caught:
-        llm.require_llm_runtime_config()
+        llm.llm_runtime_config()
     assert caught.value.code == "llm_runtime_configuration_invalid"
     assert caught.value.field == name
     status = llm.llm_runtime_status().model_dump()
@@ -100,14 +89,12 @@ def test_vertex_clients_are_cached_by_effective_settings(monkeypatch) -> None:
     assert [item["timeout"] for item in created] == [90.0, 180.0]
 
 
-def test_runtime_status_exposes_sanitized_market_deadline(monkeypatch) -> None:
-    monkeypatch.setenv("MFI_MARKET_DRAFT_TIMEOUT_SECONDS", "225")
+def test_runtime_status_exposes_only_sanitized_settings(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "225")
     status = llm.llm_runtime_status().model_dump()
     assert status == {
         "configuration_status": "configured",
-        "default_timeout_seconds": 90.0,
-        "mfi_market_draft_timeout_seconds": 225.0,
-        "mfi_red_team_timeout_seconds": 600.0,
+        "default_timeout_seconds": 225.0,
         "max_retries": 2,
         "error_code": None,
         "error_field": None,

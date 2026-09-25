@@ -4,7 +4,7 @@ Market Monitor - Router
 FastAPI endpoints for the Market Monitor service.
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Body, Query
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from pydantic import BaseModel, ValidationError
 from typing import Optional, List, Any, Dict
 from dataclasses import is_dataclass, asdict
@@ -74,8 +74,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory store per report status (in produzione usare Redis/DB)
-_report_status: dict = {}
 _PRICE_CACHE_REPOSITORY: Any = None
 _PRICE_CACHE_REPOSITORY_LOCK = threading.Lock()
 
@@ -913,22 +911,6 @@ def health_check():
     }
 
 
-@router.get("/dataset/status")
-def get_price_data_dataset_status():
-    raise HTTPException(
-        status_code=404,
-        detail="The processed Price Bulletin dataset upload/status path has been removed. Data is loaded from PriceCache.",
-    )
-
-
-@router.post("/dataset/upload")
-async def upload_price_data_dataset():
-    raise HTTPException(
-        status_code=404,
-        detail="The processed Price Bulletin dataset upload path has been removed. Data is loaded from PriceCache.",
-    )
-
-
 @router.get("/countries")
 def get_supported_countries():
     """
@@ -943,7 +925,6 @@ def get_supported_countries():
         "warnings": cache_status.get("warnings") or [],
         "operator_warnings": cache_status.get("operator_warnings") or [],
     }
-
 
 
 @router.get("/commodities")
@@ -1188,36 +1169,3 @@ def get_country_food_basket_history(country: str, limit: int = 20):
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
-
-def _get_food_basket_commodities(available: List[str]) -> List[str]:
-    """
-    Select default food basket commodities from available list.
-    Prioritizes: cereals, pulses, oil, salt (standard WFP food basket).
-    """
-    defaults = []
-
-    priority_patterns = [
-        ("sorghum", "Cereals"),
-        ("maize", "Cereals"),
-        ("wheat", "Cereals"),
-        ("rice", "Cereals"),
-        ("beans", "Pulses"),
-        ("lentil", "Pulses"),
-        ("oil", "Oil"),
-        ("salt", "Condiments"),
-        ("sugar", "Sugar"),
-    ]
-
-    selected_categories = set()
-
-    for pattern, category in priority_patterns:
-        if category in selected_categories and category != "Cereals":
-            continue
-        for commodity in available:
-            if pattern in commodity.lower() and commodity not in defaults:
-                defaults.append(commodity)
-                selected_categories.add(category)
-                break
-
-    return defaults[:6]

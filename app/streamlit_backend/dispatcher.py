@@ -5,8 +5,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import os
-import tempfile
 import threading
 import traceback
 import uuid
@@ -37,7 +35,6 @@ from app.shared.report_blocks import (
     build_market_monitor_report_blocks,
     resolve_mfi_report_blocks,
 )
-from app.shared.countries import supported_country_options
 from app.shared.llm_observability import LLMCallError, observability_config
 from app.shared.llm import llm_runtime_status
 
@@ -334,13 +331,6 @@ def _extract_file(files: Any, key: str) -> Optional[UploadedFile]:
         content = str(content).encode("utf-8")
 
     return UploadedFile(filename=str(filename), content=content, content_type=content_type)
-
-
-def _save_temp_file(content: bytes, suffix: str) -> str:
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(content)
-    tmp.close()
-    return tmp.name
 
 
 def _trace_error(traces: List[Dict[str, Any]], retriever_name: str) -> Optional[str]:
@@ -1523,20 +1513,6 @@ def _market_monitor_info() -> Dict[str, Any]:
     }
 
 
-def _market_monitor_dataset_status() -> LocalResponse:
-    raise LocalHTTPException(
-        404,
-        "The processed Price Bulletin dataset upload/status path has been removed. Data is loaded from PriceCache.",
-    )
-
-
-def _market_monitor_dataset_upload(*, files: Any) -> LocalResponse:
-    raise LocalHTTPException(
-        404,
-        "The processed Price Bulletin dataset upload path has been removed. Data is loaded from PriceCache.",
-    )
-
-
 def _market_monitor_countries() -> LocalResponse:
     cache_status = get_cache_status_snapshot()
     return _json_response(
@@ -1748,34 +1724,6 @@ def _market_monitor_country_basket_history(country: str, *, params: Dict[str, An
         raise LocalHTTPException(404, str(exc))
     except Exception as exc:
         raise LocalHTTPException(500, str(exc))
-
-
-def _get_food_basket_commodities(available: List[str]) -> List[str]:
-    defaults: List[str] = []
-    priority_patterns = [
-        ("sorghum", "Cereals"),
-        ("maize", "Cereals"),
-        ("wheat", "Cereals"),
-        ("rice", "Cereals"),
-        ("beans", "Pulses"),
-        ("lentil", "Pulses"),
-        ("oil", "Oil"),
-        ("salt", "Condiments"),
-        ("sugar", "Sugar"),
-    ]
-
-    selected_categories = set()
-
-    for pattern, category in priority_patterns:
-        if category in selected_categories and category != "Cereals":
-            continue
-        for commodity in available:
-            if pattern in commodity.lower() and commodity not in defaults:
-                defaults.append(commodity)
-                selected_categories.add(category)
-                break
-
-    return defaults[:6]
 
 
 def dispatch_request(

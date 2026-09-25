@@ -1,6 +1,6 @@
 """Input validation and calendars; all resources ship in the image."""
 
-import copy, hashlib, io, re, warnings, json
+import copy, io, re, warnings, json
 
 from datetime import date
 

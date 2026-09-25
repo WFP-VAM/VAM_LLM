@@ -14,8 +14,6 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 DEFAULT_LLM_TIMEOUT_SECONDS = 90.0
-DEFAULT_MFI_MARKET_DRAFT_TIMEOUT_SECONDS = 180.0
-DEFAULT_MFI_RED_TEAM_TIMEOUT_SECONDS = 600.0
 DEFAULT_LLM_MAX_RETRIES = 2
 MAX_LLM_TIMEOUT_SECONDS = 600.0
 MAX_LLM_RETRIES = 10
@@ -41,14 +39,6 @@ class LLMRuntimeConfig(BaseModel):
     model: str
     location: str
     default_timeout_seconds: float = Field(gt=0, le=MAX_LLM_TIMEOUT_SECONDS)
-    mfi_market_draft_timeout_seconds: float = Field(
-        gt=0,
-        le=MAX_LLM_TIMEOUT_SECONDS,
-    )
-    mfi_red_team_timeout_seconds: float = Field(
-        gt=0,
-        le=MAX_LLM_TIMEOUT_SECONDS,
-    )
     max_retries: int = Field(ge=0, le=MAX_LLM_RETRIES)
     max_output_tokens: Optional[int] = Field(default=None, gt=0)
 
@@ -58,14 +48,11 @@ class LLMRuntimeStatus(BaseModel):
 
     configuration_status: Literal["configured", "invalid"]
     default_timeout_seconds: Optional[float] = None
-    mfi_market_draft_timeout_seconds: Optional[float] = None
-    mfi_red_team_timeout_seconds: Optional[float] = None
     max_retries: Optional[int] = None
     error_code: Optional[str] = None
     error_field: Optional[str] = None
 
 
-_model_instance: BaseChatModel | None = None
 _model_instances: Dict[Tuple[Any, ...], BaseChatModel] = {}
 
 
@@ -153,14 +140,6 @@ def llm_runtime_config() -> LLMRuntimeConfig:
             "LLM_TIMEOUT_SECONDS",
             DEFAULT_LLM_TIMEOUT_SECONDS,
         ),
-        mfi_market_draft_timeout_seconds=_float_setting(
-            "MFI_MARKET_DRAFT_TIMEOUT_SECONDS",
-            DEFAULT_MFI_MARKET_DRAFT_TIMEOUT_SECONDS,
-        ),
-        mfi_red_team_timeout_seconds=_float_setting(
-            "MFI_RED_TEAM_TIMEOUT_SECONDS",
-            DEFAULT_MFI_RED_TEAM_TIMEOUT_SECONDS,
-        ),
         max_retries=int(retries if retries is not None else DEFAULT_LLM_MAX_RETRIES),
         max_output_tokens=max_output_tokens,
     )
@@ -179,17 +158,8 @@ def llm_runtime_status() -> LLMRuntimeStatus:
     return LLMRuntimeStatus(
         configuration_status="configured",
         default_timeout_seconds=config.default_timeout_seconds,
-        mfi_market_draft_timeout_seconds=(
-            config.mfi_market_draft_timeout_seconds
-        ),
-        mfi_red_team_timeout_seconds=config.mfi_red_team_timeout_seconds,
         max_retries=config.max_retries,
     )
-
-
-def require_llm_runtime_config() -> LLMRuntimeConfig:
-    """Preflight helper used before asynchronous run creation."""
-    return llm_runtime_config()
 
 
 def get_model(
@@ -198,7 +168,6 @@ def get_model(
     max_retries: Optional[int] = None,
 ) -> BaseChatModel:
     """Return a Vertex model cached by every effective invocation setting."""
-    global _model_instance
     config = llm_runtime_config()
     timeout = (
         config.default_timeout_seconds
@@ -236,26 +205,4 @@ def get_model(
             max_retries=retries,
             max_output_tokens=config.max_output_tokens,
         )
-    _model_instance = _model_instances[key]
-    return _model_instance
-
-
-def configure_model(
-    provider: str = "google",
-    model_name: str | None = None,
-    api_key: str | None = None,
-) -> None:
-    """Reconfigure the default model for compatible interactive/test callers."""
-    del provider, api_key
-    global _model_instance
-    config = llm_runtime_config()
-    _model_instances.clear()
-    _model_instance = ChatVertexAI(
-        model_name=model_name or config.model,
-        project=_get_vertex_project_id(),
-        location=config.location,
-        temperature=0,
-        timeout=config.default_timeout_seconds,
-        max_retries=config.max_retries,
-        max_output_tokens=config.max_output_tokens,
-    )
+    return _model_instances[key]

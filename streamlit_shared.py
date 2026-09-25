@@ -17,12 +17,6 @@ from app.shared.report_blocks import basket_definition_table_display
 from app.streamlit_backend.dispatcher import dispatch_request
 
 WFP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/WFP_Logo.svg/512px-WFP_Logo.svg.png"
-WFP_PRIMARY = "#0072BC"
-WFP_PRIMARY_DARK = "#005A9C"
-WFP_NAVY = "#003A5D"
-WFP_LIGHT = "#E6F1FA"
-WFP_BG = "#EEF4FA"
-WFP_TEXT = "#0C1E2E"
 INSTRUCTIONS_PAGE_URL = "/How_To_Use_The_Tools"
 BUG_REPORT_MESSAGE = "The second testing phase is going to start soon"
 INSTRUCTIONS_PAGE_PATH = "pages/1_How_To_Use_The_Tools.py"
@@ -685,37 +679,6 @@ def render_live_document_section(
                 )
 
 
-def render_results_tabs(
-    *,
-    summary: Callable[[], None],
-    json_data: Any,
-    visuals: Optional[Callable[[], None]] = None,
-    export: Optional[Callable[[], None]] = None,
-) -> None:
-    tab_summary, tab_json, tab_visuals, tab_export = st.tabs(["Summary", "JSON", "Visuals", "Export"])
-
-    with tab_summary:
-        summary()
-
-    with tab_json:
-        if json_data is None:
-            st.write("No data")
-        else:
-            st.json(json_data)
-
-    with tab_visuals:
-        if visuals is None:
-            st.write("No visuals")
-        else:
-            visuals()
-
-    with tab_export:
-        if export is None:
-            st.write("No export available")
-        else:
-            export()
-
-
 def render_report_delivery(
     *,
     run_id: str,
@@ -1004,46 +967,6 @@ def run_async_and_poll(
         result = request_json("GET", result_path_template.format(run_id=run_id), timeout=120)
 
     return run_id, last_status, result
-
-
-def render_visualizations(visualizations: Any) -> None:
-    if not isinstance(visualizations, dict) or not visualizations:
-        st.write("No visualizations")
-        return
-
-    ids = [k for k in visualizations.keys() if isinstance(k, str)]
-    for legacy_id, canonical_id in (
-        ("food_basket_trend", "food_basket_trend_primary"),
-        ("regional_comparison", "regional_comparison_primary"),
-    ):
-        if canonical_id in ids and legacy_id in ids:
-            ids.remove(legacy_id)
-    ids.sort()
-
-    for fig_id in ids:
-        img_b64 = visualizations.get(fig_id)
-        img_bytes = decode_base64_data(img_b64)
-        if img_bytes is None:
-            continue
-        st.subheader(fig_id)
-        st.image(img_bytes, width="stretch")
-
-
-def render_report_sections(sections: Any) -> None:
-    if not isinstance(sections, dict) or not sections:
-        st.write("No report sections")
-        return
-
-    keys = [k for k in sections.keys() if isinstance(k, str)]
-    keys.sort()
-
-    for k in keys:
-        content = sections.get(k)
-        with st.expander(k, expanded=False):
-            if isinstance(content, str):
-                st.markdown(content)
-            else:
-                st.write(content)
 
 
 def render_mfi_raw_table_downloads(

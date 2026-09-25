@@ -1,6 +1,6 @@
 # Coherence refactor plan (GCP): LangGraph for Seasonal, no checkpoint layer, dead-code removal
 
-**Status: Phases 0–4 done on `refactor/gcp-coherence` (not pushed); Phases 5–7 to do.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them. Each phase records what was built under its **Done** heading.
+**Status: Phases 0–5 done on `refactor/gcp-coherence` (not pushed); Phases 6–7 to do.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them. Each phase records what was built under its **Done** heading.
 
 ---
 
@@ -306,6 +306,34 @@ Tests were classified one by one, not by file. A test was removed when it import
 | Dependencies | `langchain-google-genai`, `chardet`, `openpyxl` (no imports; re-checked before removal) |
 
 **Verify:** full suite; `pip install -r requirements.txt` in a clean venv plus `pip check`.
+
+**Done 2026-09-25.** The list above came from the first inspection; a reachability scan of the whole app (`.tmp/coherence-baseline/dead_symbols.py`: entry points, then references) completed it.
+- Removed:
+  - **Market Monitor:**
+    - the router's `/dataset` stubs, `_report_status` and `_get_food_basket_commodities`;
+    - in the data loader: the CSV and GCS shims, the DataFrame-or-country helpers (`get_available_regions`, `get_available_markets`, `get_date_range`, `get_data_summary`), `_get_markets`, `_market_lookup`, `_MARKET_CACHE` (which nothing read any more), `_build_reportable_months_payload` and the `extract_time_series_from_databridges` alias;
+    - `specs_from_selection`, `format_number_unit` and unused imports.
+  - **Dispatcher:** `_save_temp_file`, the dataset stubs, `_get_food_basket_commodities` and unused imports.
+  - **Shared:**
+    - `gcs.py`; `databridges.py` with `tests/test_databridges_client.py` (its four endpoint constants now live in `price_cache/databridges_adapter.py`);
+    - in `llm.py`: the two MFI timeout settings, `require_llm_runtime_config`, `configure_model` and the `_model_instance` global;
+    - `live_outputs.merge_live_output_metadata`;
+    - in `streamlit_shared.py`: the WFP colour constants, `render_results_tabs`, `render_visualizations` and `render_report_sections`.
+  - **Seasonal:** the research and recovery symbols of §1.4, including the old review contract, `validate_saved_review` and `recover_prefix_only`. `refinement_schemas.py` now holds only `METADATA_FIELDS` and `evidence_diff`.
+  - **Infrastructure:** `supervisord.conf` and `nginx.conf.template`. The container runs Streamlit only (`start.sh`).
+  - **Dependencies:** `langchain-google-genai`, `chardet` and `openpyxl`. Each is only an optional extra of another package, and nothing imports them.
+- Kept on purpose (test support that exercises live code):
+  - MM `reset_market_monitor_caches_for_tests`, and the prompt-manifest validation in `prompt_registry.py`;
+  - `synthetic_fixtures.py` (D8) and the Seasonal `MemoryStore`;
+  - MM `extract_time_series_from_csv`: a misnamed compatibility wrapper that no production code calls. Its 13 tests exercise the live price-series helpers, so it goes only after they are rewritten against `resolve_report_price_data` (follow-up).
+- One test now checks what its name says: `test_country_metadata_endpoint_reads_cache_without_databridges` patched a name `data_loader` never had, with `raising=False`. It now patches `DataBridgesClientAdapter`, and still passes.
+- Output: MM `/info` and `/health` no longer report the two MFI timeouts under `llm_runtime`.
+- Verification:
+  - Full suite, run with `langchain_google_genai`, `chardet` and `openpyxl` made unimportable: **846 tests: 843 passed, 3 skipped, 0 failed**.
+  - Against Phase 4: 19 tests removed (15 of them for the DataBridges client, including its skipped live smoke test) and 3 added. No retained test changed outcome.
+  - All 90 modules import without the three packages, and `pip check` passes.
+  - MFI and Seasonal snapshots identical; every page renders.
+  - A clean-venv install was not run, since it would download every dependency. The Cloud Build image build in Phase 7 does exactly that.
 
 ### Phase 6 — Docs and configuration
 

@@ -5,7 +5,7 @@ import io
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Sequence
 
 from app.shared.async_runs import add_run_artifact
 
@@ -16,16 +16,6 @@ _MAX_PREVIEW_COLUMNS = 12
 
 def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def merge_live_output_metadata(
-    current_metadata: Optional[Dict[str, Any]],
-    section_name: str,
-    section_payload: Dict[str, Any],
-) -> Dict[str, Any]:
-    live_outputs = dict((current_metadata or {}).get("live_outputs") or {})
-    live_outputs[section_name] = section_payload
-    return {"live_outputs": live_outputs}
 
 
 def build_preview_table(

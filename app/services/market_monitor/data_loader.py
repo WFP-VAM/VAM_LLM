@@ -30,14 +30,12 @@ from app.services.price_cache.schemas import CacheStatus, CountryMetadata, Month
 from app.services.price_cache.sql_repository import SqlPriceCacheRepository, create_price_cache_engine
 from app.services.market_monitor.basket_calculation import (
     BasketCalculationSpec,
-    BasketScopeValidationError,
     apply_primary_food_basket_aliases,
     calculate_basket_series,
     calculate_basket_statistics,
     canonicalize_run_regions,
     legacy_primary_spec,
     missing_required_commodity_ids,
-    resolve_spec_regions,
     target_coverage_gaps,
 )
 from app.services.market_monitor.price_backfill import (
@@ -54,14 +52,9 @@ from app.shared.countries import (
     normalize_country_name as _normalize_country_name,
     resolve_country,
 )
-from app.shared.gcs import (
-    download_gcs_to_file as _download_gcs_to_file,
-    parse_gcs_uri as _parse_gcs_uri,
-)
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).parent / "data"
 _CACHE_TTL_SECONDS = 15 * 60
 _RECENT_METADATA_MONTHS = 36
 _CHART_HISTORY_MONTHS = 73
@@ -89,7 +82,6 @@ _OPERATOR_WARNING_MARKERS = (
 
 _COUNTRY_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _COMMODITY_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-_MARKET_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _PRICE_CACHE: dict[tuple[Any, ...], tuple[float, pd.DataFrame]] = {}
 _METADATA_CACHE: dict[Any, tuple[float, dict[str, Any]]] = {}
 _REPORTABLE_MONTHS_CACHE: dict[Any, tuple[float, dict[str, Any]]] = {}
@@ -112,7 +104,6 @@ def reset_market_monitor_caches_for_tests() -> None:
     global _PRICE_CACHE_REPOSITORY, _ACTIVE_CACHE_VERSION_ID
     _COUNTRY_CACHE.clear()
     _COMMODITY_CACHE.clear()
-    _MARKET_CACHE.clear()
     _PRICE_CACHE.clear()
     _METADATA_CACHE.clear()
     _REPORTABLE_MONTHS_CACHE.clear()
@@ -132,27 +123,10 @@ def _sync_active_cache_version(active_version_id: Optional[str]) -> None:
             return
         _COUNTRY_CACHE.clear()
         _COMMODITY_CACHE.clear()
-        _MARKET_CACHE.clear()
         _PRICE_CACHE.clear()
         _METADATA_CACHE.clear()
         _REPORTABLE_MONTHS_CACHE.clear()
         _ACTIVE_CACHE_VERSION_ID = version
-
-
-def load_csv_price_data(csv_path: Optional[Path] = None) -> pd.DataFrame:
-    """Deprecated compatibility shim for the removed spreadsheet data path."""
-    raise FileNotFoundError(
-        "The provisional price_data.csv path has been removed. Price Bulletin "
-        "data is now retrieved from the active PriceCache."
-    )
-
-
-def _upload_file_to_gcs(content: bytes, gcs_uri: str) -> None:
-    """Deprecated compatibility shim for removed dataset upload endpoints."""
-    raise RuntimeError(
-        "Uploading processed Price Bulletin datasets is no longer supported. "
-        "Use MarketAIssist to validate raw files before DataBridges upload."
-    )
 
 
 def get_cache_status_snapshot() -> dict[str, Any]:
@@ -254,77 +228,6 @@ def get_all_commodities(df: Optional[pd.DataFrame] = None) -> List[str]:
         except Exception:
             logger.debug("Could not fetch commodities for %s", country["name"], exc_info=True)
     return sorted(names)
-
-
-def get_available_regions(
-    df_or_country: Optional[Any] = None,
-    country: Optional[str] = None,
-) -> List[str]:
-    if isinstance(df_or_country, pd.DataFrame):
-        if not country:
-            return []
-        country_normalized = normalize_country_name(country)
-        country_df = df_or_country[df_or_country["Country"] == country_normalized]
-        return sorted(country_df["Admin 1"].dropna().astype(str).unique().tolist())
-
-    country_value = country or str(df_or_country or "")
-    _canonical, iso3 = resolve_country(country_value)
-    repo = _get_price_cache_repository()
-    availability = repo.get_country_availability(iso3)
-    if availability is not None and availability.admin1_names:
-        return list(availability.admin1_names)
-    return sorted(
-        {
-            str(market["admin1_name"])
-            for market in _get_markets(_canonical, iso3)
-            if market.get("admin1_name")
-        }
-    )
-
-
-def get_available_markets(
-    df_or_country: Optional[Any] = None,
-    country: Optional[str] = None,
-) -> List[str]:
-    if isinstance(df_or_country, pd.DataFrame):
-        if not country:
-            return []
-        country_normalized = normalize_country_name(country)
-        country_df = df_or_country[df_or_country["Country"] == country_normalized]
-        return sorted(country_df["Market Name"].dropna().astype(str).unique().tolist())
-
-    country_value = country or str(df_or_country or "")
-    canonical, iso3 = resolve_country(country_value)
-    return sorted(
-        {
-            str(market["market_name"])
-            for market in _get_markets(canonical, iso3)
-            if market.get("market_name")
-        }
-    )
-
-
-def get_date_range(
-    df_or_country: Optional[Any] = None,
-    country: Optional[str] = None,
-) -> Tuple[datetime, datetime]:
-    if isinstance(df_or_country, pd.DataFrame):
-        if not country:
-            raise ValueError("Country is required")
-        country_normalized = normalize_country_name(country)
-        country_df = df_or_country[df_or_country["Country"] == country_normalized]
-        return country_df["Price Date"].min(), country_df["Price Date"].max()
-
-    country_value = country or str(df_or_country or "")
-    _canonical, iso3 = resolve_country(country_value)
-    repo = _get_price_cache_repository()
-    availability = repo.get_country_availability(iso3)
-    if availability is None or availability.date_start is None or availability.date_end is None:
-        raise ValueError(f"No cached monthly price data is available for {country_value}.")
-    return (
-        pd.Timestamp(availability.date_start).to_pydatetime(),
-        pd.Timestamp(availability.date_end).to_pydatetime(),
-    )
 
 
 def get_commodity_categories(source: Optional[Any] = None) -> Dict[str, List[str]]:
@@ -3813,9 +3716,6 @@ def _optional_text(value: Any) -> Optional[str]:
     return str(value)
 
 
-extract_time_series_from_databridges = extract_time_series_from_csv
-
-
 def calculate_statistics_from_csv(
     df_national: pd.DataFrame,
     commodities: List[str],
@@ -4024,20 +3924,6 @@ def check_data_availability(
         }
 
 
-def get_data_summary(csv_path: Optional[Path] = None) -> Dict[str, Any]:
-    if csv_path is not None:
-        logger.info("Ignoring csv_path=%s because PriceCache is now the price source.", csv_path)
-    countries = get_supported_countries()
-    status = get_cache_status_snapshot()
-    return {
-        "source": "PriceCache",
-        "countries": {str(item["name"]): {"iso3": item["iso3"]} for item in countries},
-        "total_records": status.get("rows_prices"),
-        "date_range": None,
-        "cache_status": status,
-    }
-
-
 def _get_country_price_df(
     canonical: str,
     iso3: str,
@@ -4202,29 +4088,6 @@ def _get_commodities(canonical: str, iso3: str) -> list[dict[str, Any]]:
     commodities = sorted(commodities, key=_commodity_sort_key)
     _cache_set(_COMMODITY_CACHE, iso3, commodities)
     return list(commodities)
-
-
-def _get_markets(canonical: str, iso3: str) -> list[dict[str, Any]]:
-    repo = _get_price_cache_repository()
-    status = repo.get_cache_status()
-    _sync_active_cache_version(status.active_version_id)
-
-    cached = _cache_get(_MARKET_CACHE, iso3)
-    if cached is not None:
-        return list(cached)
-
-    metadata = _get_repository_country_metadata(iso3)
-    markets = _markets_payload(metadata, country_name=metadata.country.country_name or canonical, iso3=iso3)
-    _cache_set(_MARKET_CACHE, iso3, markets)
-    return list(markets)
-
-
-def _market_lookup(canonical: str, iso3: str) -> dict[int, dict[str, Any]]:
-    return {
-        int(market["market_id"]): market
-        for market in _get_markets(canonical, iso3)
-        if market.get("market_id") is not None
-    }
 
 
 def _sort_cached_price_rows(rows: list[MonthlyPriceRecord]) -> list[MonthlyPriceRecord]:
@@ -4609,98 +4472,6 @@ def _flatten_effective_missing(
     return output
 
 
-def _build_reportable_months_payload(
-    *,
-    canonical: str,
-    iso3: str,
-    repo: PriceCacheRepository,
-    availability: Any,
-    basket: Any,
-) -> dict[str, Any]:
-    cache_version_id = getattr(availability, "cache_version_id", None) if availability else None
-    start_d = _date_obj(getattr(availability, "date_start", None)) if availability else None
-    latest_cached = _date_obj(getattr(availability, "date_end", None)) if availability else None
-    current_month = _current_month_start()
-    if latest_cached and latest_cached > current_month:
-        latest_cached = current_month
-
-    base = {
-        "country": canonical,
-        "iso3": iso3,
-        "cache_version_id": cache_version_id,
-        "basket_version_id": getattr(basket, "basket_version_id", None) if basket else None,
-        "reportable_months": [],
-        "latest_reportable_month": None,
-        "latest_cached_month": _month_label(latest_cached),
-        "latest_cached_real_month": None,
-        "missing_by_month": {},
-        "warnings": [],
-    }
-    if availability is None:
-        base["warnings"].append(f"No active PriceCache availability is available for {canonical}.")
-        return base
-    if basket is None:
-        base["warnings"].append(f"No active food basket is configured for {canonical}.")
-        return base
-    basket_items = list(getattr(basket, "items", []) or [])
-    basket_ids = _dedupe_ints([getattr(item, "commodity_id", None) for item in basket_items])
-    if not basket_ids:
-        base["warnings"].append(f"The active food basket for {canonical} has no commodities.")
-        return base
-    if start_d is None or latest_cached is None or start_d > latest_cached:
-        base["warnings"].append(f"PriceCache has no monthly price date range for {canonical}.")
-        return base
-
-    basket_names = {
-        int(getattr(item, "commodity_id")): (
-            _optional_text(getattr(item, "commodity_name_snapshot", None))
-            or f"commodity_id={getattr(item, 'commodity_id')}"
-        )
-        for item in basket_items
-        if getattr(item, "commodity_id", None) is not None
-    }
-    rows = repo.get_price_window(
-        iso3,
-        start_d.isoformat(),
-        _month_end(latest_cached).isoformat(),
-        commodity_ids=basket_ids,
-    )
-    df = _normalise_cached_price_rows(rows, canonical, iso3)
-    months_by_id: dict[int, set[str]] = {commodity_id: set() for commodity_id in basket_ids}
-    if not df.empty:
-        working = df[pd.to_numeric(df["Price"], errors="coerce").notna()].copy()
-        if not working.empty:
-            working["MonthLabel"] = working["Price Date"].dt.to_period("M").astype(str)
-            for commodity_id, group in working.groupby("Commodity ID"):
-                parsed_id = _to_int(commodity_id)
-                if parsed_id is not None:
-                    months_by_id.setdefault(parsed_id, set()).update(group["MonthLabel"].dropna().astype(str))
-            latest_real = working["Price Date"].max()
-            if pd.notna(latest_real):
-                base["latest_cached_real_month"] = pd.Timestamp(latest_real).strftime("%Y-%m")
-
-    reportable: list[str] = []
-    missing_by_month: dict[str, list[str]] = {}
-    for month in pd.date_range(start=start_d, end=latest_cached, freq="MS"):
-        label = month.strftime("%Y-%m")
-        missing = [
-            basket_names.get(commodity_id, f"commodity_id={commodity_id}")
-            for commodity_id in basket_ids
-            if label not in months_by_id.get(commodity_id, set())
-        ]
-        if missing:
-            missing_by_month[label] = missing
-        else:
-            reportable.append(label)
-
-    base["reportable_months"] = reportable
-    base["latest_reportable_month"] = reportable[-1] if reportable else None
-    base["missing_by_month"] = missing_by_month
-    if not reportable:
-        base["warnings"].append(f"No complete actual-price basket month is available for {canonical}.")
-    return base
-
-
 def _get_active_food_basket(iso3: str) -> Any:
     from app.services.market_monitor.food_basket import create_food_basket_repository
 
@@ -4798,7 +4569,6 @@ def _invalidate_country_price_cache(iso3: str) -> None:
     country = str(iso3 or "").upper()
     _COUNTRY_CACHE.clear()
     _COMMODITY_CACHE.pop(country, None)
-    _MARKET_CACHE.pop(country, None)
     for cache in (_PRICE_CACHE, _METADATA_CACHE, _REPORTABLE_MONTHS_CACHE):
         for key in list(cache.keys()):
             if key == country or (isinstance(key, tuple) and key and key[0] == country):

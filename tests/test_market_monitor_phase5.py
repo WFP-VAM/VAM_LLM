@@ -161,29 +161,19 @@ def test_docx_renders_basket_definition_table_without_missing_figure_placeholder
     assert len(document.inline_shapes) == 0
 
 
-def test_streamlit_renderers_show_read_only_basket_table_and_deduplicate_aliases(monkeypatch):
+def test_streamlit_renderer_shows_read_only_basket_table(monkeypatch):
     result = _two_basket_result()
     table = next(block for block in build_market_monitor_report_blocks(result) if block.type == "table")
     rendered_frames = []
-    rendered_images = []
-    rendered_headers = []
 
     monkeypatch.setattr(shared.st, "dataframe", lambda frame, **_kwargs: rendered_frames.append(frame))
     monkeypatch.setattr(shared.st, "write", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(shared.st, "subheader", lambda text: rendered_headers.append(text))
-    monkeypatch.setattr(shared.st, "image", lambda image, **kwargs: rendered_images.append((image, kwargs)))
     monkeypatch.setattr(shared, "decode_base64_data", lambda value: str(value).encode("utf-8"))
 
     shared.render_report_blocks([table.model_dump(), {"type": "figure", "figure_id": "missing"}], {})
-    shared.render_visualizations(result["visualizations"])
 
     assert rendered_frames[0].columns.tolist() == ["Basket / role", "Description", "Scope", "Composition"]
     assert rendered_frames[0].iloc[1, 0] == "Pastoral basket (Secondary)"
-    assert "food_basket_trend" not in rendered_headers
-    assert "regional_comparison" not in rendered_headers
-    assert "food_basket_trend_primary" in rendered_headers
-    assert "regional_comparison_primary" in rendered_headers
-    assert len(rendered_images) == 4
 
 
 def test_dispatcher_service_info_documents_phase5_visualization_contract():

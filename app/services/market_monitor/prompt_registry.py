@@ -6,7 +6,7 @@ import json
 import string
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Set
+from typing import Any, Dict, List, Set
 
 from .i18n import SUPPORTED_REPORT_LANGUAGES, normalize_language
 

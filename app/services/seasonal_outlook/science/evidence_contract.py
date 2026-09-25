@@ -4,7 +4,6 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, create_model
 from .schemas import Record, MapReading, EvidenceBundle
 from .files import validate_evidence
-from .refinement_schemas import VisualReview, validate_review as validate_legacy_review
 
 VERSION = 'seasonal_evidence_v1'
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -168,35 +167,3 @@ def normalize_review(value, pack, lookup, previous):
                 raise ValueError('cross_map_review_reference')
             issue['issue_id'] = f'{m["figure_id"]}__r{n:03}'
     return dict(format_version=VERSION, case_id=pack['case_id'], **result)
-
-
-def validate_saved_review(review, previous, pack):
-    if review.get('format_version') != VERSION:
-        if validate_legacy_review(VisualReview.model_validate(review), previous, pack):
-            raise ValueError('Invalid saved legacy visual review.')
-        return
-    lookup = aliases(pack, previous, review)
-    wire = model_review(review, lookup)
-    for m in wire['maps']:
-        for issue in m['issues']:
-            issue.pop('issue_id')
-    parsed = schema('review', lookup).model_validate(wire).model_dump()
-    if normalize_review(parsed, pack, lookup, previous) != review:
-        raise ValueError('Invalid saved visual review.')
-
-
-def recover_prefix_only(evidence, pack):
-    """Recover this single historical defect, never guess figures or scientific content."""
-    parsed = EvidenceBundle.model_validate(evidence)
-    if validate_evidence(parsed, pack) != ['evidence_id_wrong_prefix']:
-        raise ValueError('Only an isolated evidence ID prefix failure can be normalized.')
-    result = copy.deepcopy(evidence)
-    mapping = []
-    for m in result['maps']:
-        for n, s in enumerate(m['signals'], 1):
-            original = s['evidence_id']
-            s['evidence_id'] = f'{m["figure_id"]}__recovered__s{n:03}'
-            mapping.append(dict(original_id=original, evidence_id=s['evidence_id'], figure_id=m['figure_id']))
-    if validate_evidence(EvidenceBundle.model_validate(result), pack):
-        raise ValueError('Recovered evidence failed validation.')
-    return result, mapping

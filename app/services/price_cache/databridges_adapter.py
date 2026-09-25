@@ -13,9 +13,15 @@ from importlib import import_module
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from app.shared.countries import supported_country_options
-from app.shared.databridges import DEFAULT_BASE_URL, DEFAULT_ENV, DEFAULT_SCOPE, DEFAULT_TOKEN_URL
 
 
+DEFAULT_BASE_URL = "https://gateway.api.wfp.org/vam-data-bridges/v2"
+DEFAULT_TOKEN_URL = (
+    "https://login.microsoftonline.com/462ad9ae-d7d9-4206-b874-71b1e079776f/"
+    "oauth2/v2.0/token"
+)
+DEFAULT_SCOPE = "api://wfp-api-mediation-service/.default"
+DEFAULT_ENV = "prod"
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 PERMANENT_STATUS_CODES = {400, 403, 404}
 

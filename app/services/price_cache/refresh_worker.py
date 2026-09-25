@@ -6,7 +6,7 @@ import logging
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
 from app.shared.countries import supported_country_options

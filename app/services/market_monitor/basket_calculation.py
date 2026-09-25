@@ -132,18 +132,6 @@ class BasketCalculationResult:
         return json.loads(records.to_json(orient="records"))
 
 
-def specs_from_selection(selection: Any) -> list[BasketCalculationSpec]:
-    if selection is None:
-        return []
-    primary = _read(selection, "primary", None)
-    secondary = _read(selection, "secondary", None)
-    included = bool(_read(selection, "secondary_basket_included", False))
-    specs = [BasketCalculationSpec.from_snapshot(primary, default_role="primary")] if primary is not None else []
-    if included and secondary is not None:
-        specs.append(BasketCalculationSpec.from_snapshot(secondary, default_role="secondary"))
-    return specs
-
-
 def legacy_primary_spec(items: Sequence[Mapping[str, Any]], *, basket_version_id: str = "") -> BasketCalculationSpec:
     return BasketCalculationSpec.from_snapshot(
         {
