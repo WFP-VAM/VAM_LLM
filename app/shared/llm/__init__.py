@@ -3,10 +3,10 @@
 Only `vertex.py` talks to the SDK (google-genai on Vertex AI).
 """
 from .client import LLMClient, default_provider
-from .errors import LLMCallError, is_transient
+from .errors import EMPTY, INVALID_JSON, LLMCallError, is_transient
 from .profiles import ModelProfile, market_monitor_profile
 from .protocol import FilePart, LLMRequest, LLMResponse, LLMResult
-from .schema import inspect_json_structure, parse_json_object
+from .schema import TRUNCATED_FINISH_REASONS, inspect_json_structure, parse_json_object
 from .settings import (
     LLMRuntimeConfig,
     LLMRuntimeConfigurationError,
@@ -24,9 +24,12 @@ from .tracing import (
     observability_config,
     tracing_run,
 )
+from .vertex import check_response_schema
 
 __all__ = [
+    "EMPTY",
     "FilePart",
+    "INVALID_JSON",
     "LLMCallDiagnostic",
     "LLMCallError",
     "LLMClient",
@@ -39,7 +42,9 @@ __all__ = [
     "LLMRuntimeConfigurationError",
     "LLMRuntimeStatus",
     "ModelProfile",
+    "TRUNCATED_FINISH_REASONS",
     "Tracer",
+    "check_response_schema",
     "current_tracer",
     "default_provider",
     "inspect_json_structure",

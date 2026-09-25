@@ -67,21 +67,25 @@ class LLMClient:
 
         `parse(text)` and then `validate(parsed, response)` run inside the call's record, so a reply they reject
         fails the call with a stable code. Only transient transport errors are retried, up to the profile's
-        attempts; an earlier attempt then counts as recovered.
+        attempts. When a call succeeds, the failed calls it retried or repaired count as recovered, including
+        the one named by `request.retry_of` or `request.repair_of`.
         """
         attempts = max(1, self.profile.attempts)
         failed: list[str] = []
         for attempt in range(1, attempts + 1):
             try:
-                result = self._attempt(request, parse, validate, attempt, failed[-1] if failed else None)
+                result = self._attempt(request, parse, validate, failed[-1] if failed else request.retry_of)
             except LLMCallError as error:
                 if error.stage != "transport" or not error.transient or attempt == attempts:
                     raise
                 failed.append(error.call_id)
                 self._sleep(self.profile.retry_delay_seconds)
                 continue
-            for call_id in failed:
-                self.tracer.mark_recovered(call_id, disposition="recovered_by_retry")
+            recovered = [(call_id, "recovered_by_retry") for call_id in [request.retry_of, *failed] if call_id]
+            if request.repair_of:
+                recovered.append((request.repair_of, "recovered_by_repair"))
+            for call_id, disposition in recovered:
+                self.tracer.mark_recovered(call_id, disposition=disposition)
             return result
         raise AssertionError("unreachable: the last attempt returns or raises")
 
@@ -135,7 +139,7 @@ class LLMClient:
         """Input tokens of `request` as the model counts them. Not a model call, so not traced."""
         return int(self.provider.count_tokens(self.profile, request))
 
-    def _attempt(self, request, parse, validate, attempt: int, retry_of: Optional[str]) -> LLMResult:
+    def _attempt(self, request, parse, validate, retry_of: Optional[str]) -> LLMResult:
         tracer, profile = self.tracer, self.profile
         payload: Dict[str, Any] = {
             "trace_schema_version": TRACE_SCHEMA_VERSION,
@@ -143,7 +147,7 @@ class LLMClient:
             "response": None,
             "processing": {},
         }
-        record = tracer.start(profile, request, attempt=attempt, retry_of=retry_of)
+        record = tracer.start(profile, request, retry_of=retry_of)
 
         def fail(code: str, stage: str, error: BaseException, *, transient: bool = False,
                  raw_text: Optional[str] = None, fields: Optional[Dict[str, Any]] = None) -> LLMCallError:

@@ -4,20 +4,20 @@ import inspect
 import uuid
 from importlib.metadata import version
 from .errors import MFIRunError
-from .light_contracts import WORKFLOW, BUNDLE, MODEL, MAX_CHARACTERS, MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS, NODES
-from .light_runtime import RunLedger, public_diagnostics
+from .light_contracts import WORKFLOW, BUNDLE, MAX_CHARACTERS, MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS, NODES
+from .light_runtime import PROFILE, SUMMARY_TIMEOUT_SECONDS, Reporter, RunLedger
 
 
 def effective_contract():
     from .light_contracts import instructions, response_schema
     from .reliable_contracts import fingerprint
-    return {"workflow": WORKFLOW, "bundle": BUNDLE, "model": MODEL, "location": "global", "temperature": 1.0,
-        "analysis_schema": "2.1", "narrative_schema": "3.0", "methodology": "databridge-current",
-        "timeout": 600, "summary_timeout": 180, "max_attempts": 2, "sdk_retries": 0,
+    return {"workflow": WORKFLOW, "bundle": BUNDLE, "model": PROFILE.model, "location": PROFILE.location,
+        "temperature": PROFILE.temperature, "analysis_schema": "2.1", "narrative_schema": "3.0", "methodology": "databridge-current",
+        "timeout": PROFILE.timeout_seconds, "summary_timeout": SUMMARY_TIMEOUT_SECONDS, "max_attempts": 2, "sdk_retries": 0,
         "max_characters": MAX_CHARACTERS, "max_input_tokens": MAX_INPUT_TOKENS, "max_output_tokens": MAX_OUTPUT_TOKENS,
         "schema_hashes": {"sections": fingerprint(response_schema()), "review": fingerprint(response_schema(True))},
         "prompt_hashes": {node: fingerprint(instructions(node)) for node in NODES if node.startswith(("draft_", "review_", "correct_")) or node == "executive_summary"},
-        "dependencies": {name:version(name) for name in ("pydantic", "langgraph", "langchain-core", "langchain-google-vertexai")}}
+        "dependencies": {name:version(name) for name in ("pydantic", "langgraph", "google-genai")}}
 
 
 def runtime_status():
@@ -96,7 +96,7 @@ def service_info():
 def inputs_for(**kwargs):
     bound = inspect.signature(run_mfi_report_generation).bind(**kwargs)
     bound.apply_defaults()
-    return {k:v for k,v in bound.arguments.items() if k not in {"on_step", "llm_trace_sink", "release_control", "client"}}
+    return {k:v for k,v in bound.arguments.items() if k not in {"on_step", "llm_trace_sink", "release_control", "provider"}}
 
 
 def validate_submission(csv_data):
@@ -110,7 +110,8 @@ def validate_submission(csv_data):
 
 
 def run_mfi_report_generation(country, data_collection_start, data_collection_end, markets, csv_data,
-        on_step=None, release_control=None, run_id=None, llm_trace_sink=None, *, client=None):
+        on_step=None, release_control=None, run_id=None, llm_trace_sink=None, *, provider=None):
+    from app.shared.llm import LLMClient, Tracer
     from .features import require_mfi_analysis_v2
     from .light_graph import build_graph
     from .map_basemap import preflight_maps
@@ -121,15 +122,17 @@ def run_mfi_report_generation(country, data_collection_start, data_collection_en
         markets=markets, csv_data=csv_data, run_id=run_id)
     ledger = RunLedger(run_id)
     ledger.change(lambda v: v.update(light_phases={name: {"status": "pending"} for name in NODES}))
-    graph = build_graph(ledger, client=client, on_step=on_step, trace_sink=llm_trace_sink)
+    tracer = Tracer(service=PROFILE.service, run_id=run_id)
+    reporter = Reporter(ledger, tracer, on_step=on_step, trace_sink=llm_trace_sink)
+    tracer.live = lambda _trace: reporter()
+    graph = build_graph(ledger, LLMClient(PROFILE, tracer=tracer, provider=provider), reporter)
     try:
         result = graph.invoke({"base": {**inputs, "release_control": control.model_dump()}}, config={"recursion_limit": 30})["report"]
     except Exception:
-        ledger.finish("failed")
+        reporter.finish("failed")
         raise
-    ledger.finish("completed")
-    diagnostics = public_diagnostics(ledger.read())
-    result["llm_diagnostics"] = {**diagnostics.pop("llm_diagnostics"), "status": "completed"}
+    diagnostics = reporter.finish("completed")
+    result["llm_diagnostics"] = diagnostics.pop("llm_diagnostics")
     result["generation_diagnostics"] = diagnostics
     result["response_contract_bundle"] = BUNDLE
     result["effective_contract"] = effective_contract()

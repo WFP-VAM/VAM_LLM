@@ -404,6 +404,36 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - 15 tests replaced (LangChain-specific, or checking `batch_id`, which no app code set) and 20 added (retries, truncation, audit hook, the provider's wire format and client reuse);
   - MFI and Seasonal snapshots identical; every page renders; imports resolve.
 
+**Phase 2, step 2 (MFI), done 2026-09-25:**
+- **MFI calls go through `LLMClient`** with the MFI profile: Gemini 3.1 Pro, `global`, temperature 1, 65,536 output tokens, 600 s (180 s for the summary).
+  - `ModelRuntime` keeps its two attempts per work item, shared between retries and repairs (D3: unchanged). The profile therefore allows one attempt per call.
+  - Token counts go through the client too (30 s; not traced, as before).
+- **One trace per run.** MFI's own call records are gone:
+  - the run's `Tracer` keeps one record per call, and the live view and the result read it;
+  - the JSON logs and opt-in payload capture (D4) now cover MFI;
+  - a retry or repair names the call it retries or repairs, counts as that call's next attempt, and marks it recovered when it succeeds;
+  - batches count their attempts from the trace, by work item.
+- **Shared client additions:** `LLMRequest.retry_of`, for drafters that run their own attempts; the attempt number follows the retry or repair link; `check_response_schema`.
+- **Fixes (§3.6, item 7):**
+  - a finished run pushes its final trace, so a failed run's live view says "failed", not "running";
+  - once any step has failed, the other branch starts no new model call. A call already in flight still completes, because the SDK cannot cancel it.
+- **Schema:**
+  - Without an explicit order, Vertex generates properties alphabetically, and MFI's drafts have always followed that order (notes before sections). google-genai would send the declaration order instead, so the contract now pins the alphabetical order in `propertyOrdering`.
+  - The start-up schema check uses the SDK's public `Schema` model instead of a private LangChain function, and rejects unknown types instead of warning.
+- **Errors:** failed calls raise `LLMCallError`. A failed run's error names the failure code, node, operation and call; the provider's message stays in the call record.
+- **Wire comparison:**
+  - the 14 generation requests are identical to LangChain's, apart from the explicit alphabetical `propertyOrdering` (48 objects);
+  - token counts drop from 28 to 14. LangChain rewrote the schema dict while counting, which defeated the per-run cache, so every count went out twice. Count requests also no longer carry an empty `systemInstruction`;
+  - the reports built from them are identical.
+- **Snapshots:**
+  - Benin, Haiti and Gaza are identical to step 1, apart from `propertyOrdering` in the recorded requests and what follows from it in the effective contract: new schema hashes, and `google-genai` instead of `langchain-core` and `langchain-google-vertexai` among its dependencies.
+  - The Seasonal snapshots and the MM wire comparison are unchanged.
+- **SDK guard:** only Seasonal's `provider.py` is still exempt. No app module imports `langchain-google-vertexai`, `google-cloud-aiplatform` or `langchain-core` any more; the Phase 2 cleanup drops them from the requirements.
+- **Verification:**
+  - full suite 869 tests, 866 passed, 3 skipped, with no outcome changed;
+  - MFI's fakes now implement the provider interface. The LangChain request test became a google-genai wire test (the `vertex_wire` fixture moved to `tests/conftest.py`), and 9 cases were added: retry and repair links, stopped branches, the pinned order, the stricter schema check and an empty reply;
+  - every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

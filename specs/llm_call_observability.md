@@ -1,20 +1,22 @@
 # LLM call observability operations
 
 Model calls made through the shared LLM client (`app/shared/llm/`, today the
-Market Monitor's) emit metadata-only diagnostics by default: one record per
-attempt, JSON log lines on the `app.llm_trace` logger, and a run snapshot for
-APIs and the live view. Full prompt and response capture is opt-in and must use
-a private Google Cloud Storage prefix that is not served by any report or
-artifact endpoint.
+Market Monitor's and the MFI Drafter's) emit metadata-only diagnostics by
+default: one record per attempt, JSON log lines on the `app.llm_trace` logger,
+and a run snapshot for APIs and the live view. Full prompt and response capture
+is opt-in and must use a private Google Cloud Storage prefix that is not served
+by any report or artifact endpoint.
 
-The MFI Drafter's light workflow still reports its own metadata-only call
-diagnostics (counts, sizes, attempts and outcomes) and never stores prompts or
-responses; its info and health endpoints still show the tracing configuration.
 The Seasonal Outlook keeps each request and response in its private bucket as
-part of the analysis audit trail. Both move onto the shared client next
+part of the analysis audit trail. It moves onto the shared client next
 (`shared_layer_rationalization.md`).
 
 ## Runtime configuration
+
+The two call settings below apply to the Market Monitor. The MFI Drafter's
+deadlines and attempts are part of its fixed contract: 600 s per call (180 s for
+the executive summary) and two attempts per work item, shared between retries
+and repairs.
 
 - `LLM_TIMEOUT_SECONDS=90`: per-attempt deadline for ordinary LLM calls.
 - `LLM_MAX_RETRIES=2`: attempts per call, retried only on transient errors
@@ -62,18 +64,19 @@ configured, their configuration status, and the retention expectation. They do
 not expose the bucket name. Per-run diagnostics report persistence failures,
 which do not alter a successfully validated model response.
 
-Invalid timeout or retry settings fail report generation before an asynchronous
-run is created with stable code `llm_runtime_configuration_invalid`. The MFI
-Red-Team operation is `mfi.red_team_review.v4`; it receives a compact,
-canonical claim package and uses Vertex controlled JSON generation with a
-single response root. Red-Team flag IDs are assigned by the application after
-validation and are never accepted from the model.
+Invalid timeout or retry settings show as invalid in the Market Monitor's
+`/info` (`llm_runtime`, stable code `llm_runtime_configuration_invalid`), and a
+report run then fails at its first model call.
 
-If the provider returns syntactically malformed JSON, the original response is
-held in process memory only and passed once to
-`mfi.red_team_response_repair.v1`. That call may normalize formatting but may
-not add, remove, or reinterpret findings. Contract-valid repair marks the
-initial call as recovered and preserves content-free JSON-shape diagnostics.
-An unsuccessful repair, or a semantically incomplete response, fails the run.
-No prompt or response body is written to public metadata or logs, and this
-recovery path does not require GCS payload capture.
+## MFI retries and repairs
+
+Each MFI work item (a family of sections, a review, or the executive summary)
+has two attempts. A transient provider error is retried with the same request;
+a reply that is empty, not JSON, truncated, or fails the section contract is
+repaired by asking again for the missing or invalid sections only, with the
+issues found (never the reply text) in the request. The second call records
+`retry_of` or `repair_of`, and when it succeeds the first one shows as
+recovered, with disposition `recovered_by_retry` or `recovered_by_repair` and
+its content-free JSON-shape diagnostics kept. Any other error, or a second
+failure, fails the run. Once any step of a run has failed, the other steps start
+no new model call.

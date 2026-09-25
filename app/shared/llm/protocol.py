@@ -30,6 +30,8 @@ class LLMRequest:
     artifact_id: Optional[str] = None
     work_item: Optional[str] = None
     correction_attempt: int = 0
+    # A drafter that runs its own attempts (MFI) links each one to the failed call it retries or repairs.
+    retry_of: Optional[str] = None
     repair_of: Optional[str] = None
 
 

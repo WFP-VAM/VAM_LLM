@@ -6,12 +6,23 @@ retry and records every attempt. Each request carries its own timeout.
 from __future__ import annotations
 
 import threading
+import warnings
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from app.shared.config import resolve_project
 
 from .profiles import ModelProfile
 from .protocol import FilePart, LLMRequest, LLMResponse
+
+
+def check_response_schema(schema: Dict[str, Any]) -> None:
+    """Raise if the SDK cannot encode `schema` as a response schema, where it would otherwise warn and send it."""
+    from google.genai import types
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        types.Schema.model_validate(deepcopy(schema))
 
 
 def usage_from(metadata: Dict[str, Any]) -> Dict[str, Optional[int]]:

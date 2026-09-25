@@ -9,6 +9,7 @@ import pytest
 from app.services.mfi_drafter import light_graph, light_runtime, light_service
 from app.services.mfi_drafter.synthetic_fixtures import SyntheticSpec, build_loaded, build_csv_bytes
 from app.services.mfi_drafter.schemas import MFIReleaseControl
+from app.shared.llm import LLMCallError, LLMResponse
 
 
 @pytest.fixture(scope="module")
@@ -16,21 +17,22 @@ def loaded():
     return build_loaded(SyntheticSpec(market_count=2, region_count=1))
 
 
-class Client:
+class Provider:
+    """The model as the shared client sees it: drafts, reviews and corrections for any request."""
     def __init__(self, changes=(), fail=None):
         self.changes, self.fail = set(changes), fail
         self.calls, self.packages = Counter(), []
         self.lock = threading.Lock()
 
-    def count(self, messages, schema, timeout):
-        return sum(len(str(m.content)) for m in messages)//3
+    def count_tokens(self, profile, request):
+        return len(request.parts[0])//3
 
-    def generate(self, messages, schema, timeout):
-        p = json.loads(messages[0].content.split("\nREQUEST:\n",1)[1])
+    def generate(self, profile, request):
+        p = json.loads(request.parts[0].split("\nREQUEST:\n",1)[1])
         specs = p["requested_sections"]
         ids = [s["section_id"] if isinstance(s,dict) else s for s in specs]
         family = "summary" if "executive_summary" in ids else "dimensions" if ids[0] in {"Assortment","Availability","Price","Resilience","Competition","Infrastructure","Service","Food Quality","Access & Protection"} else "markets"
-        kind = "review" if "needs_revision" in schema["properties"] else "correct" if "REVIEW_REPORT" in p else "draft"
+        kind = "review" if "needs_revision" in request.response_schema["properties"] else "correct" if "REVIEW_REPORT" in p else "draft"
         key = kind+"_"+family
         with self.lock:
             self.calls[key] += 1
@@ -41,7 +43,7 @@ class Client:
             response = {"needs_revision":family in self.changes,"review_markdown":"Check the evidence and correct the affected passage."}
         else:
             response = {"sections":[{"section_id":sid,"text_markdown":f"{kind}: supported analysis for {sid}."} for sid in ids],"notes":[]}
-        return SimpleNamespace(content=json.dumps(response), response_metadata={"finish_reason":"STOP"},usage_metadata={"input_tokens":100,"output_tokens":50,"total_tokens":150})
+        return LLMResponse(text=json.dumps(response), usage={"prompt_tokens":100,"candidate_tokens":50,"total_tokens":150})
 
 
 RELEASE = MFIReleaseControl(analysis_version="2",enabled=True,configuration_status="configured")
@@ -70,9 +72,9 @@ def api(monkeypatch):
 
 @pytest.mark.parametrize("changes,expected",[((),5),(("dimensions",),6),(("markets",),6),(("dimensions","markets"),7)])
 def test_five_six_seven_calls_and_complete_report(args,changes,expected):
-    client=Client(changes)
-    result=light_service.run_mfi_report_generation(**args,client=client)
-    assert sum(client.calls.values()) == result["llm_calls"] == expected
+    provider=Provider(changes)
+    result=light_service.run_mfi_report_generation(**args,provider=provider)
+    assert sum(provider.calls.values()) == result["llm_calls"] == expected
     phases = result["generation_diagnostics"]["phases"]
     assert len(phases) == 11 and all(p["status"] == "succeeded" for p in phases)
     assert result["generation_diagnostics"]["progress_pct"] == 100
@@ -82,40 +84,46 @@ def test_five_six_seven_calls_and_complete_report(args,changes,expected):
     assert len(result["light_narrative"]["markets"]) == 2
     assert result["workflow_revision"] == "mfi-light-v1"
     assert result["narrative_schema_version"] == "3.0"
-    for kind,p in client.packages:
+    for kind,p in provider.packages:
         if kind.startswith("correct"):
             assert p["ORIGINAL_DRAFT"] and p["REVIEW_REPORT"]["needs_revision"] and p["EVIDENCE"]
 
 
 def test_failed_phase_is_reported_and_the_whole_report_fails(args):
-    client=Client(["dimensions"], fail="review_dimensions")
-    steps=[]
-    with pytest.raises(TimeoutError):
-        light_service.run_mfi_report_generation(**args,client=client,on_step=lambda name, state: steps.append((name, state)))
-    assert client.calls["review_dimensions"] == 2  # one transient retry, then the run fails
-    assert client.calls["correct_dimensions"] == 0 and client.calls["draft_summary"] == 0
+    provider=Provider(["dimensions"], fail="review_dimensions")
+    steps, traces = [], []
+    with pytest.raises(LLMCallError) as caught:
+        light_service.run_mfi_report_generation(**args,provider=provider,on_step=lambda name, state: steps.append((name, state)),
+                                                llm_trace_sink=traces.append)
+    assert (caught.value.failure_code, caught.value.node) == ("llm_transport_error", "review_dimensions")
+    assert provider.calls["review_dimensions"] == 2  # one transient retry, then the run fails
+    assert provider.calls["correct_dimensions"] == 0 and provider.calls["draft_summary"] == 0
     phases = {p["node"]: p["status"] for p in steps[-1][1]["generation_diagnostics"]["phases"]}
     assert phases["review_dimensions"] == "failed"
     assert phases["draft_dimensions"] == phases["draft_markets"] == "succeeded"
     assert phases["executive_summary"] == phases["assemble_report"] == "pending"
+    # The live view ends on the failed run, not on its last "running" update.
+    failed = [call for call in traces[-1]["calls"] if call["status"] == "failed"]
+    assert traces[-1]["status"] == "failed" and [call["node"] for call in failed] == ["review_dimensions"] * 2
+    assert failed[1]["retry_of"] == failed[0]["call_id"]
 
 
 def test_charts_render_alongside_the_drafts(args, monkeypatch):
     # Each side waits for the other, which only succeeds if both run in the same graph step.
     drafting, charting = threading.Event(), threading.Event()
-    class Drafting(Client):
-        def generate(self, messages, schema, timeout):
-            packet = json.loads(messages[0].content.split("\nREQUEST:\n",1)[1])
+    class Drafting(Provider):
+        def generate(self, profile, request):
+            packet = json.loads(request.parts[0].split("\nREQUEST:\n",1)[1])
             if not {"ORIGINAL_DRAFT", "FINAL_DIMENSIONS"} & set(packet):
                 drafting.set()
                 assert charting.wait(20), "The first drafts must not start after the charts step"
-            return super().generate(messages, schema, timeout)
+            return super().generate(profile, request)
     def charts(base):
         charting.set()
         assert drafting.wait(20), "Charts must render while the drafts are being written"
         return {"visualizations": {}, "figure_metadata": {}}
     monkeypatch.setattr(light_graph, "render_figures", charts)
-    assert light_service.run_mfi_report_generation(**args, client=Drafting())["success"]
+    assert light_service.run_mfi_report_generation(**args, provider=Drafting())["success"]
 
 
 def test_report_blocks_come_only_from_the_stored_result():
@@ -132,17 +140,17 @@ def test_disabled_release_stops_before_the_graph_is_built(args, monkeypatch):
         raise AssertionError("the graph must not be built")
     monkeypatch.delenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, raising=False)
     monkeypatch.setattr(light_graph, "build_graph", forbidden)
-    client = Client()
+    provider = Provider()
     with pytest.raises(MFIAnalysisVersionDisabled):
-        light_service.run_mfi_report_generation(**{**args, "release_control": None}, client=client)
-    assert not client.calls
+        light_service.run_mfi_report_generation(**{**args, "release_control": None}, provider=provider)
+    assert not provider.calls
 
 
 def test_supplied_release_snapshot_outlives_a_later_configuration_change(args, monkeypatch):
     from app.services.mfi_drafter.features import MFI_DRAFTER_ANALYSIS_VERSION_ENV, mfi_release_control
     control = mfi_release_control({MFI_DRAFTER_ANALYSIS_VERSION_ENV: "2", "K_REVISION": "candidate-7"})
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "invalid-after-submit")
-    result = light_service.run_mfi_report_generation(**{**args, "release_control": control}, client=Client())
+    result = light_service.run_mfi_report_generation(**{**args, "release_control": control}, provider=Provider())
     assert result["release_control"]["analysis_version"] == "2"
     assert result["release_control"]["deployment_revision"] == "candidate-7"
 
@@ -166,7 +174,7 @@ def test_http_and_streamlit_share_results_and_recovery_endpoints_are_gone(args, 
     from app.shared import async_runs
     from docx import Document
     from io import BytesIO
-    result = light_service.run_mfi_report_generation(**args, client=Client())
+    result = light_service.run_mfi_report_generation(**args, provider=Provider())
     async_runs.create_run(args["run_id"])
     async_runs.set_run_completed(args["run_id"], result=result)
     reply = api.get("/mfi-drafter/result/"+args["run_id"])
@@ -204,12 +212,16 @@ def test_failed_async_run_is_reported_without_a_result(args, api, monkeypatch):
     from app.services.mfi_drafter import router
     monkeypatch.setattr(router, "load_mfi_from_csv", lambda **kw: args["csv_data"])
     monkeypatch.setattr(router, "run_mfi_report_generation",
-        lambda **kw: light_service.run_mfi_report_generation(**kw, client=Client(fail="review_markets")))
+        lambda **kw: light_service.run_mfi_report_generation(**kw, provider=Provider(fail="review_markets")))
     run_id = api.post("/mfi-drafter/generate-from-csv-async", files={"file": ("input.csv", b"placeholder", "text/csv")}).json()["run_id"]
     status = api.get(f"/mfi-drafter/status/{run_id}").json()
-    assert status["status"] == "failed" and "injected transient provider failure" in status["error"]
+    assert status["status"] == "failed" and "llm_transport_error" in status["error"]
     phases = {p["node"]: p["status"] for p in status["metadata"]["generation_diagnostics"]["phases"]}
     assert phases["review_markets"] == "failed"
+    trace = status["metadata"]["llm_diagnostics"]
+    failed = [call for call in trace["calls"] if call["status"] == "failed"]
+    assert trace["status"] == "failed" and failed
+    assert {call["error_message"] for call in failed} == {"injected transient provider failure"}
     assert api.get(f"/mfi-drafter/result/{run_id}").status_code == 400
 
 
@@ -261,8 +273,8 @@ def test_full_country_packages_and_unchanged_analysis(args, country, survey):
     if not path.exists(): pytest.skip("Local confidential benchmark absent")
     data=load_mfi_from_csv(path)
     args.update(csv_data=data,country=country,markets=data["markets"],data_collection_start=data["data_collection_start"],data_collection_end=data["data_collection_end"])
-    client=Client(["dimensions", "markets"])
-    result=light_service.run_mfi_report_generation(**args,client=client)
+    provider=Provider(["dimensions", "markets"])
+    result=light_service.run_mfi_report_generation(**args,provider=provider)
     expected=json.loads((root/"tests/fixtures/mfi_reliable_baseline.json").read_text(encoding="utf-8"))[country]
     profile=result["assessment_profile"]
     assert profile["assessed_market_count"] == expected["count"]
@@ -271,7 +283,7 @@ def test_full_country_packages_and_unchanged_analysis(args, country, survey):
     assert profile["priority_market_names"] == expected["selected"]
     assert profile["priority_dimension_names"] == expected["priorities"]
     assert result["llm_calls"] == 7
-    for kind, packet in client.packages:
+    for kind, packet in provider.packages:
         ev=packet["EVIDENCE"]
         assert len(ev["market_scores"]["rows"]) == expected["count"]
         if kind.endswith("markets"):
@@ -287,14 +299,14 @@ def test_full_country_packages_and_unchanged_analysis(args, country, survey):
 
 
 def test_oversized_groups_split_without_repeating_successful_sections(args):
-    class Limited(Client):
-        def count(self,messages,schema,timeout):
-            packet=json.loads(messages[0].content.split("\nREQUEST:\n",1)[1])
+    class Limited(Provider):
+        def count_tokens(self, profile, request):
+            packet=json.loads(request.parts[0].split("\nREQUEST:\n",1)[1])
             return 250001 if len(packet["requested_sections"]) > 4 else 100
-    client=Limited()
-    result=light_service.run_mfi_report_generation(**args,client=client)
+    provider=Limited()
+    result=light_service.run_mfi_report_generation(**args,provider=provider)
     assert len(result["light_narrative"]["dimensions"]) == 9
-    ids=[s["section_id"] for kind, p in client.packages if kind=="draft_dimensions" for s in p["requested_sections"]]
+    ids=[s["section_id"] for kind, p in provider.packages if kind=="draft_dimensions" for s in p["requested_sections"]]
     assert len(ids)==len(set(ids))==9
 
 
@@ -310,9 +322,9 @@ def test_country_identity_and_sparse_variants_preserve_official_scores(args, loa
         frame["MarketName"] = "São José — Marché"
     data=load_mfi_from_dataframe(frame)
     args.update(country=data["country"],csv_data=data,markets=data["markets"])
-    client=Client()
-    result=light_service.run_mfi_report_generation(**args,client=client)
+    provider=Provider()
+    result=light_service.run_mfi_report_generation(**args,provider=provider)
     assert sorted(m["overall_mfi"] for m in data["markets_data"]) == sorted(m["overall_mfi"] for m in loaded["markets_data"])
     assert result["llm_calls"] == 5 and result["coverage"]["complete"]
     assert len(result["light_narrative"]["markets"]) == 2
-    assert all(p["EVIDENCE"]["country"] == "Alternative Country" for _,p in client.packages)
+    assert all(p["EVIDENCE"]["country"] == "Alternative Country" for _,p in provider.packages)

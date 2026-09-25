@@ -13,7 +13,6 @@ import pytest
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
-from google.oauth2.credentials import Credentials
 
 from app.shared.llm import (
     FilePart,
@@ -192,6 +191,21 @@ def test_transient_errors_are_retried_and_the_failed_attempt_recovered():
     assert (second["attempt"], second["retry_of"], second["status"]) == (2, first["call_id"], "succeeded")
 
 
+@pytest.mark.parametrize("link,disposition", [("retry_of", "recovered_by_retry"), ("repair_of", "recovered_by_repair")])
+def test_a_later_call_linked_to_a_failed_one_is_its_next_attempt_and_recovers_it(link, disposition):
+    # Drafters that run their own attempts (MFI) link each one to the call it retries or repairs.
+    client = make_client(FakeProvider("{", '{"ok": true}'))
+    with pytest.raises(LLMCallError) as caught:
+        client.generate(make_request(), parse=parse_json_object)
+    client.generate(make_request("second", **{link: caught.value.call_id}), parse=parse_json_object)
+
+    diagnostic = client.tracer.snapshot()
+    first, second = diagnostic["calls"]
+    assert (first["status"], first["disposition"]) == ("recovered", disposition)
+    assert (second["attempt"], second[link], second["status"]) == (2, first["call_id"], "succeeded")
+    assert (diagnostic["status"], diagnostic["failed_calls"], diagnostic["recovered_calls"]) == ("completed", 0, 1)
+
+
 @pytest.mark.parametrize("error", [
     genai_errors.ClientError(403, {"error": {"code": 403, "message": "denied", "status": "PERMISSION_DENIED"}}),
     genai_errors.ClientError(400, {"error": {"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}}),
@@ -315,30 +329,6 @@ def test_structured_logs_never_include_prompt_or_response_bodies():
         json.loads(line)
 
 
-@pytest.fixture
-def vertex_wire(monkeypatch):
-    """google-genai against a local HTTP transport: every request as sent, no network."""
-    calls, replies = [], []
-    real_client = genai.Client
-
-    def transport(request):
-        calls.append({"url": str(request.url), "body": json.loads(request.content), "headers": request.headers,
-                      "timeout": (request.extensions.get("timeout") or {}).get("read")})
-        if replies:
-            return replies.pop(0)
-        return httpx.Response(200, json={
-            "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
-            "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 4}})
-
-    def factory(**kwargs):
-        options = kwargs.pop("http_options")
-        options.httpx_client = httpx.Client(transport=httpx.MockTransport(transport))
-        return real_client(credentials=Credentials(token="offline-test-token"), http_options=options, **kwargs)
-
-    monkeypatch.setattr(genai, "Client", factory)
-    return calls, replies
-
-
 def test_vertex_provider_sends_the_profile_settings_and_nothing_else(vertex_wire):
     calls, _ = vertex_wire
     profile = replace(PROFILE, project="proj", candidate_count=1)
@@ -401,8 +391,7 @@ def test_vertex_provider_reuses_one_sdk_client_per_project_location_and_headers(
 # Model SDKs may be used only by the shared LLM package; the drafters listed here move onto it in their own steps.
 _SDK_IMPORTS = ("google.genai", "from google import genai", "langchain_google_vertexai", "import vertexai",
                 "from vertexai", "google.cloud.aiplatform")
-_NOT_YET_MIGRATED = {"app/services/mfi_drafter/light_runtime.py", "app/services/mfi_drafter/light_contracts.py",
-                     "app/services/seasonal_outlook/provider.py"}
+_NOT_YET_MIGRATED = {"app/services/seasonal_outlook/provider.py"}
 
 
 def test_only_the_shared_client_talks_to_the_model_sdk():

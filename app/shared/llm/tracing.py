@@ -387,11 +387,16 @@ class Tracer:
         profile: ModelProfile,
         request: LLMRequest,
         *,
-        attempt: int = 1,
         retry_of: Optional[str] = None,
     ) -> LLMCallDiagnostic:
+        """Record a new call. A call that retries or repairs an earlier one is that call's next attempt."""
         text = prompt_text(request)
+        retry_of = retry_of or request.retry_of
         with self._lock:
+            earlier = next(
+                (item for item in self._calls if item.call_id in {retry_of, request.repair_of}), None
+            )
+            attempt = earlier.attempt + 1 if earlier is not None else 1
             sequence = len(self._calls) + 1
             record = LLMCallDiagnostic(
                 call_id=f"llm-{sequence:04d}-{uuid.uuid4().hex[:8]}",

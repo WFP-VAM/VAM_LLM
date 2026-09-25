@@ -87,15 +87,19 @@ def compile_provider_schema(schema):
                 result["description"] = f"Must equal {value['const']!r}; checked by application validation."
         if "properties" in result:
             result["properties"] = {key: convert(item) for key, item in result["properties"].items()}
+            if len(result["properties"]) > 1:
+                # Without an explicit order Vertex generates properties alphabetically, as these contracts
+                # always have (notes before sections); the SDK would otherwise send the declaration order.
+                result["propertyOrdering"] = sorted(result["properties"])
         if "items" in result:
             result["items"] = convert(result["items"])
         if result.get("type") == "object" and not result.get("properties"):
             raise ContractConfigurationError("Model-facing objects must have explicit properties")
         return result
     result = convert(schema)
-    from langchain_google_vertexai.chat_models import _convert_schema_dict_to_gapic
+    from app.shared.llm import check_response_schema
     try:
-        _convert_schema_dict_to_gapic(deepcopy(result))
+        check_response_schema(result)
     except Exception as exc:
         raise ContractConfigurationError("Installed Vertex SDK cannot encode the response contract") from exc
     return result
@@ -107,7 +111,7 @@ def _compiled_schema(model):
 
 
 def provider_schema(model):
-    # The installed SDK mutates schema dictionaries while converting types.
+    # SDKs may rewrite schema dictionaries in place while encoding them.
     # Never pass the registry's cached object to a provider or caller.
     return deepcopy(_compiled_schema(model))
 

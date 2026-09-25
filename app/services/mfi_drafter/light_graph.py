@@ -5,7 +5,7 @@ from copy import deepcopy
 from langgraph.graph import StateGraph, START, END
 from .light_contracts import WORKFLOW
 from .light_evidence import evidence, section_specs, source_map
-from .light_runtime import ModelRuntime, Oversized, public_diagnostics
+from .light_runtime import ModelRuntime, Oversized
 
 
 class State(TypedDict, total=False):
@@ -73,22 +73,9 @@ def texts(response):
     return {s["section_id"]: s["text_markdown"] for s in response["sections"]}
 
 
-def build_graph(ledger, *, client=None, on_step=None, trace_sink=None):
-    import threading
-    callback_lock = threading.RLock()
-    def notify(name=None, value=None):
-        with callback_lock:
-            manifest = ledger.read()
-            if manifest["execution_state"] != "running":
-                return  # A sibling that finishes after a failure must not overwrite the failed run.
-            diag = public_diagnostics(manifest)
-            if trace_sink:
-                trace_sink(diag["llm_diagnostics"])
-            if on_step:
-                on_step(name or "model_call", {**(value or {}), "workflow_revision": WORKFLOW,
-                    "generation_diagnostics": {k:v for k,v in diag.items() if k != "llm_diagnostics"},
-                    "llm_diagnostics": diag["llm_diagnostics"]})
-    runtime = ModelRuntime(ledger, client, notify=notify)
+def build_graph(ledger, llm, notify):
+    """The graph of one run: `llm` makes its model calls and `notify(name, value)` reports each phase."""
+    runtime = ModelRuntime(ledger, llm)
 
     def stage(name, function):
         def execute(state):
