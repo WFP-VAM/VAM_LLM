@@ -1,8 +1,7 @@
-"""Offline scientific contract, durable execution and transport regression tests."""
+"""Offline scientific contract, phase graph, analysis record and transport regression tests."""
 import copy
 import io
 import json
-import threading
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -11,20 +10,20 @@ import pytest
 from PIL import Image
 from app.services.seasonal_outlook.config import Settings
 from app.services.seasonal_outlook.storage import MemoryStore, Conflict
-from app.services.seasonal_outlook.service import Service, Unavailable
-from app.services.seasonal_outlook.worker import execute
+from app.services.seasonal_outlook.service import DEADLINE_MARGIN_SECONDS, Gone, Service, Unavailable, ordered
+from app.services.seasonal_outlook.runner import run_phase
 from app.services.seasonal_outlook import engine
 from app.services.seasonal_outlook.inputs import regions, inspect_image, season_mode
 from app.services.seasonal_outlook.provider import vertex_schema
 
 
-class Jobs:
+class Launcher:
+    """Records the phases the service starts; tests run them with perform()."""
     def __init__(self):
         self.launched = []
 
-    def launch(self, run, op):
+    def __call__(self, run, op):
         self.launched.append((run, op))
-        return 'test-execution'
 
 
 class FakeProvider:
@@ -80,8 +79,8 @@ class FakeProvider:
 
 @pytest.fixture
 def service():
-    settings = Settings(enabled=True, project='company-test', bucket='company-test', job='seasonal', job_region='europe-west1', signer='worker@company-test.iam.gserviceaccount.com')
-    return Service(settings, MemoryStore(), Jobs())
+    settings = Settings(enabled=True, project='company-test', bucket='company-test', signer='worker@company-test.iam.gserviceaccount.com')
+    return Service(settings, MemoryStore(), Launcher())
 
 
 def image_bytes(fmt='PNG'):
@@ -102,7 +101,7 @@ def action(service, run, kind, **fields):
 
 
 def perform(service, run, provider=None):
-    execute(service, run['id'], run['active'], provider or FakeProvider())
+    run_phase(service, run['id'], run['active'], provider or FakeProvider())
     return service.get(run['id'])
 
 
@@ -131,54 +130,86 @@ def test_complete_workflow_and_exports(service, code):
         assert any('40–60%' in p.text for p in doc.paragraphs)
     with zipfile.ZipFile(io.BytesIO(service.store.read(run['artifacts']['artifacts.zip']))) as archive:
         assert archive.testzip() is None
-        assert {'input.json', 'evidence.json', 'report.json', 'report.docx', 'maps/01.png'} <= set(archive.namelist())
-    assert len(fake.requests) == 7
+        names = set(archive.namelist())
+        assert {'input.json', 'evidence.json', 'report.json', 'report.docx', 'maps/01.png'} <= names
+        # Earlier operations contribute their outputs; nothing records intermediate checkpoints.
+        earlier = ordered(run['operations'])[:-1]
+        assert {f'operations/{o["id"]}/output.json' for o in earlier} <= names
+        assert not any('checkpoint' in name for name in names)
+    assert [r['stage'] for r in fake.requests] == ['extraction', 'review', 'refinement', 'feedback',
+                                                   'draft', 'report_review', 'redraft']
 
 
-def test_idempotence_conflicts_and_duplicate_dispatch(service):
+def test_phase_graph_has_no_checkpointer():
+    from app.services.seasonal_outlook.graph import build_graph
+    graph = build_graph(FakeProvider(), None, timeout=600, namespace='test', export=lambda state: {})
+    assert graph.checkpointer is None
+    assert set(graph.nodes) >= {'extraction', 'review', 'refinement', 'feedback', 'draft', 'report_review', 'redraft', 'export'}
+
+
+def test_idempotence_conflicts_and_single_start(service):
     run = prepared(service)
     body = dict(request_id=uuid.uuid4().hex, expected_revision=run['revision'])
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: service.action(run['id'], 'extract', body), range(2)))
-    assert len(service.jobs.launched) == 1
+    assert len(service.launch.launched) == 1
     assert results[0]['active'] == results[1]['active']
     with pytest.raises(Conflict):
         service.action(run['id'], 'extract', {**body, 'timeout': 1200})
     with pytest.raises(Conflict):
         action(service, run, 'extract')
-    owner = service.claim(run['id'], results[0]['active'])
-    with pytest.raises(Conflict):
-        service.claim(run['id'], results[0]['active'])
+    fake = FakeProvider()
+    run_phase(service, run['id'], results[0]['active'], fake)
+    with pytest.raises(Conflict):  # A second start of the same operation stops before any inference.
+        run_phase(service, run['id'], results[0]['active'], fake)
+    assert len(fake.requests) == 3
 
 
-def test_resume_other_instance_and_stale_worker_fencing(service):
-    now = [1000.0]
-    service.clock = lambda: now[0]
+def test_retry_runs_the_whole_failed_phase_from_its_inputs(service):
     run = action(service, prepared(service), 'extract')
-    old_op = run['active']
-    owner = service.claim(run['id'], old_op)
-    now[0] += 121
-    run = service.get(run['id'])
-    assert run['status'] == 'interrupted'
-    other = Service(service.settings, service.store, service.jobs, service.clock)
-    successor = action(other, run, 'resume', operation_id=old_op, stage='extraction', timeout=1200)
-    with pytest.raises(Conflict):
-        service.owned(run['id'], old_op, owner, lambda r, o: r.update(status='completed'))
-    assert perform(other, successor)['status'] == 'awaiting_review'
-
-
-def test_checkpoint_resume_skips_completed_extraction(service):
-    run = action(service, prepared(service), 'extract')
-    operation = run['active']
+    failed = run['active']
     with pytest.raises(TimeoutError):
         perform(service, run, FakeProvider(fail='review'))
     run = service.get(run['id'])
-    assert run['operations'][operation]['cursor'] == 1
-    assert len(run['operations'][operation]['responses']) == 1
+    operation = run['operations'][failed]
+    assert run['status'] == 'failed' and operation['completed'] == ['extraction']
+    assert len(operation['responses']) == 1 and not operation.get('output')
+    # A failed phase publishes only its diagnostics, never a partial evidence version.
+    assert not run['versions'] and run['current_evidence'] is None
+    with pytest.raises(ValueError):
+        action(service, run, 'retry', operation_id=failed, timeout=900)
+    retried = action(service, run, 'retry', operation_id=failed, timeout=1800)
+    successor = retried['operations'][retried['active']]
+    assert successor['input'] == operation['input'] and successor['retry_of'] == failed
     fake = FakeProvider()
-    run = perform(service, action(service, run, 'resume', operation_id=operation, stage='review', timeout=1800), fake)
-    assert [r['stage'] for r in fake.requests] == ['review', 'refinement']
-    assert run['status'] == 'awaiting_review'
+    run = perform(service, retried, fake)
+    assert [r['stage'] for r in fake.requests] == ['extraction', 'review', 'refinement']
+    assert run['status'] == 'awaiting_review' and len(run['versions']) == 2
+
+
+def test_deadline_expiry_interrupts_and_a_late_thread_cannot_overwrite(service):
+    now = [1000.0]
+    service.clock = lambda: now[0]
+    run = action(service, prepared(service), 'extract')
+    late = run['active']
+    assert run['operations'][late]['deadline'] == 1000.0 + 3 * 600 + DEADLINE_MARGIN_SECONDS
+
+    class Slow(FakeProvider):
+        def complete(self, request, timeout):
+            now[0] += 3 * 600 + DEADLINE_MARGIN_SECONDS + 1  # This call outlives the phase deadline.
+            interrupted = service.get(run['id'])
+            assert interrupted['status'] == 'interrupted' and interrupted['active'] is None
+            action(service, interrupted, 'retry', operation_id=late, timeout=1200)
+            return super().complete(request, timeout)
+    with pytest.raises(Conflict):
+        perform(service, run, Slow())
+    current = service.get(run['id'])
+    successor = current['active']
+    assert successor != late and current['operations'][successor]['status'] == 'queued'
+    # The late thread wrote neither success nor failure, and no response or evidence.
+    assert current['operations'][late]['status'] == 'interrupted'
+    assert not current['operations'][late]['responses'] and not current['versions']
+    assert perform(service, current)['status'] == 'awaiting_review'
 
 
 @pytest.mark.parametrize('finish', ['MAX_TOKENS', 'SAFETY', 'BLOCKED'])
@@ -187,27 +218,96 @@ def test_invalid_response_saved_before_failure(service, finish):
     op = run['active']
     with pytest.raises(ValueError):
         perform(service, run, FakeProvider(finish=finish))
-    failed = service.get(run['id'])['operations'][op]
-    assert len(failed['responses']) == 1 and not failed['checkpoints']
+    run = service.get(run['id'])
+    failed = run['operations'][op]
+    assert len(failed['responses']) == 1 and not failed.get('output') and not failed['completed']
     assert failed['calls'][0]['status'] == 'failed'
+    assert not run['versions']
 
 
-def test_confirmation_invalidated_and_old_checkpoint_cannot_draft(service):
+def test_confirmation_invalidated_and_old_report_cannot_be_retried(service):
     run = perform(service, action(service, prepared(service), 'extract'))
     evidence = run['current_evidence']
     run = perform(service, action(service, run, 'confirm', version_id=evidence, confirmed=True))
-    report_op = list(run['operations'])[-1]
+    report_op = ordered(run['operations'])[-1]['id']
     run = perform(service, action(service, run, 'feedback', version_id=evidence, comments='Verify the number.'))
     assert run['confirmation'] is None and not run['artifacts']
     with pytest.raises(Conflict):
-        action(service, run, 'resume', operation_id=report_op, stage='redraft')
+        action(service, run, 'retry', operation_id=report_op)
     with pytest.raises(Conflict):
         action(service, run, 'confirm', version_id=evidence, confirmed=True)
 
 
+def test_report_retry_requires_the_confirmed_evidence_hash(service):
+    run = perform(service, action(service, prepared(service), 'extract'))
+    run = action(service, run, 'confirm', version_id=run['current_evidence'], confirmed=True)
+    report = run['active']
+    with pytest.raises(TimeoutError):
+        perform(service, run, FakeProvider(fail='redraft'))
+    run = service.get(run['id'])
+    assert run['status'] == 'failed' and not run['artifacts']
+    confirmation = run['confirmation']
+
+    def confirm_as(value):
+        def change(current):
+            current['confirmation'] = value
+            return current
+        return change
+    run = service.store.mutate(run['id'], confirm_as({**confirmation, 'evidence_sha256': '0' * 64}))
+    with pytest.raises(Conflict):
+        action(service, run, 'retry', operation_id=report)
+    run = service.store.mutate(run['id'], confirm_as(confirmation))
+    fake = FakeProvider()
+    run = perform(service, action(service, run, 'retry', operation_id=report), fake)
+    assert [r['stage'] for r in fake.requests] == ['draft', 'report_review', 'redraft']
+    assert run['status'] == 'completed' and len(run['artifacts']) == 3
+
+
+def test_default_launcher_runs_the_phase_in_a_background_thread(service, monkeypatch):
+    import time
+    from app.services.seasonal_outlook import runner
+    monkeypatch.setattr(runner, 'VertexProvider', lambda settings: FakeProvider())
+    threaded = Service(service.settings, service.store)
+    run = action(threaded, prepared(threaded), 'extract')
+    finish_by = time.monotonic() + 60
+    while threaded.get(run['id'])['status'] in ('queued', 'running') and time.monotonic() < finish_by:
+        time.sleep(0.05)
+    run = threaded.get(run['id'])
+    assert run['status'] == 'awaiting_review' and len(run['versions']) == 2
+
+
+def test_a_phase_that_cannot_start_fails_and_can_be_retried(service):
+    def broken(run_id, operation_id):
+        raise RuntimeError("can't start new thread")
+    service.launch = broken
+    run = action(service, prepared(service), 'extract')
+    operation = ordered(run['operations'])[-1]
+    assert run['status'] == 'failed' and run['active'] is None
+    assert operation['status'] == 'failed' and 'could not start' in operation['error']
+    service.launch = Launcher()
+    retried = action(service, run, 'retry', operation_id=operation['id'])
+    assert retried['status'] == 'queued' and service.launch.launched == [(run['id'], retried['active'])]
+
+
+def test_analyses_of_the_previous_workflow_are_listed_but_gone(service, monkeypatch):
+    from app.services.seasonal_outlook import api
+    run = prepared(service)
+
+    def previous_workflow(current):
+        current.pop('workflow_revision')
+        return current
+    service.store.mutate(run['id'], previous_workflow)
+    assert [r['id'] for r in service.list()] == [run['id']]
+    with pytest.raises(Gone):
+        service.get(run['id'])
+    monkeypatch.setattr(api, 'get_service', lambda: service)
+    reply = api.handle('GET', ['runs', run['id']])
+    assert reply.status == 410 and 'previous version' in reply.data['detail']
+
+
 def test_feature_flag_keeps_history_readable(service):
     run = prepared(service)
-    disabled = Service(replace(service.settings, enabled=False), service.store, service.jobs)
+    disabled = Service(replace(service.settings, enabled=False), service.store, service.launch)
     assert disabled.get(run['id'])['id'] == run['id']
     with pytest.raises(Unavailable):
         action(disabled, run, 'extract')
@@ -221,17 +321,17 @@ def test_enabled_default_still_requires_company_configuration(monkeypatch):
             monkeypatch.delenv(name)
     settings = Settings.from_env()
     assert settings.enabled is True
-    service = Service(settings, MemoryStore(), Jobs())
+    service = Service(settings, MemoryStore(), Launcher())
     assert service.info()['enabled'] is False
     assert service.info()['configuration_errors']
     with pytest.raises(Unavailable):
         prepared(service)
-    assert not service.jobs.launched
-    for key, value in dict(project='company-test', bucket='company-test', job='seasonal',
-                           job_region='europe-west1', signer='worker@company-test.iam.gserviceaccount.com').items():
+    assert not service.launch.launched
+    for key, value in dict(project='company-test', bucket='company-test',
+                           signer='worker@company-test.iam.gserviceaccount.com').items():
         monkeypatch.setenv('SEASONAL_' + key.upper(), value)
     configured = Settings.from_env()
-    assert Service(configured, MemoryStore(), Jobs()).info()['enabled'] is True
+    assert Service(configured, MemoryStore(), Launcher()).info()['enabled'] is True
     monkeypatch.setenv('SEASONAL_DRAFTER_ENABLED', 'false')
     assert Settings.from_env().enabled is False
     monkeypatch.setenv('SEASONAL_DRAFTER_ENABLED', ' TRUE ')
@@ -323,34 +423,6 @@ def test_gemini_configuration_and_gcs_images(service, monkeypatch):
     assert response['finish_reason'] == 'STOP' and response['text'] == '{}'
 
 
-def test_dispatch_ambiguous_does_not_automatically_retry(service):
-    calls = []
-    def ambiguous(*args):
-        calls.append(args)
-        raise TimeoutError('Unknown dispatch outcome')
-    service.jobs.launch = ambiguous
-    run = prepared(service)
-    body = dict(request_id=uuid.uuid4().hex, expected_revision=run['revision'])
-    run = service.action(run['id'], 'extract', body)
-    assert run['status'] == 'queued'
-    assert 'dispatch_error' in run['operations'][run['active']]
-    service.action(run['id'], 'extract', body)
-    assert len(calls) == 1
-
-
-def test_report_selective_resume_only_redrafts(service):
-    run = perform(service, action(service, prepared(service), 'extract'))
-    run = action(service, run, 'confirm', version_id=run['current_evidence'], confirmed=True)
-    op = run['active']
-    with pytest.raises(TimeoutError):
-        perform(service, run, FakeProvider(fail='redraft'))
-    run = service.get(run['id'])
-    fake = FakeProvider()
-    run = perform(service, action(service, run, 'resume', operation_id=op, stage='redraft'), fake)
-    assert [r['stage'] for r in fake.requests] == ['redraft']
-    assert run['status'] == 'completed'
-
-
 def test_stale_feedback_loses_to_other_analyst(service):
     run = perform(service, action(service, prepared(service), 'extract'))
     original = copy.deepcopy(run)
@@ -360,14 +432,14 @@ def test_stale_feedback_loses_to_other_analyst(service):
     assert service.get(run['id'])['current_evidence'] == run['current_evidence']
 
 
-def test_ui_refresh_and_tabs_never_start_inference(service, monkeypatch):
+def open_page(service, monkeypatch, run_id):
+    """Render page 5 against the service in process; returns the app and the requests it made."""
     import sys
     from types import ModuleType
     from pathlib import Path
     import streamlit as st
     from streamlit.testing.v1 import AppTest
     from app.services.seasonal_outlook import api
-    run = perform(service, action(service, prepared(service), 'extract'))
     monkeypatch.setattr(api, 'get_service', lambda: service)
     monkeypatch.setattr(api, 'service_info', service.info)
     requests = []
@@ -387,8 +459,14 @@ def test_ui_refresh_and_tabs_never_start_inference(service, monkeypatch):
     monkeypatch.setitem(sys.modules, 'streamlit_shared', shared)
     page = Path(__file__).parents[1] / 'pages/5_Seasonal_Outlook_Drafter.py'
     app = AppTest.from_file(str(page))
-    app.query_params['seasonal_run'] = run['id']
+    app.query_params['seasonal_run'] = run_id
     app.run(timeout=20)
+    return app, requests
+
+
+def test_ui_refresh_and_tabs_never_start_inference(service, monkeypatch):
+    run = perform(service, action(service, prepared(service), 'extract'))
+    app, requests = open_page(service, monkeypatch, run['id'])
     assert not app.exception
     assert [t.label for t in app.tabs] == ['Input package', 'Evidence and analyst review', 'Report and downloads']
     assert next(x for x in app.selectbox if x.label == 'Region').value is None
@@ -402,6 +480,26 @@ def test_ui_refresh_and_tabs_never_start_inference(service, monkeypatch):
     assert not app.query_params.get('seasonal_run')
     assert not next(b for b in app.button if b.label == 'Prepare input package').disabled
     assert all(method == 'GET' for method, _ in requests)
+
+
+def test_ui_offers_retry_only_for_the_latest_failed_operation(service, monkeypatch):
+    run = action(service, prepared(service), 'extract')
+    with pytest.raises(TimeoutError):
+        perform(service, run, FakeProvider(fail='review'))
+    app, requests = open_page(service, monkeypatch, run['id'])
+    assert not app.exception
+    assert any('Synthetic transport failure' in error.value for error in app.error)
+    retry = next(b for b in app.button if b.label == 'Retry failed operation')
+    assert not retry.disabled
+    retry.click().run(timeout=20)
+    assert not app.exception
+    assert ('POST', f'/seasonal-outlook/runs/{run["id"]}/retry') in requests
+    current = service.get(run['id'])
+    assert current['status'] == 'queued' and service.launch.launched[-1] == (run['id'], current['active'])
+    # st.rerun() leaves the aborted run's widgets in AppTest's tree, so check a fresh session.
+    app, _ = open_page(service, monkeypatch, run['id'])
+    assert not app.exception
+    assert not any(b.label == 'Retry failed operation' for b in app.button)
 
 
 def test_real_sdk_wire_conversion_without_network(service, monkeypatch):

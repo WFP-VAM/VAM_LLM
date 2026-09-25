@@ -1,6 +1,6 @@
 """One route implementation for both application transports."""
 from dataclasses import dataclass
-from .service import get_service, service_info, Unavailable
+from .service import get_service, ordered, service_info, Gone, Unavailable
 from .storage import Conflict, Missing
 
 
@@ -37,14 +37,15 @@ def handle(method, parts, body=None, params=None, upload=None):
                     return Reply(data=service.get(run_id)['versions'])
                 if len(rest) == 2 and rest[0] == 'versions':
                     return Reply(data=service.version(run_id, rest[1]))
-                if rest == ['attempts']:
-                    return Reply(data=service.get(run_id)['operations'])
-                if len(rest) == 2 and rest[0] == 'attempts':
+                if rest == ['operations']:
+                    return Reply(data=ordered(service.get(run_id)['operations']))
+                if len(rest) == 2 and rest[0] == 'operations':
                     op = service.get(run_id)['operations'].get(rest[1])
                     if op is None:
-                        raise Missing('Attempt not found')
-                    state = service.store.json(op['checkpoints'][-1] if op['checkpoints'] else op['initial_state'])
-                    return Reply(data=dict(operation=op, state=state))
+                        raise Missing('Operation not found')
+                    # Only a completed phase has an output; a failed one keeps its calls and error.
+                    output = service.store.json(op['output']) if op.get('output') else None
+                    return Reply(data=dict(operation=op, output=output))
                 if len(rest) == 2 and rest[0] == 'maps':
                     maps = service.get(run_id)['maps']
                     index = int(rest[1])
@@ -70,13 +71,15 @@ def handle(method, parts, body=None, params=None, upload=None):
                     if upload is None:
                         raise ValueError('Upload one map using the file field')
                     return Reply(data=service.upload(run_id, body, upload.content, upload.filename))
-                if len(rest) == 1 and rest[0] in ('extract', 'feedback', 'confirm', 'resume'):
+                if len(rest) == 1 and rest[0] in ('extract', 'feedback', 'confirm', 'retry'):
                     return Reply(data=service.action(run_id, rest[0], body))
         raise Missing('Seasonal endpoint not found')
     except Conflict as exc:
         return Reply(409, {'detail': str(exc)})
     except Missing as exc:
         return Reply(404, {'detail': str(exc)})
+    except Gone as exc:
+        return Reply(410, {'detail': str(exc)})
     except Unavailable as exc:
         return Reply(503, {'detail': str(exc)})
     except (ValueError, KeyError, TypeError) as exc:

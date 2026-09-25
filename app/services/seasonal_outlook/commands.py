@@ -1,4 +1,4 @@
-"""Validate transport input before object uploads, transactions or Job dispatch."""
+"""Validate transport input before object uploads, transactions or phase starts."""
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
@@ -37,10 +37,9 @@ class Confirm(Extract):
     confirmed: StrictBool
 
 
-class Resume(Command):
+class Retry(Command):
     operation_id: Identifier
-    stage: Literal['extraction', 'review', 'refinement', 'feedback', 'draft', 'report_review', 'redraft'] | None = None
     timeout: Literal[600, 1200, 1800] = 600
 
 
-ACTIONS = dict(extract=Extract, feedback=Feedback, confirm=Confirm, resume=Resume)
+ACTIONS = dict(extract=Extract, feedback=Feedback, confirm=Confirm, retry=Retry)

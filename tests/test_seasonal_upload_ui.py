@@ -27,9 +27,9 @@ def image_file(name, color='white'):
 class UploadBackend:
     def __init__(self):
         settings = Settings(enabled=True, project='company-test', bucket='company-test',
-            job='seasonal', job_region='europe-west1', signer='worker@company-test.iam.gserviceaccount.com')
+            signer='worker@company-test.iam.gserviceaccount.com')
         self.jobs = []
-        self.service = Service(settings, MemoryStore(), SimpleNamespace(launch=lambda *args: self.jobs.append(args)))
+        self.service = Service(settings, MemoryStore(), lambda *args: self.jobs.append(args))
         self.run = self.service.create(dict(request_id=uuid.uuid4().hex, expected_revision=0,
             region_id='eastern_africa_yemen', report_date='2026-09-16'))
         self.files, self.requests, self.upload_calls = [], [], []

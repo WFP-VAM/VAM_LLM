@@ -2,7 +2,6 @@
 from typing import Literal
 from pydantic import Field
 from .schemas import Record, EvidenceBundle
-from .state import WorkflowState
 from .files import validate_evidence
 
 METADATA_FIELDS = ('title_as_read', 'product_kind', 'variable', 'metric', 'units',
@@ -69,12 +68,6 @@ class RefinedExtraction(Record):
     evidence: EvidenceBundle
     issue_resolutions: list[IssueResolution]
     limitations: list[str]
-
-
-class RefinementState(WorkflowState, total=False):
-    evidence_v1: dict
-    review: dict
-    refinement: dict
 
 
 def validate_review(review, v1, pack):

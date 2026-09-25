@@ -1,6 +1,7 @@
-"""Shared application service for Streamlit, FastAPI and the Cloud Run worker."""
-import copy
+"""Shared application service for Streamlit and FastAPI; phases run in a background thread."""
 import hashlib
+import logging
+import threading
 import time
 import uuid
 from functools import lru_cache
@@ -11,9 +12,19 @@ from .inputs import prepare, inspect_image, PRODUCTS, regions
 from .engine import initial_state, CHAINS
 from .commands import Create, Upload, ACTIONS
 
+logger = logging.getLogger(__name__)
+
+WORKFLOW_REVISION = 'seasonal-graph-v1'
+# Time a phase may need beyond its model calls: object writes and the Word and ZIP exports.
+DEADLINE_MARGIN_SECONDS = 600
+
 
 class Unavailable(ValueError):
     pass
+
+
+class Gone(ValueError):
+    """An analysis stored by the previous Seasonal workflow, which this version does not read."""
 
 
 def key(value):
@@ -22,9 +33,15 @@ def key(value):
     return value
 
 
+def ordered(operations):
+    """Operations oldest first. Firestore does not keep the insertion order of a map."""
+    return sorted(operations.values(), key=lambda operation: operation['created_at'])
+
+
 class Service:
-    def __init__(self, settings, store, jobs, clock=time.time):
-        self.settings, self.store, self.jobs, self.clock = settings, store, jobs, clock
+    def __init__(self, settings, store, launch=None, clock=time.time):
+        self.settings, self.store, self.clock = settings, store, clock
+        self.launch = launch or self._launch_thread
 
     def enabled(self):
         if not self.settings.enabled:
@@ -42,13 +59,18 @@ class Service:
     def get(self, run_id):
         key(run_id)
         run = self.store.get(run_id)
+        if run.get('workflow_revision') != WORKFLOW_REVISION:
+            raise Gone('This analysis was created by a previous version of the Seasonal Outlook Drafter and '
+                       'can no longer be opened. Create a new analysis.')
         if run.get('active'):
             op = run['operations'][run['active']]
-            if op['lease_until'] <= self.clock():
+            if op['deadline'] <= self.clock():
+                # The phase's thread is gone, e.g. because the server restarted, or it is late.
                 def expire(current):
-                    if current.get('active') == op['id'] and current['operations'][op['id']]['lease_until'] <= self.clock():
-                        current['operations'][op['id']]['status'] = 'interrupted'
-                        current['operations'][op['id']]['error'] = 'Worker lease expired; explicit resume required.'
+                    operation = current['operations'][op['id']]
+                    if current.get('active') == op['id'] and operation['deadline'] <= self.clock():
+                        operation.update(status='interrupted', finished_at=self.clock(),
+                            error='The phase did not finish before its deadline, for example because the server restarted. Retry it.')
                         current.update(active=None, status='interrupted', revision=current['revision']+1, updated_at=self.clock())
                     return current
                 run = self.store.mutate(run_id, expire)
@@ -61,7 +83,9 @@ class Service:
             before = float(before)
         if set(filters) - {'region_id', 'report_date', 'status'}:
             raise ValueError('Unknown history filter')
-        return [self.get(r['id']) for r in self.store.list(limit=limit, before=before, **filters)]
+        # Analyses of the previous workflow stay listed, but opening one explains that it is gone.
+        return [self.get(r['id']) if r.get('workflow_revision') == WORKFLOW_REVISION else r
+                for r in self.store.list(limit=limit, before=before, **filters)]
 
     def _edit(self, run_id, request_id, expected_revision, payload, apply):
         self.enabled()
@@ -100,7 +124,7 @@ class Service:
                 if current['creation_fingerprint'] != fingerprint:
                     raise Conflict('Request identifier was already used for different input')
                 return current
-            return dict(id=run_id, revision=1, created_at=self.clock(), updated_at=self.clock(),
+            return dict(id=run_id, workflow_revision=WORKFLOW_REVISION, revision=1, created_at=self.clock(), updated_at=self.clock(),
                 creation_fingerprint=fingerprint, region_id=body['region_id'], region=pack['region_label'], report_date=body['report_date'],
                 notes=body.get('notes', ''), status='preparing', maps=[], versions=[], current_evidence=None,
                 confirmation=None, active=None, operations={}, requests={}, artifacts={})
@@ -160,8 +184,8 @@ class Service:
         request_id = key(body['request_id'])
         operation_id = hashlib.sha256(request_id.encode()).hexdigest()[:32]
         payload = dict(action=action, body=body, operation_id=operation_id)
-        # Idempotent responses do not dispatch another Job, even when the first
-        # caller lost its connection before receiving the acknowledgement.
+        # A repeated request returns the analysis and starts nothing, even when the
+        # first caller lost its connection before receiving the acknowledgement.
         if request_id in run['requests']:
             try:
                 normalized = ACTIONS[action].model_validate(body).model_dump()
@@ -176,14 +200,14 @@ class Service:
         if run['revision'] != body['expected_revision']:
             raise Conflict('This analysis changed. Refresh the view before continuing.')
         timeout = int(body.get('timeout', 600))
-        if timeout not in (600, 1200, 1800) or (action != 'resume' and timeout != 600):
-            raise ValueError('Initial calls use 600 seconds; explicit resumes may use 600, 1200 or 1800')
-        confirmation = None
+        if timeout not in (600, 1200, 1800) or (action != 'retry' and timeout != 600):
+            raise ValueError('Phases start with 600 seconds per call; a retry may use 600, 1200 or 1800')
+        confirmation, retry_of = None, None
         if action == 'extract':
             if run['status'] != 'preparing':
-                raise Conflict('Extraction was already started; use explicit resume')
+                raise Conflict('Extraction was already started; retry the failed operation instead')
             pack = self.validate(run_id)
-            state, chain = initial_state(pack, run['maps']), CHAINS['extract']
+            phase, state = 'extract', initial_state(pack, run['maps'])
         elif action == 'feedback':
             if run['status'] not in ('awaiting_review', 'completed') or body.get('version_id') != run['current_evidence']:
                 raise Conflict('Select the latest reviewable evidence version')
@@ -192,7 +216,7 @@ class Service:
                 raise ValueError('Supply between 1 and 20,000 characters of analyst feedback')
             state = initial_state(self.validate(run_id), run['maps'])
             state.update(evidence=self.version(run_id, run['current_evidence']), analyst_comments=comments)
-            chain = CHAINS['feedback']
+            phase = 'feedback'
         elif action == 'confirm':
             if run['status'] != 'awaiting_review' or body.get('version_id') != run['current_evidence'] or body.get('confirmed') is not True:
                 raise Conflict('Explicitly confirm the latest evidence version before drafting')
@@ -203,35 +227,31 @@ class Service:
             draft_schema(state)
             confirmation = dict(version_id=run['current_evidence'], evidence_sha256=hashlib.sha256(encode(state['evidence'])).hexdigest(),
                                 confirmed_at=self.clock(), request_id=request_id)
-            chain = CHAINS['report']
-        elif action == 'resume':
-            old = run['operations'].get(body.get('operation_id'))
-            if not old or old['status'] not in ('failed', 'interrupted', 'completed'):
-                raise Conflict('Select a finished or interrupted attempt')
-            stage = body.get('stage') or old['stages'][min(old['cursor'], len(old['stages'])-1)]
-            if stage not in old['stages']:
-                raise ValueError('Stage does not belong to the selected operation')
-            index = old['stages'].index(stage)
-            if index > old['cursor']:
-                raise Conflict('This stage has no completed prerequisite checkpoint')
-            state_ref = old['initial_state'] if index == 0 else old['checkpoints'][index-1]
-            state, chain = self.store.json(state_ref), old['stages'][index:]
-            if stage not in CHAINS['extract'] + CHAINS['feedback']:
+            phase = 'report'
+        else:
+            # A retry runs the whole phase again from the inputs of the latest operation.
+            operations = ordered(run['operations'])
+            if not operations or operations[-1]['id'] != body['operation_id'] or operations[-1]['status'] not in ('failed', 'interrupted'):
+                raise Conflict('Only the latest operation can be retried, and only after it failed or was interrupted')
+            old = operations[-1]
+            phase, retry_of, state = old['phase'], old['id'], self.store.json(old['input'])
+            if phase == 'report':
                 confirmation = run['confirmation']
                 if not confirmation or confirmation['version_id'] != run['current_evidence'] or confirmation['evidence_sha256'] != hashlib.sha256(encode(state['evidence'])).hexdigest():
-                    raise Conflict('Report checkpoint no longer matches confirmed evidence')
-            elif run['current_evidence'] != old.get('result_evidence', old.get('source_evidence')):
+                    raise Conflict('The report phase no longer matches the confirmed evidence')
+            elif run['current_evidence'] != old['source_evidence']:
                 raise Conflict('A newer evidence version exists; use that version for feedback')
-        else:
-            raise ValueError('Unknown workflow action')
+        stages = CHAINS[phase]
         initial = self.store.put_json(run_id, state)
         input_artifact = None
         if action == 'extract':
             from .exports import package
             input_artifact = self.store.put(run_id, package(state, run, self.store), 'application/zip')
-        operation = dict(id=operation_id, kind=action, stages=list(chain), cursor=0, status='queued',
-            owner=None, lease_until=self.clock()+900, created_at=self.clock(), timeout=timeout,
-            initial_state=initial, checkpoints=[], responses=[], calls=[], source_evidence=run['current_evidence'], confirmation=confirmation)
+        launch_id, created = uuid.uuid4().hex, self.clock()
+        operation = dict(id=operation_id, phase=phase, action=action, retry_of=retry_of, stages=list(stages), completed=[],
+            status='queued', created_at=created, deadline=created + len(stages) * timeout + DEADLINE_MARGIN_SECONDS,
+            timeout=timeout, input=initial, responses=[], calls=[], source_evidence=run['current_evidence'],
+            confirmation=confirmation, launch_id=launch_id)
 
         def reserve(current):
             if current['active']:
@@ -245,51 +265,31 @@ class Service:
                 current['input_artifact'] = input_artifact
             return current
         result = self._edit(run_id, request_id, body['expected_revision'], payload, reserve)
-        dispatch_owner = uuid.uuid4().hex
-        def take_dispatch(current):
-            current['operations'][operation_id].setdefault('dispatch_owner', dispatch_owner)
-            return current
-        result = self.store.mutate(run_id, take_dispatch)
-        if result['operations'][operation_id]['dispatch_owner'] != dispatch_owner:
+        # Concurrent copies of one request store a single reservation; only its author starts it.
+        if result['operations'][operation_id]['launch_id'] != launch_id:
             return result
         try:
-            execution = self.jobs.launch(run_id, operation_id)
+            self.launch(run_id, operation_id)
         except Exception as exc:
-            def uncertain(current):
+            def not_started(current):
                 op = current['operations'][operation_id]
-                op['dispatch_error'] = type(exc).__name__ + ': dispatch outcome uncertain; wait for lease expiry before resuming.'
+                if current.get('active') == operation_id and op['status'] == 'queued':
+                    op.update(status='failed', finished_at=self.clock(),
+                              error=f'The phase could not start ({type(exc).__name__}). Retry it.')
+                    current.update(active=None, status='failed', revision=current['revision']+1, updated_at=self.clock())
                 return current
-            return self.store.mutate(run_id, uncertain)
-        def dispatched(current):
-            current['operations'][operation_id]['execution'] = execution
-            return current
-        return self.store.mutate(run_id, dispatched)
+            return self.store.mutate(run_id, not_started)
+        return result
 
-    def claim(self, run_id, operation_id):
-        owner = uuid.uuid4().hex
-        def claim(current):
-            op = current['operations'][operation_id]
-            if current['active'] != operation_id or op['status'] != 'queued' or op['lease_until'] <= self.clock():
-                raise Conflict('Duplicate or expired worker dispatch')
-            op.update(owner=owner, status='running', lease_until=self.clock()+120)
-            current.update(status='running', revision=current['revision']+1, updated_at=self.clock())
-            return current
-        self.store.mutate(run_id, claim)
-        return owner
+    def _launch_thread(self, run_id, operation_id):
+        from .runner import run_phase
 
-    def owned(self, run_id, operation_id, owner, change, *, heartbeat=False):
-        def update(current):
-            op = current['operations'][operation_id]
-            if current['active'] != operation_id or op['owner'] != owner or op['status'] != 'running' or op['lease_until'] <= self.clock():
-                raise Conflict('Worker no longer owns this operation')
-            change(current, op)
-            if not heartbeat:
-                current.update(revision=current['revision']+1, updated_at=self.clock())
-            return current
-        return self.store.mutate(run_id, update)
-
-    def heartbeat(self, run_id, operation_id, owner):
-        return self.owned(run_id, operation_id, owner, lambda r, o: o.update(lease_until=self.clock()+120), heartbeat=True)
+        def run():
+            try:
+                run_phase(self, run_id, operation_id)
+            except Exception:
+                logger.exception('Seasonal operation %s of analysis %s stopped', operation_id, run_id)
+        threading.Thread(target=run, name='seasonal-' + operation_id[:8], daemon=True).start()
 
     def artifact(self, run_id, name, operation_id=None):
         run = self.get(run_id)
@@ -304,14 +304,13 @@ class Service:
 
 @lru_cache(maxsize=1)
 def get_service():
-    from .jobs import CloudJobs
     settings = Settings.from_env()
     if not settings.project or not settings.bucket:
         raise Unavailable('Seasonal durable storage is not configured: set SEASONAL_PROJECT and SEASONAL_BUCKET')
-    return Service(settings, CloudStore(settings), CloudJobs(settings))
+    return Service(settings, CloudStore(settings))
 
 
 def service_info():
     # Informative even in deployments where Seasonal has not been configured.
     settings = Settings.from_env()
-    return Service(settings, None, None).info()
+    return Service(settings, None).info()

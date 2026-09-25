@@ -1,6 +1,6 @@
 # Coherence refactor plan (GCP): LangGraph for Seasonal, no checkpoint layer, dead-code removal
 
-**Status: PLAN APPROVED IN DESIGN; implementation not started.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them.
+**Status: Phases 0–4 done on `refactor/gcp-coherence` (not pushed); Phases 5–7 to do.** Prepared 2026-09-24 from a read-only inspection of `VAM-LLM-Sep2026` @ `eb667ab` (local clone `vam-llm-app`). Decisions D1–D4 were taken on 2026-09-24 (section 2); the plan below reflects them. Each phase records what was built under its **Done** heading.
 
 ---
 
@@ -279,6 +279,21 @@ Tests were classified one by one, not by file. A test was removed when it import
 
 **Verify:** Seasonal tests; full suite; AppTest on page 5 (no inference on render).
 
+**Done 2026-09-25.**
+- As built:
+  - `graph.py`: one `StateGraph(SeasonalState)` whose edges are generated from `engine.CHAINS`, so the stage lists and the graph cannot drift apart. Compiled without a checkpointer.
+  - `runner.py`: `run_phase` invokes the graph once per operation. A recorder logs each call: request stored, response stored before validation, stage validated. The extract phase publishes V1 and V2 together when it succeeds (D7).
+  - Each operation stores its phase input when it is created (`input`), so a retry reruns exactly the same inputs. A completed operation stores its final state (`output`), which the report tab, `/operations/{id}` and the audit ZIP read.
+  - `service.py`: the default launcher runs the phase in a background thread. Two copies of one request that arrive together start it once (the reservation carries a launch id). If the thread cannot start, the operation fails at once and can be retried. Deadline: creation + stages × timeout + 600 s.
+  - Retry applies only to the latest operation, and only after it failed or was interrupted. A report retry still requires the confirmed evidence hash.
+  - Records carry `workflow_revision: seasonal-graph-v1`. Records of the previous workflow stay in the history list and answer 410 when opened (D4).
+  - `RefinementState` went with the old `WorkflowState`, which it extended; it was unused. The other research symbols are left for Phase 5.
+  - The button reads "Retry failed operation": it reruns every stage of the operation, which "Retry failed phase" would not make clear on a page that calls stages "phases".
+- Verification:
+  - A Seasonal snapshot (new: `.tmp/coherence-baseline/snapshot_seasonal.py`) runs extract, feedback and confirm on three regions, with a fake model and fixed request IDs. The graph reproduces the Job worker exactly: all 7 model requests, every evidence version, the operation outputs, the Word texts and both ZIPs. Excluded from the comparison: the `attempts/` → `operations/` rename, checkpoints and outputs, and provenance timestamps.
+  - Full suite: **862 tests: 858 passed, 4 skipped, 0 failed**. Against 3.3: 6 Seasonal tests removed (resume, fencing, checkpoints, Job dispatch) and 10 added (retry, deadline, late thread, confirmed-hash retry, start failure, previous-workflow records, the real background thread, the retry control on the page, no checkpointer, single start). No retained test changed outcome. Every page renders.
+- **Deploy prerequisite (found here, corrected in section 4):** the app identity needs `roles/aiplatform.user` in `SEASONAL_PROJECT`, which the Terraform grants only to the worker identity. The web service also needs CPU always allocated (MM and MFI already need it) and enough memory for the Word and ZIP exports (the Job had 4 GiB).
+
 ### Phase 5 — Remaining dead code
 
 | Area | Remove |
@@ -286,7 +301,7 @@ Tests were classified one by one, not by file. A test was removed when it import
 | Market Monitor | `/dataset/status` and `/dataset/upload` 404 stubs (router `:916-930`, dispatcher `:2004-2017`); the `load_csv_price_data` and `_upload_file_to_gcs` shims and the unused GCS imports (`data_loader.py:57-59`, `:142-150`); unused `_report_status` (router `:78`) |
 | Dispatcher | `_save_temp_file`, `_get_food_basket_commodities`; the unused `os` and `supported_country_options` imports |
 | Shared | `app/shared/gcs.py`; the `DataBridgesAuth` and `DataBridgesClient` classes in `app/shared/databridges.py` (its constants move next to `price_cache/databridges_adapter.py`) and `tests/test_databridges_client.py`; the `MFI_MARKET_DRAFT_TIMEOUT_SECONDS` / `MFI_RED_TEAM_TIMEOUT_SECONDS` settings in `app/shared/llm.py`, used only by the deleted MFI workflow |
-| Seasonal | the research/recovery symbols of §1.4 (D2) |
+| Seasonal | the research/recovery symbols of §1.4 (D2); the unused `hashlib` import in `inputs.py` |
 | Infrastructure | `supervisord.conf`, `nginx.conf.template` |
 | Dependencies | `langchain-google-genai`, `chardet`, `openpyxl` (no imports; re-checked before removal) |
 
@@ -318,15 +333,15 @@ Tests were classified one by one, not by file. A test was removed when it import
 | New cloud resources | none |
 | Environment variables | `SEASONAL_JOB` and `SEASONAL_JOB_REGION` no longer used. `MFI_MARKET_DRAFT_TIMEOUT_SECONDS` / `MFI_RED_TEAM_TIMEOUT_SECONDS` ignored if set. Nothing else. |
 | Cloud Run service | CPU always allocated (MM/MFI already need it); memory sized for Seasonal exports (compare with the Job's 4 GiB); consider min instances ≥ 1 |
-| IAM | The web service identity already has Vertex and the Seasonal Firestore/GCS permissions (the Terraform grants both identities); the signer setup is unchanged. The Job and the `seasonalJobDispatcher` role can be removed later. |
+| IAM | **Corrected in Phase 4:** the Terraform grants the web service identity the Seasonal Firestore and bucket permissions, but grants `roles/aiplatform.user` only to the worker identity. Seasonal inference now runs in the web service, so the app identity needs `roles/aiplatform.user` in `SEASONAL_PROJECT`. It already has it if that is the project MM and MFI call (`VERTEX_PROJECT_ID`); otherwise grant it (Phase 6 adds it to the Terraform). The signer setup is unchanged. The Job and the `seasonalJobDispatcher` role can be removed later. |
 | Firestore / GCS | unchanged: same collection, bucket and indexes |
 | MFI `mfi/checkpoint` subdocuments and `mfi-recovery` GCS prefix | no longer written (they exist only if the durable run backend was configured) |
 
 ## 5. User-visible changes
 
-- **MFI:** no Resume, and no download of the analysis or the incomplete draft of a failed run. A failed report is run again.
-- **Seasonal:** "Resume from phase" becomes "Retry failed phase" (the whole phase); the audit ZIP no longer contains checkpoints.
-- **MFI JSON API** without a CSV requires `use_mock_data=true` (D5).
+- **MFI:** no Resume, and no download of the analysis or the incomplete draft of a failed run. A failed report is run again. Reports of the previous workflow can no longer be opened or exported (410).
+- **MFI API:** the JSON endpoints `/generate` and `/generate-async` are gone (they replaced D5); `/info` lists the 11 light phases.
+- **Seasonal:** "Resume from phase" becomes **"Retry failed operation"**: it reruns all the stages of the latest operation from its inputs, and is offered only when that operation failed or was interrupted. A failed phase publishes no evidence version. The audit ZIP lists `operations/` with each operation's output instead of `attempts/` with checkpoints. Analyses created before this version stay in the history list but can no longer be opened (410).
 - Everything else is unchanged: inputs, analyses, reports, Word files and exports.
 
 ## 6. Risks

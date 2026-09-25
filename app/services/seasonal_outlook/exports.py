@@ -77,13 +77,14 @@ def package(state, run, store, documents=None):
                 archive.writestr(field + '.json', encode(state[field]))
         for version in run['versions']:
             archive.writestr('evidence_versions/' + version['id'] + '.json', store.read(version['object']))
-        for operation in run['operations'].values():
+        for operation in sorted(run['operations'].values(), key=lambda o: o['created_at']):
+            folder = f'operations/{operation["id"]}/'
             for i, ref in enumerate(operation['responses']):
-                archive.writestr(f'attempts/{operation["id"]}/response-{i+1}.json', store.read(ref))
+                archive.writestr(f'{folder}response-{i+1}.json', store.read(ref))
             for i, call in enumerate(operation['calls']):
-                archive.writestr(f'attempts/{operation["id"]}/request-{i+1}.json', store.read(call['request']))
-            for i, ref in enumerate(operation['checkpoints']):
-                archive.writestr(f'attempts/{operation["id"]}/checkpoint-{i+1}.json', store.read(ref))
+                archive.writestr(f'{folder}request-{i+1}.json', store.read(call['request']))
+            if operation.get('output'):
+                archive.writestr(folder + 'output.json', store.read(operation['output']))
         for i, item in enumerate(run['maps'], 1):
             extension = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp'}[item['object']['mime']]
             archive.writestr(f'maps/{i:02}{extension}', store.read(item['object']))

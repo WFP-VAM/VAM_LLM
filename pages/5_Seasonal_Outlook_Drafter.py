@@ -133,6 +133,11 @@ st.subheader(f'{run["region"]} · {run["report_date"]}')
 st.caption(f'Analysis {run_id} · revision {run["revision"]}. This URL can be reopened by other app users.')
 
 
+def ordered(operations):
+    # Oldest first; the stored map does not keep its insertion order.
+    return sorted(operations.values(), key=lambda o: o['created_at'])
+
+
 @st.fragment(run_every=5 if run['active'] else None)
 def progress():
     current = request_json('GET', f'{BASE}/runs/{run_id}')
@@ -141,13 +146,13 @@ def progress():
     st.write('Status: **' + current['status'].replace('_', ' ') + '**')
     if current['active']:
         op = current['operations'][current['active']]
-        st.progress(op['cursor']/len(op['stages']), text=f'{op["cursor"]}/{len(op["stages"])} phases completed')
+        done = len(op['completed'])
+        st.progress(done/len(op['stages']), text=f'{done}/{len(op["stages"])} phases completed')
         st.caption('Processing continues in the cloud if you close this page.')
-        if op.get('dispatch_error'):
-            st.warning(op['dispatch_error'])
     elif current['status'] in ('failed', 'interrupted'):
-        last = list(current['operations'].values())[-1]
-        st.error(last.get('error', 'Operation interrupted; select an explicit resume below.'))
+        last = ordered(current['operations'])[-1]
+        st.error(last.get('error') or 'The operation stopped.')
+        st.caption('Retry it from "Operations and review decisions" below.')
     if st.button('Refresh analysis'):
         st.rerun()
 progress()
@@ -218,12 +223,11 @@ with evidence_tab:
 with report_tab:
     if run['confirmation']:
         st.caption('Confirmed evidence: ' + run['confirmation']['version_id'])
-    for op in reversed(list(run['operations'].values())):
+    for op in reversed(ordered(run['operations'])):
         if op.get('artifacts'):
             with st.expander('Report · ' + op['id'][:8], expanded=bool(run['artifacts'])):
-                details = request_json('GET', f'{BASE}/runs/{run_id}/attempts/{op["id"]}')
-                report = details['state']['report']
-                analysis_view(report)
+                details = request_json('GET', f'{BASE}/runs/{run_id}/operations/{op["id"]}')
+                analysis_view(details['output']['report'])
                 for name in op['artifacts']:
                     if st.button('Prepare download: ' + name, key=op['id']+name):
                         try:
@@ -235,25 +239,27 @@ with report_tab:
         st.info('The report and Word/ZIP exports appear after confirmation and the three drafting phases.')
 
 if run['operations']:
-    with st.expander('Attempts, review decisions and selective resume'):
-        op_id = st.selectbox('Operation', list(run['operations']), format_func=lambda oid: oid[:8]+' · '+run['operations'][oid]['kind']+' · '+run['operations'][oid]['status'])
-        detail = request_json('GET', f'{BASE}/runs/{run_id}/attempts/{op_id}')
-        op = detail['operation']
+    with st.expander('Operations and review decisions'):
+        operations = ordered(run['operations'])
+        op_id = st.selectbox('Operation', [o['id'] for o in operations], index=len(operations)-1,
+            format_func=lambda oid: oid[:8]+' · '+run['operations'][oid]['action']+' · '+run['operations'][oid]['status'])
+        detail = request_json('GET', f'{BASE}/runs/{run_id}/operations/{op_id}')
+        op, output = detail['operation'], detail['output'] or {}
         st.json(op)
         for field in ('review', 'issue_resolutions', 'analyst_comments', 'feedback_resolutions', 'initial_analysis', 'draft_review'):
-            if field in detail['state']:
+            if field in output:
                 st.write(field.replace('_', ' ').capitalize())
                 if field == 'initial_analysis':
-                    analysis_view(detail['state'][field])
+                    analysis_view(output[field])
                 elif field in ('review', 'draft_review'):
-                    review_view(detail['state'][field])
+                    review_view(output[field])
                 elif field in ('issue_resolutions', 'feedback_resolutions'):
-                    review_view({'resolutions': detail['state'][field]})
+                    review_view({'resolutions': output[field]})
                 else:
-                    st.write(detail['state'][field])
-        stages = op['stages'][:min(op['cursor']+1, len(op['stages']))]
-        stage = st.selectbox('Resume from phase', stages, index=len(stages)-1)
-        timeout = st.selectbox('Per-call timeout (seconds)', [600, 1200, 1800])
-        st.caption('Resume runs the selected phase and its successors. Calls with an uncertain remote outcome may incur another inference charge.')
-        if st.button('Resume selected phase', disabled=not enabled or bool(run['active']) or op['status'] not in ('failed', 'interrupted', 'completed')):
-            act(run, 'resume', operation_id=op_id, stage=stage, timeout=timeout)
+                    st.write(output[field])
+        if op_id == operations[-1]['id'] and op['status'] in ('failed', 'interrupted'):
+            timeout = st.selectbox('Per-call timeout (seconds)', [600, 1200, 1800])
+            st.caption('Retry runs ' + ', '.join(op['stages']) + ' again from the same inputs. '
+                       'A call whose remote outcome was uncertain may be charged again.')
+            if st.button('Retry failed operation', disabled=not enabled or bool(run['active'])):
+                act(run, 'retry', operation_id=op_id, timeout=timeout)
