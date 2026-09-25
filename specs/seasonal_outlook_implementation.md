@@ -6,9 +6,11 @@ Activation updated on 21 September 2026 at the user's request: Seasonal is **ena
 
 Execution updated on 25 September 2026 by the coherence refactor (`coherence_refactor_plan.md`, Phase 4): the phases run as a LangGraph graph in a background thread of the web service. The Cloud Run Job, the worker lease and the checkpoint/resume layer were removed; a failed phase is retried as a whole.
 
+Model calls updated on 25 September 2026 by the shared-layer rationalization (`shared_layer_rationalization.md`, Phase 2): Seasonal calls go through the app's shared LLM client with the same settings. A transient failure (timeout, rate limit, server or network error) is now retried once within the phase, and the analysis record keeps every attempt.
+
 ## Application and scientific behavior
 
-`app/services/seasonal_outlook` owns input preparation, contracts, prompts, provider, persistence, execution and exports. Both the `/seasonal-outlook` FastAPI router and the Streamlit dispatcher call `api.handle` and the same `Service`. `pages/5_Seasonal_Outlook_Drafter.py` is reachable from the home page and uses the existing branding and assistance links.
+`app/services/seasonal_outlook` owns input preparation, contracts, prompts, model-call settings (`calls.py`), persistence, execution and exports. Both the `/seasonal-outlook` FastAPI router and the Streamlit dispatcher call `api.handle` and the same `Service`. `pages/5_Seasonal_Outlook_Drafter.py` is reachable from the home page and uses the existing branding and assistance links.
 
 The Input package tab accepts all maps in one selection and saves them with one **Save selected maps** action. Category, issue date and notes are optional, in collapsed per-map panels. Explicit filename prefixes can suggest a category; Gemini identifies unclassified products during image extraction. Calendar and checklist details are also collapsible. The UI validates the entire selection, including already saved maps, before sending the existing individual upload requests with successive expected revisions. An interrupted batch retains the selection and requires another explicit save; images already present are recognized by content hash and skipped, including when a persistence acknowledgement was lost. Extraction is unavailable while selected maps remain unsaved or invalid. This change requires only an application image update, with no new cloud resources or API routes.
 
@@ -22,7 +24,9 @@ The operational contracts are `seasonal_evidence_v1` and `seasonal_report_v1`. P
 
 ## Vertex adapter
 
-Google Gen AI SDK is instantiated with `vertexai=True`, the explicit Seasonal project, ADC service identity and `global`. It never uses a Together key or the other workflows' model configuration. Default model: `gemini-3.1-pro-preview`; temperature 1.0; thinking HIGH; image resolution HIGH; output limits 32,768 evidence / 65,536 report tokens. Requests have one total attempt and 600-second timeouts. A retry of a failed operation accepts 600, 1,200 or 1,800 seconds.
+Calls go through the app's shared LLM client (`app/shared/llm/`, Google Gen AI SDK with `vertexai=True`) with the Seasonal profile from `calls.py`: the explicit Seasonal project (never the workstation's default), ADC service identity and `global`. It never uses a Together key or the other workflows' model configuration. Default model: `gemini-3.1-pro-preview`; temperature 1.0; thinking HIGH; image resolution HIGH; output limits 32,768 evidence / 65,536 report tokens. Each call has a 600-second timeout and two attempts: the client retries a transient failure once and never retries a refusal such as permission denied; the SDK itself never retries. A retry of a failed operation accepts 600, 1,200 or 1,800 seconds.
+
+The analysis record is the call's mandatory audit. Each attempt's request is stored before the call and its response before validation; if either cannot be stored, the call fails. A failed attempt keeps its failure code and error. Calls also appear in the app's structured LLM logs, but not in its optional payload capture, which the audit makes redundant.
 
 Original images are immutable GCS objects supplied as `gs://` URI parts. The adapter resolves Pydantic references, converts constant values into enums, keeps Gemini-supported schema fields and sends the result in API configuration. It does not duplicate schemas in prompts. The original Pydantic model and semantic validators remain authoritative locally.
 

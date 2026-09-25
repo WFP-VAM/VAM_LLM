@@ -226,27 +226,68 @@ def test_truncated_reply_fails_only_when_the_request_says_so():
     assert (caught.value.failure_code, caught.value.stage) == ("llm_response_truncated", "response_extraction")
 
 
-def test_audit_failures_fail_the_call_with_the_original_error():
-    class Audit:
-        def __init__(self, fail_at):
-            self.fail_at = fail_at
+class Audit:
+    """Records the hooks it receives; `fail_at` names the one that raises."""
 
-        def requested(self, record, request):
-            if self.fail_at == "request":
-                raise OSError("request store down")
+    def __init__(self, fail_at=None):
+        self.fail_at, self.events = fail_at, []
 
-        def responded(self, record, response):
-            if self.fail_at == "response":
-                raise OSError("response store down")
+    def _hook(self, name, record):
+        self.events.append((name, record.status))
+        if self.fail_at == name:
+            raise OSError(f"{name} store down")
 
-    for fail_at, code in (("request", "llm_request_persistence_error"), ("response", "llm_response_persistence_error")):
-        provider = FakeProvider("reply")
-        client = make_client(provider, audit=Audit(fail_at))
-        with pytest.raises(OSError):
-            client.generate(make_request())
-        call = client.tracer.snapshot()["calls"][0]
-        assert (call["status"], call["failure_code"]) == ("failed", code)
-        assert len(provider.requests) == (0 if fail_at == "request" else 1)
+    def requested(self, record, request):
+        self._hook("requested", record)
+
+    def responded(self, record, response):
+        self._hook("responded", record)
+
+    def validated(self, record):
+        self._hook("validated", record)
+
+    def failed(self, record):
+        self._hook("failed", record)
+
+
+@pytest.mark.parametrize("fail_at,code", [("requested", "llm_request_persistence_error"),
+                                          ("responded", "llm_response_persistence_error"),
+                                          ("validated", "llm_response_persistence_error")])
+def test_audit_failures_fail_the_call_with_the_original_error(fail_at, code):
+    provider = FakeProvider("reply")
+    audit = Audit(fail_at)
+    client = make_client(provider, audit=audit)
+    with pytest.raises(OSError):
+        client.generate(make_request())
+    call = client.tracer.snapshot()["calls"][0]
+    assert (call["status"], call["failure_code"]) == ("failed", code)
+    assert len(provider.requests) == (0 if fail_at == "requested" else 1)
+    assert audit.events[-1][0] == fail_at  # an audit that failed is not asked to record the failure
+
+
+def test_audit_follows_each_attempt_and_its_errors_never_hide_the_call_failure():
+    busy = genai_errors.ServerError(503, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+    audit = Audit()
+    client = make_client(FakeProvider(busy, "done"), audit=audit, profile=replace(PROFILE, attempts=2))
+    client.generate(make_request())
+    assert audit.events == [("requested", "started"), ("failed", "failed"), ("requested", "started"),
+                            ("responded", "started"), ("validated", "started")]
+    audit = Audit("failed")
+    client = make_client(FakeProvider("not json"), audit=audit)
+    with pytest.raises(LLMCallError) as caught:
+        client.generate(make_request(), parse=parse_json_object)
+    assert caught.value.failure_code == "llm_invalid_json" and audit.events[-1] == ("failed", "failed")
+
+
+def test_a_run_can_keep_payloads_out_of_the_trace_bucket(monkeypatch):
+    monkeypatch.setenv("LLM_TRACE_PAYLOADS", "true")
+    monkeypatch.setenv("LLM_TRACE_GCS_URI", "gs://private-bucket")
+    monkeypatch.setattr(tracing, "_persist_payload", lambda **_kwargs: pytest.fail("payload persisted"))
+    tracer = Tracer(service="seasonal-outlook", run_id="audited", capture_payloads=False)
+    LLMClient(PROFILE, tracer=tracer, provider=FakeProvider("reply")).generate(make_request())
+    diagnostic = tracer.snapshot()
+    assert diagnostic["payload_capture_enabled"] is False
+    assert diagnostic["calls"][0]["payload_persistence_status"] == "disabled"
 
 
 def test_started_snapshot_is_visible_before_a_blocking_provider_returns():
@@ -388,10 +429,9 @@ def test_vertex_provider_reuses_one_sdk_client_per_project_location_and_headers(
     assert created[0]["http_options"].retry_options.attempts == 1
 
 
-# Model SDKs may be used only by the shared LLM package; the drafters listed here move onto it in their own steps.
+# Model SDKs may be used only by the shared LLM package.
 _SDK_IMPORTS = ("google.genai", "from google import genai", "langchain_google_vertexai", "import vertexai",
                 "from vertexai", "google.cloud.aiplatform")
-_NOT_YET_MIGRATED = {"app/services/seasonal_outlook/provider.py"}
 
 
 def test_only_the_shared_client_talks_to_the_model_sdk():
@@ -399,7 +439,7 @@ def test_only_the_shared_client_talks_to_the_model_sdk():
     offenders = []
     for path in (root / "app").rglob("*.py"):
         relative = path.relative_to(root).as_posix()
-        if relative.startswith("app/shared/llm/") or relative in _NOT_YET_MIGRATED:
+        if relative.startswith("app/shared/llm/"):
             continue
         source = path.read_text(encoding="utf-8")
         offenders += [f"{relative}: {name}" for name in _SDK_IMPORTS if name in source]

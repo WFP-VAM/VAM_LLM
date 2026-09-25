@@ -1,22 +1,25 @@
 # LLM call observability operations
 
-Model calls made through the shared LLM client (`app/shared/llm/`, today the
-Market Monitor's and the MFI Drafter's) emit metadata-only diagnostics by
-default: one record per attempt, JSON log lines on the `app.llm_trace` logger,
-and a run snapshot for APIs and the live view. Full prompt and response capture
-is opt-in and must use a private Google Cloud Storage prefix that is not served
-by any report or artifact endpoint.
+Every model call of the app goes through the shared LLM client
+(`app/shared/llm/`) and emits metadata-only diagnostics by default: one record
+per attempt, JSON log lines on the `app.llm_trace` logger, and a run snapshot
+for APIs and the live view. Full prompt and response capture is opt-in and must
+use a private Google Cloud Storage prefix that is not served by any report or
+artifact endpoint.
 
-The Seasonal Outlook keeps each request and response in its private bucket as
-part of the analysis audit trail. It moves onto the shared client next
-(`shared_layer_rationalization.md`).
+The Seasonal Outlook's analysis record is the mandatory audit of its calls: it
+stores each attempt's request before the call and its response before
+validation, in the Seasonal bucket, and a call fails if either cannot be
+stored. Payload capture is therefore off for Seasonal runs.
 
 ## Runtime configuration
 
-The two call settings below apply to the Market Monitor. The MFI Drafter's
-deadlines and attempts are part of its fixed contract: 600 s per call (180 s for
-the executive summary) and two attempts per work item, shared between retries
-and repairs.
+The two call settings below apply to the Market Monitor. The other drafters'
+deadlines and attempts are fixed:
+- MFI Drafter: 600 s per call (180 s for the executive summary) and two
+  attempts per work item, shared between retries and repairs.
+- Seasonal Outlook: the phase timeout the analyst chose (600, 1,200 or
+  1,800 s) and two attempts per call, retried only on transient errors.
 
 - `LLM_TIMEOUT_SECONDS=90`: per-attempt deadline for ordinary LLM calls.
 - `LLM_MAX_RETRIES=2`: attempts per call, retried only on transient errors

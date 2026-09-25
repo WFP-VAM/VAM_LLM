@@ -61,7 +61,7 @@ Each service is a self-contained FastAPI router whose workflow is a **LangGraph 
 
 The shared layer provides:
 
-- **LLM client** (`llm/`) -- one client for model calls, on the google-genai SDK. Each drafter has a model profile; every call is retried only on transient errors and traced the same way (records, JSON logs, optional payload capture). The Market Monitor (Gemini 2.5 Pro by default, zero temperature) and the MFI drafter (Gemini 3.1 Pro, which repairs refused replies itself and links each repair to the attempt it fixes) use it; the Seasonal Outlook still has its own Vertex client and moves onto it next (`specs/shared_layer_rationalization.md`).
+- **LLM client** (`llm/`) -- the one client for every model call, on the google-genai SDK. Each drafter has a model profile; every call is retried only on transient errors and traced the same way (records, JSON logs, optional payload capture). The Market Monitor uses Gemini 2.5 Pro by default at zero temperature. The MFI drafter uses Gemini 3.1 Pro and repairs refused replies itself, linking each repair to the attempt it fixes. The Seasonal Outlook uses Gemini 3.1 Pro with its analysis record as the mandatory audit of every attempt.
 - **Retrievers** -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries.
 - **Async run manager** -- tracks long-running jobs with progress, warnings, and artifacts; pluggable backend (in-memory for dev, Firestore + GCS for production).
 - **DOCX exporter** -- converts an abstract `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) into a branded Word document with embedded visualisations.
@@ -98,7 +98,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 | **Seerist** | Intelligence/news aggregation. Provides contextual documents on markets, prices, inflation, currency, and trade for a given country and time window. |
 | **ReliefWeb** | UN humanitarian reporting. Supplements Seerist with reports on food security and market conditions. |
 | **Trading Economics** | Exchange-rate data for 15+ currencies used in the Market Monitor. |
-| **Google Vertex AI** | LLM backend, through the Google Gen AI SDK. Gemini 2.5 Pro for the Market Monitor and Gemini 3.1 Pro for the MFI drafter, both through the shared LLM client; Gemini 3.1 Pro for the Seasonal Outlook, through its own client until it moves to the shared one. Powers narrative generation, event extraction, trend analysis, map evidence extraction, review and QA. |
+| **Google Vertex AI** | LLM backend, through the shared LLM client and the Google Gen AI SDK. Gemini 2.5 Pro for the Market Monitor; Gemini 3.1 Pro for the MFI drafter and the Seasonal Outlook. Powers narrative generation, event extraction, trend analysis, map evidence extraction, review and QA. |
 | **Google Cloud Storage** | Stores run artifacts, Seasonal Outlook inputs, evidence versions and exports, and cached reference data in production. |
 | **Google Firestore** | Persistent run records and Seasonal Outlook analysis records in production. |
 
@@ -153,7 +153,7 @@ UNIFIED APP/
       price_cache/             # DataBridges price cache used by Market Monitor
         config.py, sql_repository.py, databridges_adapter.py, refresh_worker.py, migrations/
       seasonal_outlook/        # Seasonal Outlook drafting
-        router.py, api.py, service.py, graph.py, runner.py, engine.py, provider.py, storage.py, science/
+        router.py, api.py, service.py, graph.py, runner.py, engine.py, calls.py, storage.py, science/
 
     streamlit_backend/
       dispatcher.py            # Local request dispatcher (bypasses HTTP)

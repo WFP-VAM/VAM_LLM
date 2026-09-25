@@ -434,6 +434,32 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - MFI's fakes now implement the provider interface. The LangChain request test became a google-genai wire test (the `vertex_wire` fixture moved to `tests/conftest.py`), and 9 cases were added: retry and repair links, stopped branches, the pinned order, the stricter schema check and an empty reply;
   - every page renders and all modules import.
 
+**Phase 2, step 3 (Seasonal Outlook), done 2026-09-25:**
+- **Seasonal calls go through `LLMClient`.** `provider.py` became `calls.py`, which holds the profile, each stage's request and the schema conversion, and no SDK code.
+  - The profile keeps every setting: the explicit project (never the workstation's), `global`, temperature 1, thinking HIGH, image resolution HIGH, the shared request-type header, the output limits and the phase timeout.
+  - `engine.accept` is the call's validator.
+- **Two attempts per call on transient errors (D3).** A single timeout, 429 or 503 no longer fails the phase. Refusals such as permission denied still fail at once, and the SDK itself never retries.
+- **The analysis record is the call's audit.** `Recorder` implements the tracer's audit hook:
+  - it stores each attempt's request before the call and its response before validation, and a failed write fails the call;
+  - each call entry gains a `call_id`, and its `attempt` number replaces the constant `attempts: 1`, including in the stored diagnostics;
+  - a failed attempt keeps its failure code and error.
+- **Shared client additions:**
+  - the audit protocol gains `validated` (whose failure fails the call) and `failed` (whose own errors are only logged);
+  - a tracer can turn payload capture off, which Seasonal runs do because the audit keeps everything;
+  - empty and truncated replies keep their error as the call error's cause, and the empty-reply message names the finish reason;
+  - the client's retry pause can be replaced.
+- **Errors:** a phase error still shows the analyst the underlying error (for example the provider's message or the validation failure). A truncated reply now reads "LLM response stopped at MAX_TOKENS" and carries the shared failure code.
+- **Wire comparison:**
+  - the 21 requests of AFY, AMX and ASE are identical;
+  - what the analysis record stores is identical apart from the `attempt` numbers and call ids: stored requests, the stored responses' text, raw reply, hashes and token usage, and the call log.
+- **Snapshots:** identical, apart from the stored responses of the synthetic fake, which now carry the full diagnostic block that real calls already had. MM requests and MFI requests and snapshots are unchanged.
+- **SDK guard:** no module outside `app/shared/llm/` is exempt any more.
+- **Verification:**
+  - full suite 876 tests, 873 passed, 3 skipped, with no outcome changed;
+  - the Seasonal fake now implements the provider interface, and the SDK tests run through the shared provider;
+  - added: a transient failure retried within the phase, the retry-or-refusal rule on the wire, no workstation project, the audit hooks and payload capture turned off;
+  - every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

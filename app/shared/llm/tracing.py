@@ -37,7 +37,8 @@ PayloadStatus = Literal["disabled", "pending", "stored", "failed"]
 
 # Failures of the reply itself, as opposed to reaching the model or storing the audit trail.
 CONTRACT_STAGES = {"response_extraction", "json_parse", "contract_validation"}
-_CALL_FAILURE_STAGES = {"transport", "request_persistence", "response_persistence"}
+_PERSISTENCE_STAGES = {"request_persistence", "response_persistence"}
+_CALL_FAILURE_STAGES = {"transport", *_PERSISTENCE_STAGES}
 
 
 class LLMCallDiagnostic(BaseModel):
@@ -127,11 +128,19 @@ LiveSink = Callable[[Dict[str, Any]], None]
 
 
 class CallAudit(Protocol):
-    """A mandatory store of every request and reply, such as Seasonal's analysis record. Its failures fail the call."""
+    """A mandatory store of every request and reply, such as Seasonal's analysis record.
+
+    `requested`, `responded` and `validated` failures fail the call. `failed` is told about a call that failed for
+    any other reason; its own errors are logged, and the call's original error stands.
+    """
 
     def requested(self, record: LLMCallDiagnostic, request: LLMRequest) -> None: ...
 
     def responded(self, record: LLMCallDiagnostic, response: LLMResponse) -> None: ...
+
+    def validated(self, record: LLMCallDiagnostic) -> None: ...
+
+    def failed(self, record: LLMCallDiagnostic) -> None: ...
 
 
 _SAFE_SLUG_PATTERN = re.compile(r"[^a-zA-Z0-9_.-]+")
@@ -286,7 +295,10 @@ def _persist_payload(
 
 
 class Tracer:
-    """The calls of one run: snapshots for APIs and the live view, JSON logs and optional payload capture."""
+    """The calls of one run: snapshots for APIs and the live view, JSON logs and optional payload capture.
+
+    A drafter whose audit already keeps every request and reply (Seasonal) turns payload capture off for its runs.
+    """
 
     def __init__(
         self,
@@ -296,11 +308,13 @@ class Tracer:
         initial: Optional[Mapping[str, Any]] = None,
         live: Optional[LiveSink] = None,
         audit: Optional[CallAudit] = None,
+        capture_payloads: bool = True,
     ) -> None:
         self.service = service
         self.run_id = run_id
         self.live = live
         self.audit = audit
+        self.capture_payloads = capture_payloads
         self._lock = threading.RLock()
         self._calls: List[LLMCallDiagnostic] = []
         self._started: Dict[str, float] = {}
@@ -338,11 +352,14 @@ class Tracer:
             recovered_calls=len(recovered),
             failed_calls=len(failed),
             contract_failed_calls=sum(item.failure_stage in CONTRACT_STAGES for item in failed),
-            payload_capture_enabled=config.payload_capture_enabled,
+            payload_capture_enabled=self._captures(config),
             payload_storage_configured=config.payload_storage_configured,
             payload_persistence_failures=sum(item.payload_persistence_status == "failed" for item in calls),
             calls=calls,
         ).model_dump(mode="json")
+
+    def _captures(self, config: LLMObservabilityConfig) -> bool:
+        return self.capture_payloads and config.payload_capture_enabled
 
     def mark_recovered(self, call_id: str, *, disposition: str) -> None:
         """A failed attempt whose call later succeeded: successful at run level, still auditable."""
@@ -416,7 +433,7 @@ class Tracer:
                 prompt_message_count=len(request.parts) + (1 if request.system else 0),
                 prompt_character_count=len(text),
                 prompt_sha256=_sha256(text),
-                payload_persistence_status="pending" if observability_config().payload_capture_enabled else "disabled",
+                payload_persistence_status="pending" if self._captures(observability_config()) else "disabled",
                 attempt=attempt,
                 work_item=request.work_item,
                 retry_of=retry_of,
@@ -471,6 +488,12 @@ class Tracer:
                 raise
 
     def succeeded(self, record: LLMCallDiagnostic, payload: Dict[str, Any]) -> None:
+        if self.audit is not None:
+            try:
+                self.audit.validated(record)
+            except Exception as exc:
+                self.failed(record, code=RESPONSE_PERSISTENCE, stage="response_persistence", error=exc, payload=payload)
+                raise
         self.update(record, status="succeeded", completed_at=_utc_now(), duration_ms=self._elapsed_ms(record))
         self._finish_payload(record, payload)
         _emit_structured("llm_call_succeeded", **record.model_dump(mode="json"))
@@ -508,6 +531,19 @@ class Tracer:
             "failure_code": code,
         }
         self._finish_payload(record, payload)
+        if self.audit is not None and stage not in _PERSISTENCE_STAGES:
+            try:
+                self.audit.failed(record)
+            except Exception as exc:
+                _emit_structured(
+                    "llm_audit_failed",
+                    level=logging.ERROR,
+                    service=self.service,
+                    run_id=self.run_id,
+                    call_id=record.call_id,
+                    error_type=type(exc).__name__,
+                    error_message=_sanitize_error(exc),
+                )
         _emit_structured(
             "llm_call_failed" if stage in _CALL_FAILURE_STAGES else "llm_response_contract_failed",
             level=logging.ERROR,
@@ -541,7 +577,7 @@ class Tracer:
 
     def _finish_payload(self, record: LLMCallDiagnostic, payload: Dict[str, Any]) -> None:
         config = observability_config()
-        if not config.payload_capture_enabled:
+        if not self._captures(config):
             self.update(record, payload_persistence_status="disabled")
             return
         if not config.payload_storage_configured:

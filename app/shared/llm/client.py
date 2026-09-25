@@ -49,12 +49,12 @@ class LLMClient:
         *,
         tracer: Optional[Tracer] = None,
         provider: Any = None,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Optional[Callable[[float], None]] = None,
     ) -> None:
         self.profile = profile
         self.tracer = tracer or Tracer(service=profile.service, run_id=f"{profile.service}-direct")
         self.provider = provider or default_provider()
-        self._sleep = sleep
+        self._sleep = sleep or time.sleep
 
     def generate(
         self,
@@ -172,11 +172,11 @@ class LLMClient:
             "raw": response.raw,
         }
         if not text:
-            raise fail(EMPTY, "response_extraction", ValueError("LLM response contains no text"),
-                       fields={"response_extraction_status": "failed"})
+            error = ValueError(f"LLM response contains no text (finish reason {response.finish_reason})")
+            raise fail(EMPTY, "response_extraction", error, fields={"response_extraction_status": "failed"}) from error
         if request.fail_on_truncation and response.finish_reason.upper() in TRUNCATED_FINISH_REASONS:
-            raise fail(TRUNCATED, "response_extraction", ValueError(f"LLM response stopped at {response.finish_reason}"),
-                       fields={"response_extraction_status": "failed"})
+            error = ValueError(f"LLM response stopped at {response.finish_reason}")
+            raise fail(TRUNCATED, "response_extraction", error, fields={"response_extraction_status": "failed"}) from error
         tracer.update(record, response_extraction_status="passed")
 
         parsed: Any = text
