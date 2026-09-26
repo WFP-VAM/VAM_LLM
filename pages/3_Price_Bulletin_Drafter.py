@@ -11,9 +11,10 @@ from streamlit_shared import (
     render_report_delivery,
     render_report_blocks,
     render_wfp_sidebar_logo,
+    follow_run,
     request_json,
-    run_async_and_poll,
     safe_show_error,
+    start_run,
 )
 from app.services.market_monitor.basket_ui import (
     DEFAULT_PRIMARY_NAME,
@@ -783,30 +784,35 @@ if submitted and not overlap_errors:
             ),
         }
 
-        run_id, final_status, result = run_async_and_poll(
-            start_method="POST",
-            start_path="/market-monitor/generate-async",
-            status_path_template="/market-monitor/status/{run_id}",
-            result_path_template="/market-monitor/result/{run_id}",
-            start_json=payload,
-            poll_interval_seconds=2.0,
-            timeout_seconds=3600,
-        )
-        st.session_state["mm_last_result"] = result
-        st.session_state["mm_last_run_id"] = run_id
-        for key in (
-            "mm_docx_bytes",
-            "mm_docx_run_id",
-            "mm_docx_error",
-            "mm_docx_error_run_id",
-        ):
+        start_run("mm", "/market-monitor/generate-async", json_body=payload)
+        st.session_state["mm_run_country"] = country
+        for key in ("mm_last_result", "mm_last_run_id"):
             st.session_state.pop(key, None)
-        if isinstance(final_status, dict) and final_status.get("status") in {"completed", "failed", "interrupted"}:
-            advance_report_iteration(st.session_state, country)
-        st.rerun()
 
     except Exception as e:
         safe_show_error(e)
+
+
+def _run_ended(run_id, final_status, result):
+    st.session_state["mm_last_result"] = result
+    st.session_state["mm_last_run_id"] = run_id
+    for key in (
+        "mm_docx_bytes",
+        "mm_docx_run_id",
+        "mm_docx_error",
+        "mm_docx_error_run_id",
+    ):
+        st.session_state.pop(key, None)
+    # The next report of the run's country starts from fresh basket choices.
+    advance_report_iteration(st.session_state, st.session_state.get("mm_run_country") or country)
+
+
+follow_run(
+    "mm",
+    status_path="/market-monitor/status/{run_id}",
+    result_path="/market-monitor/result/{run_id}",
+    on_end=_run_ended,
+)
 
 result = st.session_state.get("mm_last_result")
 run_id = st.session_state.get("mm_last_run_id")

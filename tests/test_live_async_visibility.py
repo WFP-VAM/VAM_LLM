@@ -1,5 +1,3 @@
-from contextlib import nullcontext
-
 from app.shared.runs import report_runs
 from app.services.market_monitor.price_backfill import (
     BasketReferenceMonthMissing,
@@ -11,7 +9,6 @@ from app.services.market_monitor import data_loader as mm_data
 from app.services.market_monitor import router as mm_router
 from app.services.mfi_drafter import router as mfi_router
 from app.streamlit_backend import dispatcher
-import streamlit_shared
 from streamlit_shared import ordered_live_output_sections
 
 
@@ -592,49 +589,6 @@ def test_mfi_dispatcher_info_advertises_csv_upload_and_the_light_workflow():
     assert "inputs" not in info
     assert "databridges" not in info
     assert [node["id"] for node in info["workflow_nodes"]] == list(NODES)
-
-
-def test_run_async_and_poll_enables_downloads_only_for_final_status(monkeypatch):
-    events = []
-
-    class DummyPlaceholder:
-        def container(self):
-            return nullcontext()
-
-    responses = iter(
-        [
-            {"run_id": "mfi_test"},
-            {"run_id": "mfi_test", "status": "running", "progress_pct": 25},
-            {"run_id": "mfi_test", "status": "completed", "progress_pct": 100},
-            {"success": True},
-        ]
-    )
-
-    monkeypatch.setattr(streamlit_shared.st, "empty", lambda: DummyPlaceholder())
-    monkeypatch.setattr(streamlit_shared, "request_json", lambda *args, **kwargs: next(responses))
-    monkeypatch.setattr(streamlit_shared.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        streamlit_shared,
-        "render_run_status",
-        lambda status, **kwargs: events.append((status.get("status"), kwargs.get("render_instance_id"), kwargs.get("enable_downloads"))),
-    )
-
-    run_id, final_status, result = streamlit_shared.run_async_and_poll(
-        start_method="POST",
-        start_path="/start",
-        status_path_template="/status/{run_id}",
-        result_path_template="/result/{run_id}",
-        poll_interval_seconds=0.0,
-        timeout_seconds=1,
-    )
-
-    assert run_id == "mfi_test"
-    assert final_status["status"] == "completed"
-    assert result == {"success": True}
-    assert events == [
-        ("running", "poll-0", False),
-        ("completed", None, True),
-    ]
 
 
 def test_ordered_live_output_sections_prioritizes_standard_order():

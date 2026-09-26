@@ -608,6 +608,27 @@ Two captures of unchanged code are identical (80 files); `p5-before-1` is the ba
   - Four tests call the moved functions where they now live. The MFI page test replaces the MFI's `ui.py` the way it replaces `streamlit_shared`.
   - Full suite 905 tests, 902 passed, 3 skipped, with no outcome changed; every page renders and all modules import.
 
+**Phase 5, step 5 (following a run), done 2026-09-26:**
+- **One mechanism for the Price Bulletin and MFI pages,** in `streamlit_shared.py`, on the fragment polling the Seasonal Outlook page already used:
+  - `start_run` starts a report and makes it the page's run: the session follows it and the page URL names it (`?mm_run=`, `?mfi_run=`).
+  - `follow_run` refreshes the run's status every 2 seconds in a fragment. When the run ends, it loads the result if there is one, hands it to the page once and reruns the page.
+- **What changes for users:**
+  - The Price Bulletin page no longer blocks while a report runs, for up to an hour. Before, any click during a run stopped the loop, and the page lost the run.
+  - A failed or interrupted report keeps its final status on the page. The Price Bulletin page used to clear it as soon as the run ended.
+  - A reloaded or shared Price Bulletin URL picks the run up again, as the MFI page already did.
+  - The MFI page loses its second polling path (a 10-second fragment for reloads). Its phase table is shown with the status, and its errors appear as errors rather than warnings.
+  - A completed report shows the report, as the Price Bulletin page already did. The MFI page used to show the final status above it until the next click.
+- The Seasonal Outlook page keeps its own fragment, since it follows an analysis rather than a report run.
+- **Verification:**
+  - `tests/test_run_following.py` (5 tests) runs the real `start_run` and `follow_run` in AppTest: polling, the hand-over of the result, failed runs, a run named in the URL, a failed status request that the next refresh retries, and a new run replacing an old failure.
+  - The page tests of both drafters now run the real `start_run` and `follow_run` over their fake backends; their assertions are unchanged, except for the MFI error shown as an error.
+  - In a browser, the app ran offline (`.tmp/shared-layer/p5_offline_app.py`: fake model with pauses, fake news sources, the Price Bulletin page's price data from its test backend):
+    - a Price Bulletin report ran to its report, with live progress;
+    - a report that failed kept its error on the page;
+    - a click during a run did not lose the run;
+    - an MFI run opened by its URL was followed to its report.
+  - Full suite 909 tests, 906 passed, 3 skipped, with no outcome changed; every page renders.
+
 ---
 
 ## 6. Decisions
