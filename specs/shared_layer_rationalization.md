@@ -468,6 +468,18 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - It passes `pip check` and the suite with the versions installed today (langgraph 1.2.12, langchain-core 1.6.5, google-genai 1.75.0): 846 passed, 30 skipped (the tests that need the confidential datasets).
   - The app starts and answers its health check.
 
+**Phase 3, step 1 (the store), done 2026-09-26:**
+- **`app/shared/runs/store.py`** holds Seasonal's store, moved from `seasonal_outlook/storage.py`:
+  - one JSON record per run, changed only by `mutate` (a Firestore transaction), with a size limit;
+  - content-addressed objects written once, and checksum-verified reads;
+  - signed download links and a filtered, ordered history list;
+  - memory and Firestore/GCS implementations.
+- Seasonal's wording and limits (analysis not found, audit capacity, 800 kB) became parameters, which Seasonal's `storage.py` supplies.
+- **`app/shared/cloud.py`:** cached Firestore and Storage clients and `gs://` parsing. The tracer's payload capture uses them instead of building a client for every payload.
+- **Verification:**
+  - Seasonal snapshots are identical. Since Phase 2 step 3, the comparison masks the stored responses' `started_at` and `duration_seconds`, which change on every run (`.tmp/coherence-baseline/compare_seasonal.py`).
+  - Full suite 876 tests, 873 passed, 3 skipped, with no outcome changed. Every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

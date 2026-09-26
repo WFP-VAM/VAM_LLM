@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Iterator, List, Literal, Mapping, Option
 
 from pydantic import BaseModel, Field
 
+from app.shared.cloud import parse_gcs_uri, storage_client
 from app.shared.util import redact_secrets
 
 from .errors import REQUEST_PERSISTENCE, RESPONSE_PERSISTENCE
@@ -244,16 +245,6 @@ def log_llm_run_summary(diagnostics: Mapping[str, Any]) -> None:
     )
 
 
-def _parse_gcs_uri(uri: str) -> tuple[str, str]:
-    if not uri.startswith("gs://"):
-        raise ValueError("LLM_TRACE_GCS_URI must start with gs://")
-    path = uri[5:]
-    bucket, _, prefix = path.partition("/")
-    if not bucket:
-        raise ValueError("LLM_TRACE_GCS_URI must name a bucket")
-    return bucket, prefix.strip("/")
-
-
 def _persist_payload(
     *,
     service: str,
@@ -262,10 +253,8 @@ def _persist_payload(
     call_id: str,
     payload: Dict[str, Any],
 ) -> str:
-    from google.cloud import storage  # type: ignore
-
     uri = (os.getenv("LLM_TRACE_GCS_URI") or "").strip()
-    bucket_name, prefix = _parse_gcs_uri(uri)
+    bucket_name, prefix = parse_gcs_uri(uri, name="LLM_TRACE_GCS_URI")
     object_parts = [
         part
         for part in (
@@ -282,8 +271,7 @@ def _persist_payload(
     content = gzip.compress(
         json.dumps(_json_safe(payload), ensure_ascii=False, sort_keys=True).encode("utf-8")
     )
-    client = storage.Client()
-    blob = client.bucket(bucket_name).blob(object_name)
+    blob = storage_client().bucket(bucket_name).blob(object_name)
     blob.metadata = {
         "trace_schema_version": TRACE_SCHEMA_VERSION,
         "service": service,

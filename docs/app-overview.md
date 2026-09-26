@@ -136,8 +136,10 @@ UNIFIED APP/
   app/
     shared/
       config.py                # Process set-up: .env, logging, Google Cloud project
+      cloud.py                 # Cached Firestore and Storage clients, gs:// URIs
       util.py                  # Small shared helpers (secret redaction)
       llm/                     # LLM client, profiles, google-genai provider, call tracing
+      runs/                    # Run infrastructure: store (Firestore/GCS or memory)
       async_runs.py            # Run lifecycle & artifact management
       retrievers.py            # Seerist and ReliefWeb clients
       countries.py             # Country name/ISO3 resolution
