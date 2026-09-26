@@ -17,6 +17,7 @@ from app.services.seasonal_outlook.inputs import regions, inspect_image, season_
 from app.services.seasonal_outlook.calls import llm_request, profile, vertex_schema
 from app.services.seasonal_outlook import runner
 from app.shared.llm import FilePart, LLMCallError, LLMClient, LLMResponse
+import streamlit_shared
 
 
 class Launcher:
@@ -523,6 +524,7 @@ def open_page(service, monkeypatch, run_id):
     shared.request_json = request
     shared.request_bytes = request
     shared.safe_show_error = lambda exc: st.error(str(exc))
+    shared.render_llm_diagnostics = streamlit_shared.render_llm_diagnostics
     monkeypatch.setitem(sys.modules, 'streamlit_shared', shared)
     page = Path(__file__).parents[1] / 'pages/5_Seasonal_Outlook_Drafter.py'
     app = AppTest.from_file(str(page))
@@ -642,3 +644,47 @@ def test_large_word_appendix_is_bounded_but_original_is_preserved(service):
             assert rendered.width <= 1860 and rendered.height <= 1800
     with zipfile.ZipFile(io.BytesIO(service.store.read(run['artifacts']['artifacts.zip']))) as package:
         assert package.read('maps/01.webp') == original
+
+
+def test_operation_calls_feed_the_shared_diagnostics_panel():
+    from datetime import datetime, timezone
+    from app.services.seasonal_outlook.ui import llm_diagnostics
+    operation = {'id': 'op1', 'calls': [
+        dict(stage='extraction', status='validated', call_id='llm-0001', attempt=1, model='gemini-3.1-pro-preview',
+             started_at='2026-09-26T10:00:00+00:00', duration_seconds=12.5),
+        dict(stage='review', status='failed', call_id='llm-0002', attempt=1, failure_code='llm_invalid_json'),
+        dict(stage='review', status='failed', call_id='llm-0003', attempt=2, failure_code='llm_transport_error'),
+        dict(stage='extraction', status='validated', attempts=1),  # written before calls had ids
+        dict(stage='refinement', status='calling', call_id='llm-0004', started_at=1790000000.0),
+    ]}
+    diagnostics = llm_diagnostics(operation)
+    calls = diagnostics['calls']
+    assert [c['status'] for c in calls] == ['succeeded', 'failed', 'failed', 'succeeded', 'started']
+    assert [c['operation'] for c in calls][:2] == ['seasonal_outlook.extraction.v1', 'seasonal_outlook.review.v1']
+    assert calls[0]['duration_ms'] == 12500 and calls[3]['call_id'] == 'call 4'
+    assert calls[4]['started_at'] == datetime.fromtimestamp(1790000000.0, timezone.utc).isoformat()
+    assert {k: diagnostics[k] for k in ('current_call_id', 'succeeded_calls', 'recovered_calls', 'failed_calls',
+                                        'contract_failed_calls')} == dict(
+        current_call_id='llm-0004', succeeded_calls=2, recovered_calls=0, failed_calls=2, contract_failed_calls=1)
+
+
+def test_a_failed_attempt_made_good_by_the_retry_counts_as_recovered():
+    from app.services.seasonal_outlook.ui import llm_diagnostics
+    diagnostics = llm_diagnostics({'calls': [
+        dict(stage='review', status='failed', call_id='a', failure_code='llm_transport_error'),
+        dict(stage='review', status='validated', call_id='b')]})
+    assert [(c['status'], c['disposition']) for c in diagnostics['calls']] == [
+        ('recovered', 'recovered_by_retry'), ('succeeded', None)]
+    assert (diagnostics['succeeded_calls'], diagnostics['recovered_calls'], diagnostics['failed_calls']) == (2, 1, 0)
+
+
+def test_ui_shows_the_operation_calls_in_the_shared_diagnostics_panel(service, monkeypatch):
+    run = action(service, prepared(service), 'extract')
+    with pytest.raises(LLMCallError):
+        perform(service, run, FakeProvider(fail='review'))
+    app, _ = open_page(service, monkeypatch, run['id'])
+    assert not app.exception
+    assert any('LLM call failed: llm_transport_error; node=review; operation=seasonal_outlook.review.v1'
+               in error.value for error in app.error)
+    metrics = {metric.label: metric.value for metric in app.metric}
+    assert metrics['Failed LLM calls'] == '2' and metrics['Completed LLM calls'] == '1'

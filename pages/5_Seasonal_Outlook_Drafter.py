@@ -6,9 +6,9 @@ from datetime import date
 import streamlit as st
 from streamlit_shared import (apply_wfp_theme, render_wfp_sidebar_logo, render_onboarding_sidebar_button,
     render_instructions_sidebar_button, render_bug_report_sidebar_link, render_bug_report_header_link,
-    request_json, request_bytes, safe_show_error)
+    render_llm_diagnostics, request_json, request_bytes, safe_show_error)
 from app.services.seasonal_outlook.inputs import calendar_for, checklist, region_option
-from app.services.seasonal_outlook.ui import evidence_panel, differences, analysis_view, review_view
+from app.services.seasonal_outlook.ui import evidence_panel, differences, analysis_view, review_view, llm_diagnostics
 from app.services.seasonal_outlook.upload_ui import map_upload_panel
 from app.services.seasonal_outlook.science.refinement_schemas import evidence_diff
 
@@ -149,6 +149,7 @@ def progress():
         done = len(op['completed'])
         st.progress(done/len(op['stages']), text=f'{done}/{len(op["stages"])} phases completed')
         st.caption('Processing continues in the cloud if you close this page.')
+        render_llm_diagnostics(llm_diagnostics(op), live=True)
     elif current['status'] in ('failed', 'interrupted'):
         last = ordered(current['operations'])[-1]
         st.error(last.get('error') or 'The operation stopped.')
@@ -245,6 +246,7 @@ if run['operations']:
             format_func=lambda oid: oid[:8]+' · '+run['operations'][oid]['action']+' · '+run['operations'][oid]['status'])
         detail = request_json('GET', f'{BASE}/runs/{run_id}/operations/{op_id}')
         op, output = detail['operation'], detail['output'] or {}
+        render_llm_diagnostics(llm_diagnostics(op))
         st.json(op)
         for field in ('review', 'issue_resolutions', 'analyst_comments', 'feedback_resolutions', 'initial_analysis', 'draft_review'):
             if field in output:

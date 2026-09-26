@@ -57,6 +57,11 @@ def profile(settings, timeout):
                         attempts=2, headers=(('X-Vertex-AI-LLM-Request-Type', 'shared'),))
 
 
+def operation_name(stage):
+    """How the model calls of a stage are named in traces and diagnostics."""
+    return f'seasonal_outlook.{stage}.v1'
+
+
 def llm_request(request, timeout, work_item):
     """A stage's request as the client sends it: the payload, then each map's note and its original GCS image."""
     parts = [json.dumps(request['payload'], ensure_ascii=False)]
@@ -65,7 +70,7 @@ def llm_request(request, timeout, work_item):
             raise ValueError('Vertex images must use original GCS objects')
         parts += [json.dumps({k: figure[k] for k in ('figure_id', 'metadata_note')}),
                   FilePart(uri=figure['uri'], mime_type=figure['mime'])]
-    return LLMRequest(operation=f"seasonal_outlook.{request['stage']}.v1", node=request['stage'], system=request['system'],
+    return LLMRequest(operation=operation_name(request['stage']), node=request['stage'], system=request['system'],
                       parts=parts, response_schema=vertex_schema(request['schema']), json_output=True,
                       max_output_tokens=32768 if request['images'] else 65536, timeout_seconds=timeout,
                       fail_on_truncation=True, work_item=work_item)

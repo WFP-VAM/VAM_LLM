@@ -1,5 +1,11 @@
 """Faithful prototype presentation, with provider-neutral labels."""
+from datetime import datetime, timezone
+
 import streamlit as st
+
+from app.shared.llm.errors import CONTRACT_FAILURES
+
+from .calls import operation_name
 
 
 def evidence_panel(reading):
@@ -64,6 +70,36 @@ def analysis_view(analysis):
             with st.expander(field.replace('_', ' ').capitalize()):
                 for item in analysis[field]:
                     st.write('• '+item)
+
+def llm_diagnostics(operation):
+    """The operation's model calls in the shape of the shared LLM diagnostics panel.
+
+    Each call entry is one attempt. A failed attempt that a later attempt of the same stage made good counts as
+    recovered, as the shared tracer counts it.
+    """
+    calls = operation.get('calls') or []
+    records = []
+    for index, call in enumerate(calls):
+        status = {'validated': 'succeeded', 'failed': 'failed'}.get(call.get('status'), 'started')
+        if status == 'failed' and any(later.get('stage') == call.get('stage') and later.get('status') == 'validated'
+                                      for later in calls[index + 1:]):
+            status = 'recovered'
+        started = call.get('started_at')
+        if isinstance(started, (int, float)):  # the record's clock until the reply's trace time replaces it
+            started = datetime.fromtimestamp(started, timezone.utc).isoformat()
+        duration = call.get('duration_seconds')
+        records.append(dict(call_id=call.get('call_id') or f'call {index + 1}', node=call.get('stage'),
+                            operation=operation_name(call.get('stage')), status=status, started_at=started,
+                            duration_ms=round(duration * 1000) if isinstance(duration, (int, float)) else None,
+                            model=call.get('model'), failure_code=call.get('failure_code'),
+                            disposition='recovered_by_retry' if status == 'recovered' else None))
+    active = [r for r in records if r['status'] == 'started']
+    failed = [r for r in records if r['status'] == 'failed']
+    return dict(calls=records, current_call_id=active[-1]['call_id'] if active else None,
+                succeeded_calls=sum(r['status'] in ('succeeded', 'recovered') for r in records),
+                recovered_calls=sum(r['status'] == 'recovered' for r in records), failed_calls=len(failed),
+                contract_failed_calls=sum(r['failure_code'] in CONTRACT_FAILURES for r in failed))
+
 
 def review_view(review):
     if review.get('summary'):

@@ -11,6 +11,9 @@ CONTRACT = "llm_response_contract_error"
 REQUEST_PERSISTENCE = "llm_request_persistence_error"
 RESPONSE_PERSISTENCE = "llm_response_persistence_error"
 
+# A reply came back but was unusable: the failures that run diagnostics count as contract failures.
+CONTRACT_FAILURES = frozenset({EMPTY, TRUNCATED, INVALID_JSON, CONTRACT})
+
 _TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
 _TRANSIENT_STATUSES = {"DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "INTERNAL", "ABORTED"}
 

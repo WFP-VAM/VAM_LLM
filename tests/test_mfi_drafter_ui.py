@@ -88,6 +88,8 @@ def _app(monkeypatch, backend, run_id=None):
     # The page follows its run with the real start_run and follow_run, over the fake backend.
     monkeypatch.setattr(builtins, "_streamlit_shared_real", streamlit_shared, raising=False)
     monkeypatch.setattr(streamlit_shared, "request_json", backend.request_json)
+    # The page's script replaces streamlit_shared in sys.modules; put the real module back afterwards.
+    monkeypatch.setitem(sys.modules, "streamlit_shared", streamlit_shared)
     mfi_ui = types.ModuleType("app.services.mfi_drafter.ui")
     mfi_ui.REPORT_TABLES = {}
     mfi_ui.report_layout = lambda block: {}

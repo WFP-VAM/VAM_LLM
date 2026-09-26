@@ -629,6 +629,22 @@ Two captures of unchanged code are identical (80 files); `p5-before-1` is the ba
     - an MFI run opened by its URL was followed to its report.
   - Full suite 909 tests, 906 passed, 3 skipped, with no outcome changed; every page renders.
 
+**Phase 5, step 6 (one diagnostics panel), done 2026-09-26** (Phase 5 is complete):
+- **The Seasonal Outlook page shows its model calls in the shared diagnostics panel** (`render_llm_diagnostics`), as the Price Bulletin and MFI pages do:
+  - live in its progress fragment while a phase runs: the current call with its elapsed time, the counters and the last failure;
+  - in full under "Operations and review decisions", above the operation's JSON: one row per attempt.
+- **The panel reads the analysis record as it is;** nothing is stored differently. `seasonal_outlook/ui.py` turns an operation's call entries into the panel's shape:
+  - a failed attempt that a later attempt of the same stage made good counts as recovered, as the shared tracer counts it;
+  - replies that came back unusable count as contract failures (`CONTRACT_FAILURES`, now in `app/shared/llm/errors.py`);
+  - entries written before calls had ids still show.
+- `calls.operation_name` names a stage's calls for both the requests and the panel.
+- **Tests:** a page-test fix. The Price Bulletin and MFI page tests replaced `streamlit_shared` in `sys.modules` from inside the page script and never put it back, so a later test importing it could get the fake. They now restore it.
+- **Verification:**
+  - three new tests: the adapter over old and new call entries, the recovered count, and the page showing a failed operation's calls;
+  - Seasonal snapshots identical;
+  - in a browser against the offline app: a phase's calls live, including a transport failure and its successful retry, then the operation's full table;
+  - full suite 912 tests, 909 passed, 3 skipped, with no outcome changed; every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

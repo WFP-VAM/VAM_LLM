@@ -15,6 +15,7 @@ from app.services.seasonal_outlook.config import Settings
 from app.services.seasonal_outlook.service import Service
 from app.services.seasonal_outlook.storage import MemoryStore
 from app.services.seasonal_outlook.upload_ui import pending_maps
+import streamlit_shared
 
 
 def image_file(name, color='white'):
@@ -84,6 +85,7 @@ def ui(monkeypatch):
         setattr(shared, name, lambda *a, **k: None)
     shared.request_json = shared.request_bytes = backend.request
     shared.safe_show_error = lambda exc: st.error(str(exc))
+    shared.render_llm_diagnostics = streamlit_shared.render_llm_diagnostics
     monkeypatch.setitem(sys.modules, 'streamlit_shared', shared)
     page = Path(__file__).parents[1] / 'pages/5_Seasonal_Outlook_Drafter.py'
     app = AppTest.from_file(str(page))
