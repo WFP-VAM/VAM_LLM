@@ -1,7 +1,8 @@
 import json
 from importlib import import_module
 
-from app.shared.retrievers import SeeristRetriever
+from app.shared.context.news import gather_context
+from app.shared.context.retrievers import SeeristRetriever
 
 
 class FakeResponse:
@@ -247,6 +248,8 @@ def test_mfi_and_market_monitor_share_the_gaza_aware_seerist_retriever():
 
     assert mfi_context.SeeristRetriever is SeeristRetriever
     assert market_graph.SeeristRetriever is SeeristRetriever
+    assert mfi_context.gather_context is gather_context
+    assert market_graph.gather_context is gather_context
 
 
 def test_market_monitor_news_retrieval_combines_and_deduplicates(monkeypatch):

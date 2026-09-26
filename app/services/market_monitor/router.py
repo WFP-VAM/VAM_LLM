@@ -59,12 +59,8 @@ from app.shared.runs.report_runs import (
     update_run,
     update_run_progress,
 )
-from app.shared.runs.live_outputs import (
-    build_document_live_output,
-    build_table_live_output,
-    create_document_previews_with_artifacts,
-    create_table_artifacts,
-)
+from app.shared.runs.live_outputs import build_table_live_output, create_table_artifacts
+from app.shared.context.news import SourceLabels, live_document_sections
 
 from app.shared.documents.docx import build_content_disposition, render_docx
 from .report_blocks import WORD_THEME, build_market_monitor_report_blocks, word_labels
@@ -116,18 +112,6 @@ def _cache_json(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return value
-
-
-def _trace_error(traces: List[Dict[str, Any]], retriever_name: str) -> Optional[str]:
-    for trace in traces:
-        if not isinstance(trace, dict):
-            continue
-        if str(trace.get("retriever") or "") != retriever_name:
-            continue
-        error = trace.get("error")
-        if error:
-            return str(error)
-    return None
 
 
 def _update_live_metadata(
@@ -402,44 +386,19 @@ async def generate_market_monitor_async(input_data: GenerateReportInput):
                         )
 
                 if node_name == "news_retrieval":
-                    seerist_docs = _state.get("seerist_documents") or []
-                    reliefweb_docs = _state.get("reliefweb_documents") or []
-                    if isinstance(seerist_docs, list):
-                        seerist_error = _trace_error(traces_list, "Seerist")
-                        seerist_previews = create_document_previews_with_artifacts(
+                    section_updates.update(
+                        live_document_sections(
+                            _state,
                             run_id=run_id,
                             service_slug="market-monitor",
-                            source_slug="seerist",
-                            documents=seerist_docs,
-                        )
-                        section_updates["seerist"] = build_document_live_output(
-                            title=t(language, "live.seerist.title"),
-                            summary=(
-                                t(language, "live.docs.unavailable", source="Seerist", error=seerist_error)
-                                if seerist_error
-                                else t(language, "live.docs.summary", count=len(seerist_docs), source="Seerist")
+                            labels=SourceLabels(
+                                seerist_title=t(language, "live.seerist.title"),
+                                reliefweb_title=t(language, "live.reliefweb.title"),
+                                summary=t(language, "live.docs.summary"),
+                                unavailable=t(language, "live.docs.unavailable"),
                             ),
-                            documents=seerist_previews,
-                            status="failed" if seerist_error else "completed",
                         )
-                    if isinstance(reliefweb_docs, list):
-                        reliefweb_error = _trace_error(traces_list, "ReliefWeb")
-                        reliefweb_previews = create_document_previews_with_artifacts(
-                            run_id=run_id,
-                            service_slug="market-monitor",
-                            source_slug="reliefweb",
-                            documents=reliefweb_docs,
-                        )
-                        section_updates["reliefweb"] = build_document_live_output(
-                            title=t(language, "live.reliefweb.title"),
-                            summary=(
-                                t(language, "live.docs.unavailable", source="ReliefWeb", error=reliefweb_error)
-                                if reliefweb_error
-                                else t(language, "live.docs.summary", count=len(reliefweb_docs), source="ReliefWeb")
-                            ),
-                            documents=reliefweb_previews,
-                            status="failed" if reliefweb_error else "completed",
-                        )
+                    )
 
                 _update_live_metadata(
                     run_id,

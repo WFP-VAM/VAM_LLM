@@ -22,7 +22,6 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import TypedDict, Annotated, Literal, List, Dict, Any, Optional, Callable, Mapping
 
-from collections import Counter
 import operator
 
 import pandas as pd
@@ -39,7 +38,8 @@ from app.shared.llm import (
     market_monitor_profile,
     tracing_run,
 )
-from app.shared.retrievers import ReliefWebRetriever, SeeristRetriever
+from app.shared.context.news import gather_context
+from app.shared.context.retrievers import ReliefWebRetriever, SeeristRetriever
 
 from .data_loader import (
     calculate_statistics_from_csv,
@@ -2532,8 +2532,6 @@ def node_news_retrieval(state: MarketReportState) -> dict:
     """Nodo: Recupera notizie (mock per ora)."""
     logger.info(f"[NewsRetrieval] Fetching news for {state['country']}")
 
-    documents: List[Dict[str, Any]] = []
-    retriever_traces: List[Dict[str, Any]] = []
     warnings: List[str] = []
 
     country = state.get("country", "")
@@ -2546,83 +2544,28 @@ def node_news_retrieval(state: MarketReportState) -> dict:
 
     end_dt = (start_dt + timedelta(days=32)).replace(day=1) - timedelta(days=1)
     prev_month_start = (start_dt - timedelta(days=1)).replace(day=1)
-    start_date = prev_month_start.strftime("%Y-%m-%d")
-    end_date = end_dt.strftime("%Y-%m-%d")
-    
 
-    rw = ReliefWebRetriever(verbose=False)
-    rw_query = ReliefWebRetriever.build_economy_query(
-        extra_terms=["food security", "supply", "shortage", "subsidy"]
-    )
-    rw_docs = rw.fetch(country=country, start_date=start_date, end_date=end_date, max_records=10, query=rw_query)
-    if getattr(rw, "last_trace", None):
-        retriever_traces.append(rw.last_trace)
-
-    seerist = SeeristRetriever(verbose=False)
-    seerist_queries = [
-        SeeristRetriever.build_lucene_or_query(
-            list(SeeristRetriever.DEFAULT_ECON_TERMS)
-            + ["food security", "wheat", "sorghum", "rice", "cooking oil"]
-        ),
-        SeeristRetriever.build_lucene_or_query(
-            ["market", "food security", "inflation", "currency", "availability"]
-        ),
-        "",
-    ]
-    seerist_docs = seerist.fetch_batch(
-        queries=seerist_queries,
-        start_date=start_date,
-        end_date=end_date,
+    context = gather_context(
+        ReliefWebRetriever(verbose=False),
+        SeeristRetriever(verbose=False),
         country=country,
-        max_per_query=10,
+        start_date=prev_month_start.strftime("%Y-%m-%d"),
+        end_date=end_dt.strftime("%Y-%m-%d"),
+        reliefweb_terms=["food security", "supply", "shortage", "subsidy"],
+        seerist_terms=["food security", "wheat", "sorghum", "rice", "cooking oil"],
+        seerist_focus=["market", "food security", "inflation", "currency", "availability"],
+        limit=10,
     )
-    if len(seerist_docs) > 10:
-        seerist_docs = seerist_docs[:10]
-    if getattr(seerist, "last_trace", None):
-        retriever_traces.append(seerist.last_trace)
-        if seerist.last_trace.get("error"):
-            warnings.append(f"Seerist retrieval unavailable for {country}: {seerist.last_trace['error']}")
-    
-
-    combined = list(rw_docs) + list(seerist_docs)
-    seen_keys = set()
-    deduped: List[Dict[str, Any]] = []
-    for d in combined:
-        url = (d.get("url") or "").strip()
-        key = url or d.get("doc_id")
-        if not key or key in seen_keys:
-            continue
-        seen_keys.add(key)
-        if not d.get("content"):
-            d["content"] = d.get("title", "")
-        deduped.append(d)
-    documents = deduped
-
-    refs = [
-        {
-            "doc_id": d.get("doc_id"),
-            "source": d.get("source"),
-            "title": d.get("title"),
-            "url": d.get("url"),
-            "date": d.get("date"),
-        }
-        for d in documents
-    ]
-
-    counts = Counter([d.get("source", "Unknown") for d in documents])
-    news_counts = {
-        "Seerist": int(counts.get("Seerist", 0)),
-        "ReliefWeb": int(counts.get("ReliefWeb", 0)),
-        "total": int(len(documents)),
-    }
+    if context.error("Seerist"):
+        warnings.append(f"Seerist retrieval unavailable for {country}: {context.error('Seerist')}")
 
     updates = {
-        "documents": documents,
-        "document_references": refs,
-        "seerist_documents": list(seerist_docs),
-        "reliefweb_documents": list(rw_docs),
-        "news_counts": news_counts,
-        "retriever_traces": retriever_traces,
+        "documents": context.documents,
+        "document_references": context.references(),
+        "seerist_documents": list(context.seerist),
+        "reliefweb_documents": list(context.reliefweb),
+        "news_counts": context.counts(),
+        "retriever_traces": context.traces,
         "current_node": "news_retrieval",
     }
     if warnings:

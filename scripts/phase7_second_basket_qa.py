@@ -25,6 +25,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from app.shared.config import load_environment
+
+load_environment()
+
 from app.services.market_monitor.basket_calculation import (
     BasketCalculationSpec,
     calculate_basket_series,

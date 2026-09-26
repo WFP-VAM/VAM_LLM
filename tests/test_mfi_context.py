@@ -1,6 +1,6 @@
 """Context retrieval for the live MFI workflow: ReliefWeb and Seerist documents, no model calls."""
 from app.services.mfi_drafter import context, light_graph
-from app.shared.retrievers import ReliefWebRetriever, SeeristRetriever
+from app.shared.context.retrievers import ReliefWebRetriever, SeeristRetriever
 
 STATE = {"country": "South Sudan", "data_collection_start": "2025-01-01", "data_collection_end": "2025-01-31"}
 

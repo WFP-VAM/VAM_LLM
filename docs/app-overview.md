@@ -64,7 +64,7 @@ Each service is a self-contained FastAPI router whose workflow is a **LangGraph 
 The shared layer provides:
 
 - **LLM client** (`llm/`) -- the one client for every model call, on the google-genai SDK. Each drafter has a model profile; every call is retried only on transient errors and traced the same way (records, JSON logs, optional payload capture). The Market Monitor uses Gemini 2.5 Pro by default at zero temperature. The MFI drafter uses Gemini 3.1 Pro and repairs refused replies itself, linking each repair to the attempt it fixes. The Seasonal Outlook uses Gemini 3.1 Pro with its analysis record as the mandatory audit of every attempt.
-- **Retrievers** -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries.
+- **Context** (`context/`) -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries. The Market Monitor and the MFI drafter gather their documents the same way (`news.py`): fetched for the period, merged, de-duplicated by URL or id, and shown live per source with their downloads.
 - **Runs** (`runs/`) -- one run infrastructure for the three drafters: a store of JSON records changed only in transactions plus immutable objects (Firestore + GCS in production, memory otherwise), a background launcher, and deadlines that mark dead work interrupted and stop late writers. Market Monitor and MFI runs (`report_runs.py`) are single jobs with progress, warnings, a result and artifacts; the Seasonal Outlook keeps its analysis record on the same store.
 - **Documents** (`documents/`) -- the `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) and its Word renderer, with embedded visualisations. Each drafter supplies its look and words: the Market Monitor its basket table and translated labels (`market_monitor/report_blocks.py`, which also builds its blocks), the MFI drafter its styles, page, header, footer and tables (`mfi_drafter/report_layout.py`, with the layout contract its blocks carry).
 
@@ -146,7 +146,8 @@ UNIFIED APP/
                                #   deadlines and late-writer guard; report_runs.py for Market Monitor and MFI runs,
                                #   live_outputs.py for their live previews and downloads
       documents/               # Report blocks and their Word rendering; drafters supply a theme and labels
-      retrievers.py            # Seerist and ReliefWeb clients
+      context/                 # Seerist and ReliefWeb clients; news.py gathers, merges and de-duplicates
+                               #   the context documents of the Market Monitor and MFI reports
       countries.py             # Country name/ISO3 resolution
 
     services/

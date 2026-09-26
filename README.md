@@ -72,8 +72,9 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 - `app/shared/` — process set-up (environment, logging, Google Cloud project),
   the LLM client (`llm/`: model profiles, the google-genai provider, call
   tracing), the run infrastructure (`runs/`: store, background launcher,
-  deadlines, Market Monitor and MFI runs and their live outputs), retrievers,
-  country/ISO3 mapping, and report blocks with their Word renderer
+  deadlines, Market Monitor and MFI runs and their live outputs), the news
+  context (`context/`: Seerist and ReliefWeb), country/ISO3 mapping, and
+  report blocks with their Word renderer
   (`documents/`; each drafter supplies its theme and labels).
 - `app/api.py` — the FastAPI application (every drafter's router).
 - `app/streamlit_backend/dispatcher.py` — hands the Streamlit UI's requests to

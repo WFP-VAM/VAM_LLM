@@ -6,7 +6,7 @@ FastAPI endpoints for the MFI Report Generator service.
 from fastapi import APIRouter, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import Response
 from pydantic import BaseModel
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict
 import logging
 
 from .light_service import (
@@ -39,10 +39,7 @@ from app.shared.runs.report_runs import (
     update_run,
     update_run_progress,
 )
-from app.shared.runs.live_outputs import (
-    build_document_live_output,
-    create_document_previews_with_artifacts,
-)
+from app.shared.context.news import live_document_sections
 
 from app.shared.documents.docx import build_content_disposition, render_docx
 from .report_layout import WORD_THEME, resolve_mfi_report_blocks
@@ -57,18 +54,6 @@ class ExportDocxOptions(BaseModel):
     include_sources: bool = True
     include_visualizations: bool = True
     template: Optional[str] = None
-
-
-def _trace_error(traces: List[Dict[str, Any]], retriever_name: str) -> Optional[str]:
-    for trace in traces:
-        if not isinstance(trace, dict):
-            continue
-        if str(trace.get("retriever") or "") != retriever_name:
-            continue
-        error = trace.get("error")
-        if error:
-            return str(error)
-    return None
 
 
 def _update_live_metadata(
@@ -277,44 +262,9 @@ async def generate_mfi_report_from_csv_async(
 
                 section_updates: Dict[str, Any] = {}
                 if node_name == "context_retrieval":
-                    seerist_docs = _state.get("seerist_documents") or []
-                    reliefweb_docs = _state.get("reliefweb_documents") or []
-                    if isinstance(seerist_docs, list):
-                        seerist_error = _trace_error(traces_list, "Seerist")
-                        seerist_previews = create_document_previews_with_artifacts(
-                            run_id=run_id,
-                            service_slug="mfi-drafter",
-                            source_slug="seerist",
-                            documents=seerist_docs,
-                        )
-                        section_updates["seerist"] = build_document_live_output(
-                            title="Seerist Documents",
-                            summary=(
-                                f"Seerist retrieval unavailable: {seerist_error}"
-                                if seerist_error
-                                else f"{len(seerist_docs)} Seerist documents retrieved."
-                            ),
-                            documents=seerist_previews,
-                            status="failed" if seerist_error else "completed",
-                        )
-                    if isinstance(reliefweb_docs, list):
-                        reliefweb_error = _trace_error(traces_list, "ReliefWeb")
-                        reliefweb_previews = create_document_previews_with_artifacts(
-                            run_id=run_id,
-                            service_slug="mfi-drafter",
-                            source_slug="reliefweb",
-                            documents=reliefweb_docs,
-                        )
-                        section_updates["reliefweb"] = build_document_live_output(
-                            title="ReliefWeb Documents",
-                            summary=(
-                                f"ReliefWeb retrieval unavailable: {reliefweb_error}"
-                                if reliefweb_error
-                                else f"{len(reliefweb_docs)} ReliefWeb documents retrieved."
-                            ),
-                            documents=reliefweb_previews,
-                            status="failed" if reliefweb_error else "completed",
-                        )
+                    section_updates.update(
+                        live_document_sections(_state, run_id=run_id, service_slug="mfi-drafter")
+                    )
 
                 _update_live_metadata(
                     run_id,

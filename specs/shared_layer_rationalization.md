@@ -585,6 +585,19 @@ Two captures of unchanged code are identical (80 files); `p5-before-1` is the ba
   - every page renders and all modules import.
 - The capture showed defect 11 of §3.6 (API artifact downloads named `….docx`); it is left unchanged.
 
+**Phase 5, step 3 (news context), done 2026-09-26:**
+- **`app/shared/context/news.py`** replaces code that the Market Monitor's news node and MFI's context retrieval each had:
+  - `gather_context` fetches ReliefWeb and Seerist documents with the drafter's terms and limit (Market Monitor 10, MFI 8) and merges them. It drops a document whose URL (or, without one, its id) was already seen and fills empty content from the title. Its result gives the references, counts, errors and per-source statuses.
+  - The drafters still build the retrievers and pass them in, so tests replace them in the drafter's module as before.
+  - `live_document_sections` builds each source's live previews and their downloads, which both routers had copied. The Market Monitor passes its translated labels.
+- **`app/shared/context/retrievers.py`** (moved) no longer loads `.env` on import; the entry points have done so since Phase 1.
+  - `scripts/phase7_second_basket_qa.py` relied on that side effect, and now loads `.env` itself.
+  - The Market Monitor wire harness did too: without `.env`, the exchange-rate module has no TradingEconomics key and is skipped. The harness now loads it like an entry point.
+- **Verification:**
+  - identical: both drafters' context outputs over the ten scenarios, the requests the retrievers send, and the live outputs and artifacts of full runs;
+  - Market Monitor wire requests (12) and MFI snapshots unchanged;
+  - full suite 905 tests, 902 passed, 3 skipped, with no outcome changed; every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

@@ -1,4 +1,7 @@
-"""Retrievers per news e documenti (usati da market_monitor e mfi_drafter)."""
+"""Seerist and ReliefWeb clients: the context documents of the Market Monitor and MFI reports.
+
+They read SEERIST_API_KEY and RELIEFWEB_APPNAME from the environment, which the entry points load.
+"""
 
 from __future__ import annotations
 
@@ -12,13 +15,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 import requests
-from dotenv import load_dotenv
 
 from app.shared.countries import resolve_country
 
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 
 @dataclass(frozen=True)
