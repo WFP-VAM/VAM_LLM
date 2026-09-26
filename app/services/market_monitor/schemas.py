@@ -10,7 +10,7 @@ from app.shared.llm import LLMRunDiagnostics
 from typing import Optional, List, Dict, Any, Literal
 from dataclasses import dataclass, field, asdict
 
-from app.shared.report_blocks import ReportBlock
+from app.shared.documents.blocks import ReportBlock
 
 
 # ============================================================================

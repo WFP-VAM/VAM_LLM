@@ -66,8 +66,8 @@ from app.shared.live_outputs import (
     create_document_previews_with_artifacts,
 )
 
-from app.shared.docx_export import build_content_disposition, build_docx_bytes_from_report_blocks
-from app.shared.report_blocks import build_market_monitor_report_blocks
+from app.shared.documents.docx import build_content_disposition, render_docx
+from .report_blocks import WORD_THEME, build_market_monitor_report_blocks, word_labels
 from app.shared.llm import LLMCallError, llm_runtime_status, observability_config
 from .i18n import resolve_report_language, t
 
@@ -676,12 +676,13 @@ async def export_market_monitor_docx(
 
     try:
         report_blocks = build_market_monitor_report_blocks(result)
-        docx_bytes = build_docx_bytes_from_report_blocks(
+        docx_bytes = render_docx(
             report_blocks,
+            theme=WORD_THEME,
+            labels=word_labels(result.get("language", "en")),
             visualizations=result.get("visualizations", {}),
             include_sources=options.include_sources,
             include_visualizations=options.include_visualizations,
-            language=result.get("language", "en"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX generation failed: {str(e)}")

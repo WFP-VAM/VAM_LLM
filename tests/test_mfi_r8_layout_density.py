@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from app.shared.report_blocks import ReportBlock
+from app.shared.documents.blocks import ReportBlock
 import streamlit_shared as shared
 
 

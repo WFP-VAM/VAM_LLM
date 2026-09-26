@@ -124,7 +124,8 @@ def test_charts_render_alongside_the_drafts(args, monkeypatch):
 
 
 def test_report_blocks_come_only_from_the_stored_result():
-    from app.shared.report_blocks import ReportBlock, resolve_mfi_report_blocks
+    from app.services.mfi_drafter.report_layout import resolve_mfi_report_blocks
+    from app.shared.documents.blocks import ReportBlock
     stored = [ReportBlock(type="heading", text="Validated", level=1).model_dump()]
     assert [block.text for block in resolve_mfi_report_blocks({"report_blocks": stored})] == ["Validated"]
     with pytest.raises(ValueError, match="previous workflow"):

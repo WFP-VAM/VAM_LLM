@@ -41,8 +41,8 @@ from app.services.price_cache.config import load_price_cache_config
 from app.services.price_cache.fixtures import seed_cache_snapshot
 from app.services.price_cache.migrations import apply_migrations
 from app.services.price_cache.sql_repository import SqlPriceCacheRepository, create_price_cache_engine
-from app.shared.docx_export import build_docx_bytes_from_report_blocks
-from app.shared.report_blocks import build_market_monitor_report_blocks
+from app.services.market_monitor.report_blocks import WORD_THEME, build_market_monitor_report_blocks, word_labels
+from app.shared.documents.docx import render_docx
 
 
 MIGRATION_004 = "004_country_food_baskets"
@@ -238,10 +238,11 @@ def generate_sample_reports(output_dir: Path) -> dict[str, Any]:
         result = _build_sample_result(language=language, scenario_kind=scenario_kind)
         blocks = build_market_monitor_report_blocks(result)
         result["report_blocks"] = [block.model_dump() for block in blocks]
-        docx_bytes = build_docx_bytes_from_report_blocks(
+        docx_bytes = render_docx(
             blocks,
+            theme=WORD_THEME,
+            labels=word_labels(language),
             visualizations=result["visualizations"],
-            language=language,
         )
 
         docx_path = output_dir / f"{slug}.docx"

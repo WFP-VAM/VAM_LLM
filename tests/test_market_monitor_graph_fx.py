@@ -5,7 +5,7 @@ import pytest
 from types import SimpleNamespace
 
 from app.shared.llm import LLMCallError, LLMClient, market_monitor_profile
-from app.shared.report_blocks import build_market_monitor_report_blocks
+from app.services.market_monitor.report_blocks import build_market_monitor_report_blocks
 from app.services.market_monitor import graph as market_graph
 
 

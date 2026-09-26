@@ -8,7 +8,7 @@ from app.services.market_monitor.i18n import (
 )
 from app.services.market_monitor.prompt_registry import assert_prompt_manifest_valid
 from app.services.market_monitor import graph as market_graph
-from app.shared.report_blocks import build_market_monitor_report_blocks
+from app.services.market_monitor.report_blocks import build_market_monitor_report_blocks
 
 
 def test_report_language_auto_defaults_and_explicit_override():

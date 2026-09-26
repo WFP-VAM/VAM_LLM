@@ -8,7 +8,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Optional, List, Dict, Any, Literal
 
-from app.shared.report_blocks import ReportBlock
+from app.shared.documents.blocks import ReportBlock
 from app.shared.llm import LLMRunDiagnostics
 from .methodology import ANALYSIS_SCHEMA_VERSION, DISPLAY_DIMENSIONS
 

@@ -549,6 +549,32 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - `test_transports.py` (19 tests) checks that HTTP and in-process calls answer identically: read-only endpoints, errors, invalid input, uploads, Word downloads, form fields, drafting failures, an unhandled error and quiet logs.
 - **Verification:** full suite 904 tests, 901 passed, 3 skipped, with no outcome changed; every page renders through the bridge; all modules import.
 
+**Phase 5 tooling:** `.tmp/shared-layer/p5_outputs.py` captures, through the app's API in-process and offline:
+- **Word exports:** every part of each Word file (XML as text, images as hashes) and its file name. The inputs are stored results in `p5-fixtures/`:
+  - Market Monitor: mock-data runs in English, French and Spanish; synthetic results with two baskets in the three languages, with inline figures, and with a legacy basket;
+  - MFI: the Benin, Haiti and Gaza benchmarks.
+  Each is exported with four option sets.
+- **Report blocks:** the blocks the result endpoints return.
+- **News context:** the Market Monitor's news node and MFI's context retrieval over ten scenarios (sources down, bad replies, unmapped or overridden countries, missing keys). Seerist and ReliefWeb are answered at the HTTP layer, so the retrievers' own code runs, and the requests they send are kept.
+- **Live outputs:** full runs of both drafters: status metadata, every artifact's bytes and the result.
+
+Two captures of unchanged code are identical (80 files); `p5-before-1` is the baseline.
+
+**Phase 5, step 1 (documents), done 2026-09-26:**
+- **`app/shared/documents/`:**
+  - `blocks.py` holds `ReportBlock`.
+  - `docx.py` renders blocks to Word. The caller passes its look (`WordTheme`: a paragraph style per role, document set-up, layout hints, table renderers) and its words (`WordLabels`). It also holds the Word helpers that themes use.
+- **Moved into the drafters:**
+  - `market_monitor/report_blocks.py`: the Market Monitor block builder and its basket table. The references heading comes in as a translated label, so shared code no longer imports the Market Monitor's i18n.
+  - `mfi_drafter/report_layout.py`: the MFI layout contract and its Word theme (styles, A4 page, header, footer, projected tables). `apply_mfi_layout_contract` is now public, since another module calls it.
+- **The caller names the theme:** the renderer used to recognise an MFI document from its blocks. Every MFI result the export accepts (`mfi-light-v1`) carries the layout contract, which the light workflow has applied since its first commit, so no document changes look.
+- **Guard:** a test fails if a module in `app/shared` imports a drafter.
+- **Verification:**
+  - Word exports and report blocks identical for every fixture and option set;
+  - MFI snapshots identical;
+  - full suite 905 tests, 902 passed, 3 skipped, with no outcome changed;
+  - every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

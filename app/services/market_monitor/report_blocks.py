@@ -1,72 +1,17 @@
+"""The Market Monitor report: its blocks, built from a stored result, and its Word look (the basket table)."""
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt, RGBColor
 
-from app.services.market_monitor.i18n import format_decimal_value, format_month_label, t
+from app.shared.documents.blocks import ReportBlock
+from app.shared.documents.docx import WordLabels, WordTheme, shade_cell
 
-
-class ReportBlock(BaseModel):
-    type: Literal[
-        "heading",
-        "paragraph",
-        "figure",
-        "references",
-        "table",
-        "limitation_box",
-        "methodology_note",
-    ]
-    text: Optional[str] = None
-    level: Optional[int] = None
-    figure_id: Optional[str] = None
-    caption: Optional[str] = None
-    alt_text: Optional[str] = None
-    width: Optional[float] = None
-    references: Optional[List[Dict[str, Any]]] = None
-    meta: Optional[Dict[str, Any]] = None
-
-
-def resolve_mfi_report_blocks(result: Dict[str, Any]) -> List[ReportBlock]:
-    """Return the report blocks stored with a completed MFI result."""
-    stored = result.get("report_blocks")
-    if not isinstance(stored, list) or not stored:
-        raise ValueError("This MFI result has no report blocks; reports from the previous workflow are no longer supported")
-    return [
-        item if isinstance(item, ReportBlock) else ReportBlock.model_validate(item)
-        for item in stored
-    ]
-
-
-class MFIReportLayoutHint(BaseModel):
-    """Typed internal layout contract shared by MFI renderers."""
-
-    model_config = ConfigDict(frozen=True)
-
-    report_family: Literal["mfi"] = "mfi"
-    role: Literal[
-        "title",
-        "major_section",
-        "subsection",
-        "minor_heading",
-        "body",
-        "figure",
-        "table",
-        "notice",
-        "references",
-    ]
-    group_id: Optional[str] = None
-    page_break_before: bool = False
-    keep_with_next: bool = False
-    keep_together: bool = False
-    compact_after: bool = False
-    country: Optional[str] = None
-    methodology_version: Optional[str] = None
-
-
-_MFI_MAJOR_PAGE_BREAK_HEADINGS = {"Executive summary", "MFI dimensions"}
-
+from .i18n import format_decimal_value, format_month_label, t
 
 _INSERT_FIGURE_RE = re.compile(r"\[INSERT GRAPH:\s*([A-Za-z0-9_\-]+)\s*\]", flags=re.IGNORECASE)
 
@@ -533,60 +478,39 @@ def build_market_monitor_report_blocks(result: Dict[str, Any]) -> List[ReportBlo
     return blocks
 
 
-def _apply_mfi_layout_contract(
-    blocks: List[ReportBlock],
-    *,
-    country: str,
-    methodology_version: str,
-) -> List[ReportBlock]:
-    """Attach explicit R8 layout roles without making renderers infer semantics."""
-    for block in blocks:
-        meta = dict(block.meta or {})
-        role: str
-        page_break_before = False
-        keep_with_next = False
-        keep_together = False
-        compact_after = False
-        if block.type == "heading":
-            if int(block.level or 1) <= 1:
-                role = "title"
-            elif int(block.level or 2) == 2:
-                role = "major_section"
-                page_break_before = str(block.text or "") in (
-                    _MFI_MAJOR_PAGE_BREAK_HEADINGS
-                )
-            elif int(block.level or 3) == 3:
-                role = "subsection"
-            else:
-                role = "minor_heading"
-            keep_with_next = True
-        elif block.type == "figure":
-            role = "figure"
-            keep_with_next = bool(block.caption)
-            keep_together = True
-            compact_after = True
-        elif block.type == "table":
-            role = "table"
-            compact_after = True
-        elif block.type == "references":
-            role = "references"
-        elif block.type in {"limitation_box", "methodology_note"}:
-            role = "notice"
-            keep_together = True
-            compact_after = True
-        else:
-            role = "body"
-        layout = MFIReportLayoutHint(
-            role=role,
-            page_break_before=page_break_before,
-            keep_with_next=keep_with_next,
-            keep_together=keep_together,
-            compact_after=compact_after,
-            country=country or None if role == "title" else None,
-            methodology_version=(
-                methodology_version if role == "title" else None
-            ),
-        )
-        meta["mfi_layout"] = layout.model_dump(mode="json")
-        block.meta = meta
-    return blocks
+# --- Word ------------------------------------------------------------------------------------------------------
+
+def _add_basket_definitions_table(doc: Any, meta: Dict[str, Any]) -> None:
+    headers, rows = basket_definition_table_display(meta)
+    if not headers or not rows:
+        return
+    table = doc.add_table(rows=len(rows) + 1, cols=len(headers))
+    table.style = "Table Grid"
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for column, header in enumerate(headers):
+        cell = table.rows[0].cells[column]
+        cell.text = header
+        shade_cell(cell, (0, 114, 188))
+        for paragraph in cell.paragraphs:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in paragraph.runs:
+                run.bold = True
+                run.font.size = Pt(8)
+                run.font.color.rgb = RGBColor(255, 255, 255)
+    for row_index, values in enumerate(rows, start=1):
+        for column, value in enumerate(values):
+            cell = table.rows[row_index].cells[column]
+            cell.text = value
+            for paragraph in cell.paragraphs:
+                for run in paragraph.runs:
+                    run.font.size = Pt(8)
+    doc.add_paragraph()
+
+
+# python-docx's own look, plus the basket definitions table.
+WORD_THEME = WordTheme(tables={"basket_definitions": _add_basket_definitions_table})
+
+
+def word_labels(language: Optional[str]) -> WordLabels:
+    """The renderer's words in the report language."""
+    return WordLabels(references=t(language, "section.REFERENCES"))

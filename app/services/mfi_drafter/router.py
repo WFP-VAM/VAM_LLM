@@ -44,8 +44,8 @@ from app.shared.live_outputs import (
     create_document_previews_with_artifacts,
 )
 
-from app.shared.docx_export import build_content_disposition, build_docx_bytes_from_report_blocks
-from app.shared.report_blocks import resolve_mfi_report_blocks
+from app.shared.documents.docx import build_content_disposition, render_docx
+from .report_layout import WORD_THEME, resolve_mfi_report_blocks
 from app.shared.llm import LLMCallError, observability_config
 
 logger = logging.getLogger(__name__)
@@ -419,8 +419,9 @@ async def export_mfi_docx(
     result = _require_light_result(run.result or {})
     try:
         report_blocks = resolve_mfi_report_blocks(result)
-        docx_bytes = build_docx_bytes_from_report_blocks(
+        docx_bytes = render_docx(
             report_blocks,
+            theme=WORD_THEME,
             visualizations=result.get("visualizations", {}),
             include_sources=options.include_sources,
             include_visualizations=options.include_visualizations,

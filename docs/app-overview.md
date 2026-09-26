@@ -66,7 +66,7 @@ The shared layer provides:
 - **LLM client** (`llm/`) -- the one client for every model call, on the google-genai SDK. Each drafter has a model profile; every call is retried only on transient errors and traced the same way (records, JSON logs, optional payload capture). The Market Monitor uses Gemini 2.5 Pro by default at zero temperature. The MFI drafter uses Gemini 3.1 Pro and repairs refused replies itself, linking each repair to the attempt it fixes. The Seasonal Outlook uses Gemini 3.1 Pro with its analysis record as the mandatory audit of every attempt.
 - **Retrievers** -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries.
 - **Runs** (`runs/`) -- one run infrastructure for the three drafters: a store of JSON records changed only in transactions plus immutable objects (Firestore + GCS in production, memory otherwise), a background launcher, and deadlines that mark dead work interrupted and stop late writers. Market Monitor and MFI runs (`report_runs.py`) are single jobs with progress, warnings, a result and artifacts; the Seasonal Outlook keeps its analysis record on the same store.
-- **DOCX exporter** -- converts an abstract `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) into a branded Word document with embedded visualisations.
+- **Documents** (`documents/`) -- the `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) and its Word renderer, with embedded visualisations. Each drafter supplies its look and words: the Market Monitor its basket table and translated labels (`market_monitor/report_blocks.py`, which also builds its blocks), the MFI drafter its styles, page, header, footer and tables (`mfi_drafter/report_layout.py`, with the layout contract its blocks carry).
 
 The DataBridges client for price data lives in the price cache (`app/services/price_cache/`), which the Market Monitor reads.
 
@@ -144,17 +144,16 @@ UNIFIED APP/
       llm/                     # LLM client, profiles, google-genai provider, call tracing
       runs/                    # Run infrastructure: store (Firestore/GCS or memory), background launcher,
                                #   deadlines and late-writer guard; report_runs.py for Market Monitor and MFI runs
+      documents/               # Report blocks and their Word rendering; drafters supply a theme and labels
       retrievers.py            # Seerist and ReliefWeb clients
       countries.py             # Country name/ISO3 resolution
-      report_blocks.py         # Abstract report block model
-      docx_export.py           # DOCX rendering engine
       live_outputs.py          # Real-time run metadata formatting
 
     services/
       mfi_drafter/             # MFI report generation
-        router.py, light_graph.py, light_service.py, light_runtime.py, schemas.py, data_loader.py
+        router.py, light_graph.py, light_service.py, light_runtime.py, schemas.py, data_loader.py, report_layout.py
       market_monitor/          # Market Monitor generation
-        router.py, graph.py, schemas.py, data_loader.py, basket_ui.py
+        router.py, graph.py, schemas.py, data_loader.py, report_blocks.py, basket_ui.py
       price_cache/             # DataBridges price cache used by Market Monitor
         config.py, sql_repository.py, databridges_adapter.py, refresh_worker.py, migrations/
       seasonal_outlook/        # Seasonal Outlook drafting

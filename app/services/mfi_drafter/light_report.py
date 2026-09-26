@@ -6,7 +6,7 @@ from .light_evidence import section_specs
 
 
 def markdown_blocks(text, section_id):
-    from app.shared.report_blocks import ReportBlock
+    from app.shared.documents.blocks import ReportBlock
     paragraph = []
     for line in [*text.strip().splitlines(), ""]:
         heading = re.match(r"^(#{1,6})\s+(.+)$", line.strip())
@@ -21,7 +21,8 @@ def markdown_blocks(text, section_id):
 
 
 def build_blocks(result):
-    from app.shared.report_blocks import ReportBlock, _apply_mfi_layout_contract
+    from app.shared.documents.blocks import ReportBlock
+    from .report_layout import apply_mfi_layout_contract
     profile = result["assessment_profile"]
     narrative = result["light_narrative"]
     blocks = [ReportBlock(type="heading", level=1, text=f"Market Functionality Index — {result['country']}"),
@@ -73,7 +74,7 @@ def build_blocks(result):
     coverage = evaluate_coverage(profile, blocks)
     if not coverage["complete"]:
         raise ValueError("The analytical annex is missing required evidence tables")
-    blocks = _apply_mfi_layout_contract(blocks, country=result["country"], methodology_version="databridge-current")
+    blocks = apply_mfi_layout_contract(blocks, country=result["country"], methodology_version="databridge-current")
     return [b.model_dump(mode="json") for b in blocks], coverage
 
 
