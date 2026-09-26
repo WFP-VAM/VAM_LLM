@@ -3,7 +3,7 @@ MFI Drafter - Router
 ====================
 FastAPI endpoints for the MFI Report Generator service.
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Body, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, Any, Dict, List
@@ -28,6 +28,7 @@ from .schemas import (
     MFI_DIMENSIONS,
 )
 
+from app.shared.runs import executor
 from app.shared.runs.report_runs import (
     RunStoreUnavailable,
     create_run,
@@ -202,7 +203,6 @@ async def validate_mfi_csv(
 
 @router.post("/generate-from-csv-async")
 async def generate_mfi_report_from_csv_async(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Processed MFI CSV file"),
     country_override: Optional[str] = Form(None),
     data_collection_start_override: Optional[str] = Form(None),
@@ -335,7 +335,7 @@ async def generate_mfi_report_from_csv_async(
             set_run_failed(run_id, error=str(e), traceback=traceback.format_exc(),
                            current_node=current.current_node if current is not None else None)
 
-    background_tasks.add_task(run_in_background)
+    executor.launch(run_in_background, name=f"mfi-drafter-{run_id}")
 
     return {
         "run_id": run_id,

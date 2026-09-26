@@ -813,7 +813,7 @@ def test_generate_mock_data_returns_empty_basket_selection(monkeypatch):
     assert response.json()["qa_review"]["status"] == "not_recorded"
 
 
-def test_generate_async_persists_and_returns_revalidated_basket_selection(monkeypatch):
+def test_generate_async_persists_and_returns_revalidated_basket_selection(monkeypatch, immediate_launch):
     selection = FakeBasketSelection(include_secondary=True)
     revalidated_selection = FakeBasketSelection(include_secondary=True)
     resolve_calls = []

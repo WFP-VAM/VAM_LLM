@@ -17,6 +17,33 @@ def run_store(monkeypatch):
 
 
 @pytest.fixture
+def immediate_launch(monkeypatch):
+    """Background work runs in the calling thread, so a request returns with its run already finished."""
+    from app.shared.runs import executor
+
+    names = []
+
+    def launch(work, *, name):
+        names.append(name)
+        work()
+    monkeypatch.setattr(executor, "launch", launch)
+    return names
+
+
+@pytest.fixture(autouse=True)
+def deferred_launch(monkeypatch):
+    """Background work is kept, not run, unless a test asks for `immediate_launch`: no test races a report thread.
+
+    A test that needs the launched work requests this fixture and runs it when it chooses.
+    """
+    from app.shared.runs import executor
+
+    works = []
+    monkeypatch.setattr(executor, "launch", lambda work, *, name: works.append(work))
+    return works
+
+
+@pytest.fixture
 def vertex_wire(monkeypatch):
     """google-genai against a local HTTP transport: every request as sent, no network.
 

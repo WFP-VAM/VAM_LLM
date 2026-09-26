@@ -20,7 +20,7 @@ from app.services.price_cache.config import load_price_cache_config
 from app.services.price_cache.fixtures import seed_cache_snapshot
 from app.services.price_cache.migrations import MIGRATIONS_ROOT, _ensure_migration_table, _split_sql
 from app.services.price_cache.sql_repository import SqlPriceCacheRepository, create_price_cache_engine
-from app.shared.runs import report_runs
+from app.shared.runs import executor, report_runs
 from app.streamlit_backend import dispatcher
 from scripts.phase7_second_basket_qa import (
     ReleaseQAFailure,
@@ -66,16 +66,12 @@ class FakeBasketSelection:
         }
 
 
-class ImmediateToggleThread:
-    def __init__(self, target=None, *args, **kwargs):
-        self.target = target
+def _launch_after_disabling_second_basket(work, *, name):
+    """Run launched work at once, after the second basket was switched off."""
+    import os
 
-    def start(self):
-        import os
-
-        os.environ[SECOND_BASKET_FEATURE_ENV] = "false"
-        if self.target is not None:
-            self.target()
+    os.environ[SECOND_BASKET_FEATURE_ENV] = "false"
+    work()
 
 
 def _api_client() -> TestClient:
@@ -279,7 +275,7 @@ def test_primary_only_generation_and_reportability_remain_available_when_disable
 
 def test_accepted_async_run_continues_after_gate_is_disabled(monkeypatch):
     monkeypatch.setenv(SECOND_BASKET_FEATURE_ENV, "true")
-    monkeypatch.setattr(dispatcher.threading, "Thread", ImmediateToggleThread)
+    monkeypatch.setattr(executor, "launch", _launch_after_disabling_second_basket)
     calls = []
 
     def fake_resolve(_country, **kwargs):
@@ -301,7 +297,7 @@ def test_accepted_async_run_continues_after_gate_is_disabled(monkeypatch):
     assert run.result["secondary_basket_included"] is True
 
 
-def test_fastapi_accepted_async_run_uses_submission_gate_snapshot(monkeypatch):
+def test_fastapi_accepted_async_run_uses_submission_gate_snapshot(monkeypatch, immediate_launch):
     monkeypatch.setenv(SECOND_BASKET_FEATURE_ENV, "true")
     calls = []
 

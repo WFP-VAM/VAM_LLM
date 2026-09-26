@@ -180,20 +180,12 @@ def test_dispatcher_generation_paths_return_stable_503(
     assert called is False
 
 
-def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch):
-    targets = []
+def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch, deferred_launch):
+    targets = deferred_launch
     captured = {}
-
-    class DeferredThread:
-        def __init__(self, *, target, daemon):
-            targets.append(target)
-
-        def start(self):
-            return None
 
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "2")
     monkeypatch.setenv("K_REVISION", "pilot-revision")
-    monkeypatch.setattr(dispatcher.threading, "Thread", DeferredThread)
     monkeypatch.setattr(dispatcher, "create_run", lambda run_id, **fields: None)
     monkeypatch.setattr(dispatcher, "update_run", lambda *args, **kwargs: None)
     monkeypatch.setattr(

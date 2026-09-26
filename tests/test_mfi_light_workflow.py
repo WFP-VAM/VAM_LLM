@@ -206,7 +206,7 @@ def test_results_of_the_previous_workflow_are_gone_from_both_backends(api):
         assert "previous MFI workflow" in reply.json()["detail"] and "previous MFI workflow" in local.json()["detail"]
 
 
-def test_failed_async_run_is_reported_without_a_result(args, api, monkeypatch):
+def test_failed_async_run_is_reported_without_a_result(args, api, monkeypatch, immediate_launch):
     from app.services.mfi_drafter import router
     monkeypatch.setattr(router, "load_mfi_from_csv", lambda **kw: args["csv_data"])
     monkeypatch.setattr(router, "run_mfi_report_generation",
@@ -233,9 +233,8 @@ def test_json_generation_endpoints_are_removed(args, api):
 
 @pytest.mark.parametrize("entrypoint", ["api", "streamlit"])
 @pytest.mark.parametrize("dataset", ["synthetic", "Benin"])
-def test_csv_submission_schedules_exactly_one_run(api, monkeypatch, entrypoint, dataset):
+def test_csv_submission_schedules_exactly_one_run(api, monkeypatch, entrypoint, dataset, deferred_launch):
     from pathlib import Path
-    from fastapi import BackgroundTasks
     from app.streamlit_backend import dispatcher
     if dataset == "Benin":
         path = Path(__file__).resolve().parents[1] / "MFI Test Databases/MFI_Full_Benin_surveyid5896.csv"
@@ -244,14 +243,11 @@ def test_csv_submission_schedules_exactly_one_run(api, monkeypatch, entrypoint, 
         content = path.read_bytes()
     else:
         content = build_csv_bytes(SyntheticSpec(market_count=1, region_count=1))
-    scheduled = []
+    scheduled = deferred_launch
     if entrypoint == "api":
-        monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, target: scheduled.append(target))
         submit = api.post("/mfi-drafter/generate-from-csv-async", files={"file": ("mfi.csv", content, "text/csv")})
         get_status = lambda run_id: api.get(f"/mfi-drafter/status/{run_id}")
     else:
-        monkeypatch.setattr(dispatcher, "threading", SimpleNamespace(
-            Thread=lambda target, **kwargs: SimpleNamespace(start=lambda: scheduled.append(target))))
         submit = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv-async",
                                              files={"file": ("mfi.csv", content, "text/csv")})
         get_status = lambda run_id: dispatcher.dispatch_request("GET", f"/mfi-drafter/status/{run_id}")

@@ -13,23 +13,13 @@ from app.services.mfi_drafter.features import MFI_DRAFTER_ANALYSIS_VERSION_ENV
 from app.streamlit_backend import dispatcher
 
 
-class ImmediateThread:
-    def __init__(self, *, target, daemon):
-        self.target = target
-
-    def start(self):
-        self.target()
-
-
 MFI_CSV = {"country": "Testland", "data_collection_start": "2026-01-01", "data_collection_end": "2026-01-31",
            "markets": ["Central"], "survey_metadata": {"collection_period": "2026-01-01 to 2026-01-31"}}
 
 
 @pytest.fixture(autouse=True)
-def reset_memory_runs(monkeypatch):
-    monkeypatch.setattr(
-        dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread)
-    )
+def background_work_runs_at_once(immediate_launch):
+    return immediate_launch
 
 
 @pytest.fixture

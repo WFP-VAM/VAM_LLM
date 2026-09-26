@@ -3,7 +3,7 @@ Market Monitor - Router
 =======================
 FastAPI endpoints for the Market Monitor service.
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Body, Query
+from fastapi import APIRouter, HTTPException, Body, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, ValidationError
 from typing import Optional, List, Any, Dict
@@ -48,6 +48,7 @@ from .schemas import (
     ReportableMonthsInput,
     ReportStatusOutput
 )
+from app.shared.runs import executor
 from app.shared.runs.report_runs import (
     RunStoreUnavailable,
     create_run,
@@ -262,10 +263,7 @@ async def generate_market_monitor(input_data: GenerateReportInput):
 
 
 @router.post("/generate-async")
-async def generate_market_monitor_async(
-    input_data: GenerateReportInput,
-    background_tasks: BackgroundTasks
-):
+async def generate_market_monitor_async(input_data: GenerateReportInput):
     """
     Starts report generation in the background.
     Useful for reports that take a long time.
@@ -508,7 +506,7 @@ async def generate_market_monitor_async(
             error = json.dumps(e.to_public_dict(), sort_keys=True) if isinstance(e, LLMCallError) else str(e)
             set_run_failed(run_id, error=error, traceback=tb_str, current_node=current_node)
 
-    background_tasks.add_task(run_in_background)
+    executor.launch(run_in_background, name=f"market-monitor-{run_id}")
 
     return {"run_id": run_id, "status": "pending"}
 

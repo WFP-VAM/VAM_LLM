@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import threading
 import traceback
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -15,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import numpy as np
 from pydantic import ValidationError
 
+from app.shared.runs import executor
 from app.shared.runs.report_runs import (
     RunStoreUnavailable,
     create_run,
@@ -692,7 +692,7 @@ def _mfi_drafter_generate_from_csv_async(
             set_run_failed(run_id, error=str(exc), traceback=traceback.format_exc(),
                            current_node=current.current_node if current is not None else None)
 
-    threading.Thread(target=run_in_background, daemon=True).start()
+    executor.launch(run_in_background, name=f"mfi-drafter-{run_id}")
     preview = {
         "country": csv_data.get("country"),
         "markets_count": len(csv_data.get("markets") or []),
@@ -1237,7 +1237,7 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
             error = json.dumps(exc.to_public_dict(), sort_keys=True) if isinstance(exc, LLMCallError) else str(exc)
             set_run_failed(run_id, error=error, traceback=tb_str, current_node=current_node)
 
-    threading.Thread(target=run_in_background, daemon=True).start()
+    executor.launch(run_in_background, name=f"market-monitor-{run_id}")
     return _json_response({"run_id": run_id, "status": "pending"})
 
 

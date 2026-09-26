@@ -1,5 +1,4 @@
 from contextlib import nullcontext
-from types import SimpleNamespace
 
 from app.shared.runs import report_runs
 from app.services.market_monitor.price_backfill import (
@@ -11,15 +10,6 @@ from app.services.market_monitor.price_backfill import (
 from app.streamlit_backend import dispatcher
 import streamlit_shared
 from streamlit_shared import ordered_live_output_sections
-
-
-class ImmediateThread:
-    def __init__(self, target=None, name=None, daemon=None, *args, **kwargs):
-        self._target = target
-
-    def start(self):
-        if self._target is not None:
-            self._target()
 
 
 class FakeBasketSelection:
@@ -57,10 +47,7 @@ class FakeBasketSelection:
         }
 
 
-def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypatch):
-    monkeypatch.setattr(
-        dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread)
-    )
+def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypatch, immediate_launch):
     selections = []
     graph_calls = []
 
@@ -188,10 +175,7 @@ def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypa
     assert result_response.json()["food_basket"]["basket_version_id"] == "active-basket"
 
 
-def test_market_monitor_async_failure_stores_price_gap_report(monkeypatch):
-    monkeypatch.setattr(
-        dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread)
-    )
+def test_market_monitor_async_failure_stores_price_gap_report(monkeypatch, immediate_launch):
     monkeypatch.setattr(
         dispatcher,
         "resolve_baskets_for_report",

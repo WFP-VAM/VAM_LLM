@@ -513,6 +513,23 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - Full suite 885 tests, 882 passed, 3 skipped, with no outcome changed. The 13 tests of `async_runs` are replaced by 18 in `test_runs.py`, and one test stub of `create_run` now accepts `service`.
   - Seasonal snapshots identical; every page renders and all modules import.
 
+**Phase 4 spike (D7), 2026-09-26:** can the dispatcher call the FastAPI app in the same process instead of re-implementing it? A throwaway script sent requests through `httpx.ASGITransport`, on an event loop per call, from the 8 worker threads the pages use.
+- **Background work:** FastAPI runs `BackgroundTasks` inside the call, so starting a report waited for the whole report. Launches must move to the shared launcher.
+- **Files:** a CSV upload and a Word download were identical through both paths.
+- **Errors:** the same status codes. Only the wording differs, for an invalid body (the location gains `"body"`) and an unknown route (`Not Found`).
+- **Cost:** about 3 ms per call on one thread (the dispatcher: 0.1 ms). With 8 threads the median rose to 18 ms from contention between threads, not from the bridge. There were no leftover threads. Reusing one client did not help, and Starlette's `TestClient` was slower (7 ms). Loading a large result was no slower (MFI Benin, 22 MB: 756 ms against 908 ms).
+- **Parity:** every read-only endpoint, a French mock-data Market Monitor result and the MFI Benin result were identical through both paths, 0 differences, and so was the text of their Word exports.
+- Each in-process call logs an `httpx` line, which the bridge must filter out.
+- **Verdict:** option (b).
+
+**Phase 4, step 1 (launches), done 2026-09-26:**
+- Market Monitor and MFI reports start through the shared `executor.launch`, in the routers (instead of `BackgroundTasks`) and in the dispatcher (instead of its own threads).
+- The call goes through the module, so tests control it with two fixtures:
+  - `immediate_launch` runs the work at once;
+  - `deferred_launch` keeps it, and is on by default, so no test races a report thread.
+- These replace the fake threads of seven tests.
+- **Verification:** full suite 885 tests, 882 passed, 3 skipped, with no outcome changed.
+
 ---
 
 ## 6. Decisions

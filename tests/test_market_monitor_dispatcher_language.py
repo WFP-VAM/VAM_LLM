@@ -1,7 +1,6 @@
 """The Streamlit dispatcher serves Market Monitor in the report language, as the API does."""
 import io
 import json
-from types import SimpleNamespace
 
 from docx import Document
 from fastapi.testclient import TestClient
@@ -12,14 +11,6 @@ from app.shared.runs import report_runs
 from app.streamlit_backend import dispatcher
 
 
-class ImmediateThread:
-    def __init__(self, target=None, **_kwargs):
-        self._target = target
-
-    def start(self):
-        self._target()
-
-
 def test_dispatcher_info_matches_the_api():
     api = TestClient(main.app).get("/market-monitor/info").json()
     local = json.loads(dispatcher.dispatch_request("GET", "/market-monitor/info").content)
@@ -27,8 +18,7 @@ def test_dispatcher_info_matches_the_api():
     assert "language" in [item["name"] for item in local["inputs"]]
 
 
-def test_dispatcher_async_run_records_the_language_and_translates_live_titles(monkeypatch):
-    monkeypatch.setattr(dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread))
+def test_dispatcher_async_run_records_the_language_and_translates_live_titles(monkeypatch, immediate_launch):
 
     def fake_run_report_generation(*, country, time_period, on_step, **_kwargs):
         on_step("data_agent", {"databridges_rows": [{"Country": country, "Commodity": "Maize", "Price": 1.0}]})
