@@ -1,5 +1,5 @@
 """Context retrieval for the live MFI workflow: ReliefWeb and Seerist documents, no model calls."""
-from app.services.mfi_drafter import context, graph as mfi_graph
+from app.services.mfi_drafter.nodes import context_retrieval as context
 from app.shared.context.retrievers import ReliefWebRetriever, SeeristRetriever
 
 STATE = {"country": "South Sudan", "data_collection_start": "2025-01-01", "data_collection_end": "2025-01-31"}
@@ -92,7 +92,7 @@ def test_raw_retriever_error_stays_in_the_trace(monkeypatch):
 def test_light_workflow_maps_documents_to_sources(monkeypatch):
     monkeypatch.setattr(context, "ReliefWebRetriever", FakeReliefWeb)
     monkeypatch.setattr(context, "SeeristRetriever", FakeSeerist)
-    result = mfi_graph.retrieve_context(STATE)
+    result = context.retrieve_context(STATE)
     assert set(result["sources"]) == {"S1", "S2", "S3"}
     assert result["context_status"]["status"] == "available"
     assert result["context_status"]["total_documents"] == 3
@@ -104,7 +104,7 @@ def test_light_workflow_keeps_context_optional_when_retrieval_fails(monkeypatch)
     def broken(state):
         raise RuntimeError("network down")
     monkeypatch.setattr(context, "retrieve_context_documents", broken)
-    result = mfi_graph.retrieve_context(STATE)
+    result = context.retrieve_context(STATE)
     assert result["sources"] == {} and result["document_references"] == []
     assert result["retriever_traces"] == [{"retriever": "context", "error": "RuntimeError"}]
     assert result["context_limitation"].startswith("No usable external context")

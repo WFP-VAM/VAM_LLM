@@ -6,6 +6,7 @@ from collections import Counter
 import pytest
 
 from app.services.mfi_drafter import graph as mfi_graph, runtime as mfi_runtime, service as mfi_service
+from app.services.mfi_drafter.nodes import charts as charts_node, context_retrieval as context_node
 from app.services.mfi_drafter.synthetic_fixtures import SyntheticSpec, build_loaded, build_csv_bytes
 from app.services.mfi_drafter.schemas import MFIReleaseControl
 from app.shared.llm import LLMCallError, LLMResponse
@@ -51,8 +52,8 @@ RELEASE = MFIReleaseControl(analysis_version="2",enabled=True,configuration_stat
 @pytest.fixture
 def args(monkeypatch, loaded):
     monkeypatch.setattr(mfi_runtime.time, "sleep", lambda _: None)
-    monkeypatch.setattr(mfi_graph,"retrieve_context",lambda base:{"sources":{},"document_references":[],"contextual_documents":[],"context_status":{},"context_limitation":"No context"})
-    monkeypatch.setattr(mfi_graph,"render_figures",lambda base:{"visualizations":{},"figure_metadata":{}})
+    monkeypatch.setattr(context_node,"retrieve_context",lambda base:{"sources":{},"document_references":[],"contextual_documents":[],"context_status":{},"context_limitation":"No context"})
+    monkeypatch.setattr(charts_node,"render_figures",lambda base:{"visualizations":{},"figure_metadata":{}})
     return dict(country=loaded["country"],data_collection_start=loaded["data_collection_start"],data_collection_end=loaded["data_collection_end"],
         markets=loaded["markets"],csv_data=deepcopy(loaded),run_id="light-test",release_control=RELEASE)
 
@@ -119,7 +120,7 @@ def test_charts_render_alongside_the_drafts(args, monkeypatch):
         charting.set()
         assert drafting.wait(20), "Charts must render while the drafts are being written"
         return {"visualizations": {}, "figure_metadata": {}}
-    monkeypatch.setattr(mfi_graph, "render_figures", charts)
+    monkeypatch.setattr(charts_node, "render_figures", charts)
     assert mfi_service.run_mfi_report_generation(**args, provider=Drafting())["success"]
 
 

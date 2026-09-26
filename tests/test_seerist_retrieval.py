@@ -243,7 +243,7 @@ def test_seerist_palestine_uses_ps_without_gaza_override():
 
 
 def test_mfi_and_market_monitor_share_the_gaza_aware_seerist_retriever():
-    mfi_context = import_graph_module("app.services.mfi_drafter.context")
+    mfi_context = import_graph_module("app.services.mfi_drafter.nodes.context_retrieval")
     market_graph = import_graph_module("app.services.market_monitor.graph")
 
     assert mfi_context.SeeristRetriever is SeeristRetriever

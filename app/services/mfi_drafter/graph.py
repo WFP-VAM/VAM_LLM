@@ -1,11 +1,12 @@
 """Eleven LangGraph nodes; two draft/review/correction branches and a final synthesis."""
 from __future__ import annotations
 from typing import TypedDict
-from copy import deepcopy
 from langgraph.graph import StateGraph, START, END
-from .contracts import WORKFLOW
-from .evidence import evidence, section_specs, source_map
-from .runtime import ModelRuntime, Oversized
+# Aliases: build_graph names its per-family nodes draft, review and correct.
+from .nodes import assemble_report as assemble_node, charts as charts_node, context_retrieval as context_node
+from .nodes import correct as correct_node, draft as draft_node, executive_summary as summary_node
+from .nodes import prepare_analysis as analysis_node, review as review_node
+from .runtime import ModelRuntime
 
 
 class State(TypedDict, total=False):
@@ -20,57 +21,6 @@ class State(TypedDict, total=False):
     final_markets: dict
     summary: dict
     report: dict
-
-
-def prepare_analysis(inputs):
-    from .analysis import build_assessment_profile
-    loaded = inputs["csv_data"]
-    profile =build_assessment_profile(loaded["markets_data"], loaded["metric_summaries"], loaded).model_dump(mode="json")
-    return {**{k: inputs[k] for k in ("country", "data_collection_start", "data_collection_end", "run_id")},
-        **{k: deepcopy(loaded.get(k)) for k in ("markets_data", "metric_summaries", "survey_metadata", "score_authority", "methodology_version",
-            "excluded_market_records", "methodology_warnings", "warnings")},
-        "assessment_profile": profile, "workflow_revision": WORKFLOW, "analysis_schema_version": "2.1",
-        "narrative_schema_version": "3.0", "mean_mfi_across_assessed_markets": profile["mean_mfi_across_assessed_markets"],
-        "release_control": inputs["release_control"]}
-
-
-def retrieve_context(base):
-    from .context import retrieve_context_documents
-    from .context_status import resolve_context_status
-    try:
-        retrieved = retrieve_context_documents(base)
-    except Exception as exc:
-        # Context has always been optional. Keep its failure distinct from analysis.
-        retrieved = {"contextual_documents": [], "retriever_traces": [{"retriever": "context", "error": type(exc).__name__}],
-                     "context_status": resolve_context_status(retriever_statuses={"ReliefWeb":"failed", "Seerist":"failed"}, documents=[]).model_dump()}
-    sources = source_map(retrieved.get("contextual_documents", []))
-    context_status = dict(retrieved.get("context_status") or {})
-    for legacy_field in ("statements_classified", "final_accepted_statements", "extraction_mode", "classification_outcome", "unresolved_statement_count"):
-        context_status.pop(legacy_field, None)
-    context_status.update(status="available" if sources else context_status.get("status", "unavailable"),
-                          classification_mode="integrated_drafting_and_review", total_documents=len(sources))
-    return {**{k: retrieved.get(k, []) for k in ("contextual_documents", "retriever_traces", "seerist_documents", "reliefweb_documents")},
-        "context_status": context_status, "sources": sources,
-        "context_limitation": None if sources else "No usable external context was retrieved; interpretation relies on the MFI assessment.",
-        "document_references": [{**{k:v for k,v in source.items() if k != "content"},
-            "original_document_id": source.get("doc_id"), "doc_id": key, "source_id": key} for key,source in sources.items()]}
-
-
-def render_figures(base):
-    from .render_worker import RenderWorker, figure_jobs
-    worker = RenderWorker()
-    images, metadata = {}, {}
-    try:
-        for job in figure_jobs(base):
-            result = worker.run(job)
-            images[job["figure_id"]], metadata[job["figure_id"]] = result["image"], result["metadata"]
-    finally:
-        worker.close()
-    return {"visualizations": images, "figure_metadata": metadata}
-
-
-def texts(response):
-    return {s["section_id"]: s["text_markdown"] for s in response["sections"]}
 
 
 def build_graph(ledger, llm, notify):
@@ -92,80 +42,24 @@ def build_graph(ledger, llm, notify):
             return value
         return execute
 
-    def package_for(state, family, ids, kind):
-        base = {**state["base"], **state["context"]}
-        specs = [s for s in section_specs(base["assessment_profile"], family) if s["section_id"] in ids]
-        payload = {"requested_sections": specs, "EVIDENCE": evidence(base, family, ids)}
-        if kind.startswith(("review", "correct")):
-            draft = state["draft_"+family]
-            payload["ORIGINAL_DRAFT"] = {k:v for k,v in texts(draft).items() if k in ids}
-            payload["ORIGINAL_DRAFT_NOTES"] = draft["notes"]
-            other = "markets" if family == "dimensions" else "dimensions"
-            payload["OTHER_DRAFT_READ_ONLY"] = texts(state["draft_"+other])
-        if kind.startswith("correct"):
-            payload["REVIEW_REPORT"] = state["review_"+family]
-        return payload
-
-    def generate_family(state, family, kind):
-        ids = [s["section_id"] for s in section_specs(state["base"]["assessment_profile"], family)]
-        review = kind.startswith("review")
-        def run(group):
-            package = package_for(state, family, group, kind)
-            try:
-                from .reliable_contracts import fingerprint
-                return [runtime.invoke(kind, kind+":"+fingerprint(group)[:16], package, group, review=review)]
-            except Oversized:
-                if len(group) <= 1:
-                    raise
-                middle = len(group)//2
-                return [*run(group[:middle]), *run(group[middle:])]
-        if not ids:
-            return {"needs_revision": False, "review_markdown": "No selected markets."} if review else {"sections": [], "notes": []}
-        outputs = run(ids)
-        if review:
-            result = {"needs_revision": any(o["needs_revision"] for o in outputs),
-                      "review_markdown": "\n\n".join(o["review_markdown"] for o in outputs)}
-            ledger.change(lambda v: v.setdefault("light_review_outcomes", {}).update({family: {"needs_revision": result["needs_revision"]}}))
-            return result
-        return {"sections": [s for o in outputs for s in o["sections"]], "notes": [n for o in outputs for n in o["notes"]]}
-
+    # Nodes are called through their module at run time, so a test can replace a node function there.
+    # The node functions that take the run's runtime are only called here, never registered directly:
+    # LangGraph would fill a parameter named runtime itself.
     graph = StateGraph(State)
-    graph.add_node("prepare_analysis", stage("prepare_analysis", lambda s: {"base": prepare_analysis(s["base"])}))
-    graph.add_node("context_retrieval", stage("context_retrieval", lambda s: {"context": retrieve_context(s["base"])}))
-    graph.add_node("charts", stage("charts", lambda s: {"figures": render_figures(s["base"])}))
+    graph.add_node("prepare_analysis", stage("prepare_analysis", lambda s: {"base": analysis_node.prepare_analysis(s["base"])}))
+    graph.add_node("context_retrieval", stage("context_retrieval", lambda s: {"context": context_node.retrieve_context(s["base"])}))
+    graph.add_node("charts", stage("charts", lambda s: {"figures": charts_node.render_figures(s["base"])}))
     for family in ("dimensions", "markets"):
         draft, review, correct = "draft_"+family, "review_"+family, "correct_"+family
-        graph.add_node(draft, stage(draft, lambda s, f=family, n=draft: {n: generate_family(s,f,n)}))
-        graph.add_node(review, stage(review, lambda s, f=family, n=review: {n: generate_family(s,f,n)}))
-        def correction(s, f=family, n=correct):
-            result = generate_family(s,f,n) if s["review_"+f]["needs_revision"] else s["draft_"+f]
-            ledger.change(lambda v: v.setdefault("light_review_outcomes", {}).setdefault(f, {}).update(
-                correction="completed" if s["review_"+f]["needs_revision"] else "skipped"))
-            return {"final_"+f: result}
-        graph.add_node(correct, stage(correct, correction))
+        graph.add_node(draft, stage(draft, lambda s, f=family, n=draft: draft_node.draft_family(runtime, ledger, s, f, n)))
+        graph.add_node(review, stage(review, lambda s, f=family, n=review: review_node.review_family(runtime, ledger, s, f, n)))
+        graph.add_node(correct, stage(correct, lambda s, f=family, n=correct: correct_node.correction(runtime, ledger, s, f, n)))
         graph.add_edge("context_retrieval", draft)
         graph.add_edge(review, correct)
     for family in ("dimensions", "markets"):
         graph.add_edge(["draft_dimensions", "draft_markets"], "review_"+family)
-
-    def synthesis(s):
-        base = {**s["base"], **s["context"]}
-        package = {"requested_sections": ["executive_summary", "country_context"], "EVIDENCE": evidence(base, "summary", []),
-            "FINAL_DIMENSIONS": texts(s["final_dimensions"]), "FINAL_MARKETS": texts(s["final_markets"]),
-            "FINAL_NOTES": [*s["final_dimensions"]["notes"], *s["final_markets"]["notes"]]}
-        return {"summary": runtime.invoke("executive_summary", "executive_summary", package, ["executive_summary", "country_context"])}
-    graph.add_node("executive_summary", stage("executive_summary", synthesis))
-
-    def assemble(s):
-        from .report import build_blocks, output_aliases
-        result = {**s["base"], **s["context"], **s["figures"], "success": True,
-            "light_narrative": {"dimensions": texts(s["final_dimensions"]), "markets": texts(s["final_markets"]),
-                "summary": texts(s["summary"]), "notes": list(dict.fromkeys([*s["final_dimensions"]["notes"], *s["final_markets"]["notes"], *s["summary"]["notes"]]))},
-            "review_reports": {"dimensions": s["review_dimensions"], "markets": s["review_markets"]}, "review_status": "completed"}
-        result["report_blocks"], result["coverage"] = build_blocks(result)
-        result.update(output_aliases(result))
-        return {"report": result}
-    graph.add_node("assemble_report", stage("assemble_report", assemble))
+    graph.add_node("executive_summary", stage("executive_summary", lambda s: summary_node.synthesis(runtime, s)))
+    graph.add_node("assemble_report", stage("assemble_report", lambda s: assemble_node.assemble(s)))
     graph.add_edge(START, "prepare_analysis")
     graph.add_edge("prepare_analysis", "context_retrieval")
     # Charts render in the same step as the two drafts, so drafting never waits for them.

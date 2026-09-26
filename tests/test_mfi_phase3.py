@@ -7,6 +7,8 @@ def test_report_graph_and_ui_have_no_internal_legacy_reads():
     root = Path(__file__).resolve().parents[1]
     paths = [
         root / "app/services/mfi_drafter/graph.py",
+        root / "app/services/mfi_drafter/sections.py",
+        *sorted((root / "app/services/mfi_drafter/nodes").glob("*.py")),
         root / "app/services/mfi_drafter/report_layout.py",
         root / "app/services/market_monitor/report_blocks.py",
         root / "app/shared/documents/blocks.py",
