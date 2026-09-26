@@ -8,6 +8,7 @@ partial state); the analyst retries it from the same inputs.
 import time
 
 from app.shared.llm import LLMCallError, LLMClient, Tracer, default_provider
+from app.shared.runs.executor import fenced
 from app.shared.util import redact_secrets
 
 from .calls import TEMPERATURE, THINKING_LEVEL, digest, profile
@@ -26,14 +27,10 @@ def llm_provider():
 
 
 def _update(service, run_id, operation_id, change, expected='running'):
-    def update(current):
-        operation = current['operations'][operation_id]
-        if current.get('active') != operation_id or operation['status'] != expected:
-            raise Conflict('This phase is no longer the active operation of the analysis')
-        change(current, operation)
-        current.update(revision=current['revision'] + 1, updated_at=service.clock())
-        return current
-    return service.store.mutate(run_id, update)
+    return fenced(service.store, run_id, lambda current: change(current, current['operations'][operation_id]),
+                  holds=lambda current: (current.get('active') == operation_id
+                                         and current['operations'][operation_id]['status'] == expected),
+                  refused='This phase is no longer the active operation of the analysis', clock=service.clock)
 
 
 def describe(exc):

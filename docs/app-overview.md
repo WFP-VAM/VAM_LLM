@@ -139,7 +139,8 @@ UNIFIED APP/
       cloud.py                 # Cached Firestore and Storage clients, gs:// URIs
       util.py                  # Small shared helpers (secret redaction)
       llm/                     # LLM client, profiles, google-genai provider, call tracing
-      runs/                    # Run infrastructure: store (Firestore/GCS or memory)
+      runs/                    # Run infrastructure: store (Firestore/GCS or memory), background launcher,
+                               #   deadlines and late-writer guard
       async_runs.py            # Run lifecycle & artifact management
       retrievers.py            # Seerist and ReliefWeb clients
       countries.py             # Country name/ISO3 resolution

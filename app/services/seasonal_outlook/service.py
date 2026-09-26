@@ -1,11 +1,11 @@
 """Shared application service for Streamlit and FastAPI; phases run in a background thread."""
 import hashlib
 import logging
-import threading
 import time
 import uuid
 from functools import lru_cache
 from pathlib import Path
+from app.shared.runs.executor import expire_overdue, launch
 from .config import Settings
 from .storage import CloudStore, Conflict, Missing, encode
 from .inputs import prepare, inspect_image, PRODUCTS, regions
@@ -62,19 +62,16 @@ class Service:
         if run.get('workflow_revision') != WORKFLOW_REVISION:
             raise Gone('This analysis was created by a previous version of the Seasonal Outlook Drafter and '
                        'can no longer be opened. Create a new analysis.')
-        if run.get('active'):
-            op = run['operations'][run['active']]
-            if op['deadline'] <= self.clock():
-                # The phase's thread is gone, e.g. because the server restarted, or it is late.
-                def expire(current):
-                    operation = current['operations'][op['id']]
-                    if current.get('active') == op['id'] and operation['deadline'] <= self.clock():
-                        operation.update(status='interrupted', finished_at=self.clock(),
-                            error='The phase did not finish before its deadline, for example because the server restarted. Retry it.')
-                        current.update(active=None, status='interrupted', revision=current['revision']+1, updated_at=self.clock())
-                    return current
-                run = self.store.mutate(run_id, expire)
-        return run
+
+        # The phase's thread is gone, e.g. because the server restarted, or it is late.
+        def overdue(current):
+            return bool(current.get('active')) and current['operations'][current['active']]['deadline'] <= self.clock()
+
+        def interrupt(current):
+            current['operations'][current['active']].update(status='interrupted', finished_at=self.clock(),
+                error='The phase did not finish before its deadline, for example because the server restarted. Retry it.')
+            current.update(active=None, status='interrupted')
+        return expire_overdue(self.store, run_id, run, overdue=overdue, interrupt=interrupt, clock=self.clock)
 
     def list(self, **filters):
         limit = min(max(int(filters.pop('limit', 30)), 1), 100)
@@ -283,13 +280,7 @@ class Service:
 
     def _launch_thread(self, run_id, operation_id):
         from .runner import run_phase
-
-        def run():
-            try:
-                run_phase(self, run_id, operation_id)
-            except Exception:
-                logger.exception('Seasonal operation %s of analysis %s stopped', operation_id, run_id)
-        threading.Thread(target=run, name='seasonal-' + operation_id[:8], daemon=True).start()
+        launch(lambda: run_phase(self, run_id, operation_id), name=f'seasonal-{operation_id[:8]}-of-{run_id[:8]}')
 
     def artifact(self, run_id, name, operation_id=None):
         run = self.get(run_id)

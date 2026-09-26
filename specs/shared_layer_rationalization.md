@@ -480,6 +480,14 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
   - Seasonal snapshots are identical. Since Phase 2 step 3, the comparison masks the stored responses' `started_at` and `duration_seconds`, which change on every run (`.tmp/coherence-baseline/compare_seasonal.py`).
   - Full suite 876 tests, 873 passed, 3 skipped, with no outcome changed. Every page renders and all modules import.
 
+**Phase 3, step 2 (background work), done 2026-09-26:**
+- **`app/shared/runs/executor.py`** holds the rules Seasonal had for its phases:
+  - `launch` runs work in a daemon thread and logs any error it raises. A job service would replace this one function later.
+  - `fenced` applies a change only while the work still holds the run, in one transaction; otherwise it raises `Superseded`, a `Conflict`.
+  - `expire_overdue` marks work that missed its deadline as interrupted, checking again inside the transaction.
+- Seasonal's launcher, its phase-write guard (`runner._update`) and its deadline check (`Service.get`) now call them, with the same messages and the same order of clock reads.
+- **Verification:** Seasonal snapshots identical; full suite 880 tests, 877 passed, 3 skipped, with no outcome changed and 4 new tests of the executor itself.
+
 ---
 
 ## 6. Decisions
