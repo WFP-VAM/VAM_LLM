@@ -925,6 +925,7 @@ def get_commodities(country: Optional[str] = None):
     Returns PriceCache commodities available for a country.
     """
     from .data_loader import (
+        PriceCacheUnavailableError,
         get_available_commodities,
         get_commodity_categories,
         normalize_country_name
@@ -932,7 +933,10 @@ def get_commodities(country: Optional[str] = None):
 
     if country:
         country_normalized = normalize_country_name(country)
-        commodity_list = get_available_commodities(country_normalized)
+        try:
+            commodity_list = get_available_commodities(country_normalized)
+        except PriceCacheUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
         categories = get_commodity_categories(commodity_list)
 
         return {

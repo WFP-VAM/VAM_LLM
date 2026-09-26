@@ -2,7 +2,6 @@
 import json
 import threading
 from copy import deepcopy
-from types import SimpleNamespace
 from collections import Counter
 import pytest
 
@@ -157,14 +156,12 @@ def test_map_preflight_reports_same_configuration_error_in_api_and_streamlit(arg
     from app.services.mfi_drafter import router, map_basemap
     from app.streamlit_backend import dispatcher
     monkeypatch.setattr(router, 'load_mfi_from_csv', lambda **kw: args['csv_data'])
-    monkeypatch.setattr(dispatcher, 'load_mfi_from_csv', lambda **kw: args['csv_data'])
     monkeypatch.setattr(map_basemap, 'verified_manifest', lambda: (_ for _ in ()).throw(map_basemap.MFICartographyError('MFI offline cartography is corrupt')))
     reply = api.post('/mfi-drafter/generate-from-csv-async', files={'file': ('input.csv', b'placeholder', 'text/csv')})
     assert reply.status_code == 503 and 'cartography' in reply.json()['detail']
-    monkeypatch.setattr(dispatcher, '_extract_file', lambda *a: SimpleNamespace(filename='input.csv',content=b'placeholder'))
-    with pytest.raises(dispatcher.LocalHTTPException) as error:
-        dispatcher._mfi_drafter_generate_from_csv_async(data={}, files={}, params={})
-    assert error.value.status_code == 503 and 'cartography' in error.value.detail
+    local = dispatcher.dispatch_request('POST', '/mfi-drafter/generate-from-csv-async',
+                                        files={'file': ('input.csv', b'placeholder', 'text/csv')})
+    assert local.status_code == 503 and local.json() == reply.json()
 
 
 def test_http_and_streamlit_share_results_and_recovery_endpoints_are_gone(args, api):
@@ -178,7 +175,7 @@ def test_http_and_streamlit_share_results_and_recovery_endpoints_are_gone(args, 
     reply = api.get("/mfi-drafter/result/"+args["run_id"])
     assert reply.status_code == 200, reply.text
     assert reply.json()["narrative_schema_version"] == "3.0"
-    local = dispatcher._mfi_drafter_result(args["run_id"])
+    local = dispatcher.dispatch_request("GET", "/mfi-drafter/result/"+args["run_id"])
     assert json.loads(local.content)["light_narrative"] == reply.json()["light_narrative"]
     status = api.get("/mfi-drafter/status/"+args["run_id"]).json()
     assert status["status"] == "completed" and status["progress_pct"] == 100

@@ -1,5 +1,4 @@
 import json
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -25,9 +24,8 @@ def background_work_runs_at_once(immediate_launch):
 @pytest.fixture
 def mfi_csv_upload(monkeypatch):
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "2")
-    monkeypatch.setattr(dispatcher, "_extract_file", lambda *args: SimpleNamespace(filename="mfi.csv", content=b"csv"))
-    monkeypatch.setattr(dispatcher, "load_mfi_from_csv", lambda **kwargs: dict(MFI_CSV))
     monkeypatch.setattr(mfi_router, "load_mfi_from_csv", lambda **kwargs: dict(MFI_CSV))
+    return {"file": ("mfi.csv", b"csv", "text/csv")}
 
 
 def _trace(service, run_id, status, total_calls=0):
@@ -56,8 +54,8 @@ def test_mfi_dispatcher_uses_public_run_id_for_graph_and_live_trace(monkeypatch,
         llm_trace_sink(_trace("mfi-drafter", run_id, "running", total_calls=1))
         return {"run_id": run_id, "warnings": [], "llm_diagnostics": {}}
 
-    monkeypatch.setattr(dispatcher, "run_mfi_report_generation", fake_generation)
-    response = dispatcher._mfi_drafter_generate_from_csv_async(data={}, files={}, params={})
+    monkeypatch.setattr(mfi_router, "run_mfi_report_generation", fake_generation)
+    response = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv-async", files=mfi_csv_upload)
     public_run_id = response.json()["run_id"]
     run = report_runs.get_run(public_run_id)
 
@@ -81,8 +79,10 @@ def test_market_dispatcher_uses_public_run_id_for_graph(monkeypatch):
             "report_draft_sections": {},
         }
 
-    monkeypatch.setattr(dispatcher, "run_report_generation", fake_generation)
-    response = dispatcher._market_monitor_generate_async(
+    monkeypatch.setattr(market_router, "run_report_generation", fake_generation)
+    response = dispatcher.dispatch_request(
+        "POST",
+        "/market-monitor/generate-async",
         json_body={
             "country": "Testland",
             "time_period": "2026-01",

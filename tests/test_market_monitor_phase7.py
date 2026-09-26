@@ -237,14 +237,11 @@ def test_primary_only_generation_and_reportability_remain_available_when_disable
 
     monkeypatch.setattr(router, "resolve_baskets_for_report", fake_resolve)
     monkeypatch.setattr(router, "run_report_generation", _generation_result)
-    monkeypatch.setattr(dispatcher, "resolve_baskets_for_report", fake_resolve)
-    monkeypatch.setattr(dispatcher, "run_report_generation", _generation_result)
     monkeypatch.setattr(
         data_loader,
         "get_reportable_months",
         lambda country, **kwargs: {"country": country, "reportable_months": ["2025-02"], **kwargs},
     )
-    monkeypatch.setattr(dispatcher, "get_reportable_months", data_loader.get_reportable_months)
 
     api = _api_client().post("/generate", json={"country": "South Sudan", "time_period": "2025-02"})
     local = dispatcher.dispatch_request(
@@ -282,10 +279,10 @@ def test_accepted_async_run_continues_after_gate_is_disabled(monkeypatch):
         calls.append(kwargs)
         return FakeBasketSelection(include_secondary=True)
 
-    monkeypatch.setattr(dispatcher, "resolve_baskets_for_report", fake_resolve)
-    monkeypatch.setattr(dispatcher, "run_report_generation", _generation_result)
-    response = dispatcher._market_monitor_generate_async(
-        json_body={"country": "South Sudan", "time_period": "2025-02"}
+    monkeypatch.setattr(router, "resolve_baskets_for_report", fake_resolve)
+    monkeypatch.setattr(router, "run_report_generation", _generation_result)
+    response = dispatcher.dispatch_request(
+        "POST", "/market-monitor/generate-async", json_body={"country": "South Sudan", "time_period": "2025-02"}
     )
     run = report_runs.get_run(response.json()["run_id"])
 

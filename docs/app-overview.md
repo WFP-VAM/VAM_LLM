@@ -31,10 +31,10 @@ The application exposes **three services** through a Streamlit frontend (with a 
                        |   Streamlit UI  |  (Home.py / pages/)
                        +--------+--------+
                                 |
-                   local call or HTTP
+          in-process call (dispatcher.py), or HTTP (main.py)
                                 |
                        +--------v--------+
-                       |   FastAPI API   |  (main.py)
+                       |   FastAPI API   |  (app/api.py)
                        +--------+--------+
                                 |
           +----------------+----------------+
@@ -49,10 +49,12 @@ The application exposes **three services** through a Streamlit frontend (with a 
                        |  Shared Layer   |
                        |  - LLM (Vertex) |
                        |  - Retrievers   |
-                       |  - Async Runs   |
+                       |  - Runs         |
                        |  - DOCX Export  |
                        +-----------------+
 ```
+
+The FastAPI routers are the only implementation of the endpoints: the Streamlit pages reach them in-process, through `app/streamlit_backend/dispatcher.py`, and HTTP clients through `main.py`, so both get the same validation, errors and responses.
 
 Each service is a self-contained FastAPI router whose workflow is a **LangGraph graph**: `market_monitor/graph.py`, `mfi_drafter/light_graph.py` and `seasonal_outlook/graph.py`. None of the graphs uses a checkpointer, and no service has a checkpoint or resume layer:
 
@@ -127,13 +129,14 @@ UNIFIED APP/
   Home.py                      # Streamlit entry point
   streamlit_app.py             # Landing page with service navigation
   streamlit_shared.py          # Shared UI components and WFP theme
-  main.py                      # FastAPI application
+  main.py                      # HTTP entry point (uvicorn main:app) for the FastAPI application
   start.sh                     # Docker CMD (launches Streamlit)
   Dockerfile                   # Container image
   requirements.txt             # Python dependencies
   .env.example                 # Environment variable template
 
   app/
+    api.py                     # The FastAPI application: every drafter's router
     shared/
       config.py                # Process set-up: .env, logging, Google Cloud project
       cloud.py                 # Cached Firestore and Storage clients, gs:// URIs
@@ -158,7 +161,7 @@ UNIFIED APP/
         router.py, api.py, service.py, graph.py, runner.py, engine.py, calls.py, storage.py, science/
 
     streamlit_backend/
-      dispatcher.py            # Local request dispatcher (bypasses HTTP)
+      dispatcher.py            # Hands the pages' requests to the FastAPI application in-process
 
   pages/
     0_Tester_Onboarding.py     # Onboarding guide for testers
@@ -216,7 +219,7 @@ Each arrow group before and after the pause is one phase of the Seasonal graph; 
 
 ## Deployment
 
-The application is containerised with Docker. The `start.sh` script launches **Streamlit only** on port 8080 (the current `docker-streamlit-only` branch configuration). In this mode the Streamlit frontend calls service logic directly through the in-process dispatcher rather than over HTTP to a separate FastAPI process.
+The application is containerised with Docker. The `start.sh` script launches **Streamlit only** on port 8080 (the current `docker-streamlit-only` branch configuration). In this mode the Streamlit frontend calls the FastAPI application in the same process, through the dispatcher, rather than over HTTP to a separate FastAPI process.
 
 Long-running work -- Market Monitor and MFI reports, Seasonal Outlook phases -- runs in background threads of that same process, so the Cloud Run service needs CPU always allocated and enough memory for the Word and ZIP exports. If an instance stops mid-run, the report or phase shows as interrupted once its deadline passes (for a report, 30 minutes without progress) and is run again.
 

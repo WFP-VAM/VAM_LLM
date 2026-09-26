@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import main
 from app.services.market_monitor.i18n import t
 from app.shared.runs import report_runs
+from app.services.market_monitor import router as mm_router
 from app.streamlit_backend import dispatcher
 
 
@@ -25,8 +26,8 @@ def test_dispatcher_async_run_records_the_language_and_translates_live_titles(mo
         on_step("news_retrieval", {"retriever_traces": [], "seerist_documents": [], "reliefweb_documents": []})
         return {"country": country, "time_period": time_period, "report_draft_sections": {}, "warnings": []}
 
-    monkeypatch.setattr(dispatcher, "run_report_generation", fake_run_report_generation)
-    response = dispatcher._market_monitor_generate_async(json_body={
+    monkeypatch.setattr(mm_router, "run_report_generation", fake_run_report_generation)
+    response = dispatcher.dispatch_request("POST", "/market-monitor/generate-async", json_body={
         "country": "South Sudan", "time_period": "2025-01", "language": "fr",
         "commodity_list": ["Maize"], "admin1_list": [], "currency_code": "SSP",
         "enabled_modules": [], "use_mock_data": True,

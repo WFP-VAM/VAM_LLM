@@ -7,6 +7,9 @@ from app.services.market_monitor.price_backfill import (
     PriceRequirement,
     ReportPriceGapReport,
 )
+from app.services.market_monitor import data_loader as mm_data
+from app.services.market_monitor import router as mm_router
+from app.services.mfi_drafter import router as mfi_router
 from app.streamlit_backend import dispatcher
 import streamlit_shared
 from streamlit_shared import ordered_live_output_sections
@@ -56,7 +59,7 @@ def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypa
         selections.append(selection)
         return selection
 
-    monkeypatch.setattr(dispatcher, "resolve_baskets_for_report", fake_resolve)
+    monkeypatch.setattr(mm_router, "resolve_baskets_for_report", fake_resolve)
 
     def fake_run_report_generation(*, country, time_period, on_step=None, **kwargs):
         graph_calls.append(kwargs)
@@ -130,9 +133,11 @@ def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypa
             "warnings": [],
         }
 
-    monkeypatch.setattr(dispatcher, "run_report_generation", fake_run_report_generation)
+    monkeypatch.setattr(mm_router, "run_report_generation", fake_run_report_generation)
 
-    response = dispatcher._market_monitor_generate_async(
+    response = dispatcher.dispatch_request(
+        "POST",
+        "/market-monitor/generate-async",
         json_body={
             "country": "South Sudan",
             "time_period": "2025-01",
@@ -177,7 +182,7 @@ def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypa
 
 def test_market_monitor_async_failure_stores_price_gap_report(monkeypatch, immediate_launch):
     monkeypatch.setattr(
-        dispatcher,
+        mm_router,
         "resolve_baskets_for_report",
         lambda _country, **_kwargs: FakeBasketSelection(),
     )
@@ -214,9 +219,11 @@ def test_market_monitor_async_failure_stores_price_gap_report(monkeypatch, immed
     def fake_run_report_generation(**_kwargs):
         raise BasketReferenceMonthMissing(gap_report)
 
-    monkeypatch.setattr(dispatcher, "run_report_generation", fake_run_report_generation)
+    monkeypatch.setattr(mm_router, "run_report_generation", fake_run_report_generation)
 
-    response = dispatcher._market_monitor_generate_async(
+    response = dispatcher.dispatch_request(
+        "POST",
+        "/market-monitor/generate-async",
         json_body={
             "country": "Burkina Faso",
             "time_period": "2026-06",
@@ -237,7 +244,7 @@ def test_market_monitor_async_failure_stores_price_gap_report(monkeypatch, immed
 
 def test_market_monitor_dispatcher_routes_reportable_months(monkeypatch):
     monkeypatch.setattr(
-        dispatcher,
+        mm_data,
         "get_reportable_months",
         lambda country: {
             "country": country,
@@ -271,7 +278,7 @@ def test_market_monitor_dispatcher_forwards_two_basket_reportability_selection(m
         captured.update({"country": country, **kwargs})
         return {"country": country, "iso3": "SSD", "joint_reportable_months": ["2025-01"]}
 
-    monkeypatch.setattr(dispatcher, "get_reportable_months", fake_reportable)
+    monkeypatch.setattr(mm_data, "get_reportable_months", fake_reportable)
 
     response = dispatcher.dispatch_request(
         "GET",
@@ -335,7 +342,7 @@ def test_market_monitor_dispatcher_routes_reportable_months_refresh(monkeypatch)
             "warnings": [],
         }
 
-    monkeypatch.setattr(dispatcher, "refresh_reportable_months_from_databridges", fake_refresh)
+    monkeypatch.setattr(mm_data, "refresh_reportable_months_from_databridges", fake_refresh)
 
     response = dispatcher.dispatch_request(
         "POST",
@@ -355,7 +362,7 @@ def test_market_monitor_dispatcher_refresh_forwards_two_basket_selection(monkeyp
         captured.update({"country": country, **kwargs})
         return {"country": country, "iso3": "SSD", "status": "no_update", "warnings": []}
 
-    monkeypatch.setattr(dispatcher, "refresh_reportable_months_from_databridges", fake_refresh)
+    monkeypatch.setattr(mm_data, "refresh_reportable_months_from_databridges", fake_refresh)
 
     response = dispatcher.dispatch_request(
         "POST",
@@ -381,9 +388,9 @@ def test_market_monitor_dispatcher_refresh_forwards_two_basket_selection(monkeyp
 
 def test_market_monitor_dispatcher_reportable_months_unavailable_returns_503(monkeypatch):
     def fake_reportable_months(_country):
-        raise dispatcher.PriceCacheUnavailableError("cache unavailable")
+        raise mm_data.PriceCacheUnavailableError("cache unavailable")
 
-    monkeypatch.setattr(dispatcher, "get_reportable_months", fake_reportable_months)
+    monkeypatch.setattr(mm_data, "get_reportable_months", fake_reportable_months)
 
     response = dispatcher.dispatch_request(
         "GET",
@@ -396,9 +403,9 @@ def test_market_monitor_dispatcher_reportable_months_unavailable_returns_503(mon
 
 def test_market_monitor_dispatcher_reportable_months_refresh_conflict_returns_409(monkeypatch):
     def fake_refresh(_country, *, basket_version_id=None):
-        raise dispatcher.BasketVersionConflict("refresh basket")
+        raise mm_router.BasketVersionConflict("refresh basket")
 
-    monkeypatch.setattr(dispatcher, "refresh_reportable_months_from_databridges", fake_refresh)
+    monkeypatch.setattr(mm_data, "refresh_reportable_months_from_databridges", fake_refresh)
 
     response = dispatcher.dispatch_request(
         "POST",
@@ -413,7 +420,7 @@ def test_market_monitor_dispatcher_reportable_months_refresh_conflict_returns_40
 def test_market_monitor_dispatcher_routes_plural_basket_contract(monkeypatch):
     captured = []
     monkeypatch.setattr(
-        dispatcher,
+        mm_router,
         "get_country_baskets_response",
         lambda country: {
             "country": country,
@@ -445,10 +452,10 @@ def test_market_monitor_dispatcher_routes_plural_basket_contract(monkeypatch):
             "versions": [{"basket_version_id": "secondary-v1", "version_number": 2}],
         }
 
-    monkeypatch.setattr(dispatcher, "save_country_basket_role", fake_save)
-    monkeypatch.setattr(dispatcher, "list_country_basket_role_history", fake_history)
+    monkeypatch.setattr(mm_router, "save_country_basket_role", fake_save)
+    monkeypatch.setattr(mm_router, "list_country_basket_role_history", fake_history)
     monkeypatch.setattr(
-        dispatcher,
+        mm_router,
         "archive_country_secondary_basket",
         lambda country: {
             "country": country,
@@ -517,9 +524,9 @@ def test_market_monitor_dispatcher_ignores_stale_secondary_when_excluded(monkeyp
         captured["resolve"] = {"country": country, **kwargs}
         return FakeBasketSelection(include_secondary=False)
 
-    monkeypatch.setattr(dispatcher, "resolve_baskets_for_report", fake_resolve)
+    monkeypatch.setattr(mm_router, "resolve_baskets_for_report", fake_resolve)
     monkeypatch.setattr(
-        dispatcher,
+        mm_router,
         "run_report_generation",
         lambda **kwargs: {
             "run_id": "dispatcher-sync",
@@ -550,36 +557,19 @@ def test_market_monitor_dispatcher_ignores_stale_secondary_when_excluded(monkeyp
     assert response.json()["secondary_basket_included"] is False
 
 
-def test_mfi_dispatcher_routes_csv_endpoints(monkeypatch):
-    calls = []
+def test_mfi_csv_calls_of_the_pages_reach_the_router(monkeypatch, deferred_launch):
+    from app.services.mfi_drafter.synthetic_fixtures import SyntheticSpec, build_csv_bytes
+    csv = build_csv_bytes(SyntheticSpec(market_count=1, region_count=1))
+    files = {"file": ("mfi.csv", csv, "text/csv")}
+    monkeypatch.setenv("MFI_DRAFTER_ANALYSIS_VERSION", "2")
+    monkeypatch.setattr(mfi_router, "run_mfi_report_generation", lambda **kwargs: {"run_id": kwargs["run_id"]})
 
-    monkeypatch.setattr(
-        dispatcher,
-        "_mfi_drafter_generate_from_csv",
-        lambda **kwargs: calls.append(("generate", kwargs)) or dispatcher._json_response({"route": "generate"}),
-    )
-    monkeypatch.setattr(
-        dispatcher,
-        "_mfi_drafter_validate_csv",
-        lambda **kwargs: calls.append(("validate", kwargs)) or dispatcher._json_response({"route": "validate"}),
-    )
-    monkeypatch.setattr(
-        dispatcher,
-        "_mfi_drafter_generate_from_csv_async",
-        lambda **kwargs: calls.append(("generate_async", kwargs)) or dispatcher._json_response({"route": "generate_async"}),
-    )
-
-    files = {"file": object()}
-    data = {"country_override": "Sudan"}
-
-    generate_response = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv", data=data, files=files)
     validate_response = dispatcher.dispatch_request("POST", "/mfi-drafter/validate-csv", files=files)
-    async_response = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv-async", data=data, files=files)
+    async_response = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv-async", files=files)
 
-    assert generate_response.json()["route"] == "generate"
-    assert validate_response.json()["route"] == "validate"
-    assert async_response.json()["route"] == "generate_async"
-    assert [name for name, _kwargs in calls] == ["generate", "validate", "generate_async"]
+    assert validate_response.status_code == 200 and validate_response.json()["valid"] is True
+    assert async_response.status_code == 200 and async_response.json()["status"] == "pending"
+    assert len(deferred_launch) == 1
 
 
 def test_mfi_dispatcher_removed_survey_endpoints_return_404():
@@ -588,8 +578,7 @@ def test_mfi_dispatcher_removed_survey_endpoints_return_404():
 
     assert survey_response.status_code == 404
     assert surveys_response.status_code == 404
-    assert "Unknown MFI drafter endpoint" in survey_response.json()["detail"]
-    assert "Unknown MFI drafter endpoint" in surveys_response.json()["detail"]
+    assert survey_response.json()["detail"] == surveys_response.json()["detail"] == "Not Found"
 
 
 def test_mfi_dispatcher_info_advertises_csv_upload_and_the_light_workflow():

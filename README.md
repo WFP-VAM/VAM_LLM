@@ -48,9 +48,10 @@ copy .env.example .env         # then fill in the values
 streamlit run Home.py
 ```
 
-The Streamlit UI calls the services in-process through
-`app/streamlit_backend/dispatcher.py` — no separate backend process is needed.
-`main.py` exposes the same three services as a FastAPI app for programmatic use:
+Every endpoint has one implementation: the FastAPI routers, assembled in
+`app/api.py`. The Streamlit UI calls that application in-process through
+`app/streamlit_backend/dispatcher.py`, so no separate backend process is needed.
+`main.py` serves the same application over HTTP for programmatic use:
 `uvicorn main:app --reload`.
 
 Tests:
@@ -73,8 +74,9 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
   tracing), the run infrastructure (`runs/`: store, background launcher,
   deadlines, Market Monitor and MFI runs) and live run metadata, retrievers,
   country/ISO3 mapping, report blocks and the DOCX exporter.
-- `app/streamlit_backend/dispatcher.py` — in-process request dispatcher used by
-  the Streamlit UI.
+- `app/api.py` — the FastAPI application (every drafter's router).
+- `app/streamlit_backend/dispatcher.py` — hands the Streamlit UI's requests to
+  that application in-process, with no network.
 - `pages/` + `streamlit_app.py` + `streamlit_shared.py` — Streamlit UI (WFP
   theme, onboarding, instructions, one page per drafter).
 - `deploy/seasonal-outlook/` — Terraform and console setup for the Seasonal

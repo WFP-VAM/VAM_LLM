@@ -46,7 +46,7 @@ from app.shared.live_outputs import (
 
 from app.shared.docx_export import build_content_disposition, build_docx_bytes_from_report_blocks
 from app.shared.report_blocks import resolve_mfi_report_blocks
-from app.shared.llm import observability_config
+from app.shared.llm import LLMCallError, observability_config
 
 logger = logging.getLogger(__name__)
 
@@ -153,16 +153,23 @@ async def generate_mfi_report_from_csv(
     if not filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must be a CSV")
 
+    content = await file.read()
+    # Only a CSV that cannot be read is the caller's error; a failure while drafting is not.
     try:
-        content = await file.read()
-
-        logger.info(f"Loading CSV file: {filename}")
+        logger.info("Loading CSV file: %s", filename)
         csv_data = load_mfi_from_csv(
             file_content=content,
             country_override=country_override,
             start_date_override=data_collection_start_override,
             end_date_override=data_collection_end_override,
         )
+    except ValueError as e:
+        logger.error("CSV validation error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("MFI CSV could not be loaded: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
         logger.info(
             "Starting MFI report generation from CSV for %s (%s markets)",
             csv_data["country"],
@@ -172,16 +179,16 @@ async def generate_mfi_report_from_csv(
             csv_data,
             release_control=release_control,
         )
-        logger.info(f"MFI report generation from CSV completed: {output.run_id}")
+        logger.info("MFI report generation from CSV completed: %s", output.run_id)
         return output
     except MFIRunError as e:
         logger.error("MFI report generation from CSV stopped: %s", e)
         raise HTTPException(status_code=e.status_code, detail=str(e))
-    except ValueError as e:
-        logger.error(f"CSV validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+    except LLMCallError as e:
+        logger.error("MFI report generation from CSV stopped: %s", e)
+        raise HTTPException(status_code=502, detail=e.to_public_dict())
     except Exception as e:
-        logger.error(f"MFI report generation from CSV failed: {e}")
+        logger.error("MFI report generation from CSV failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -340,10 +347,11 @@ async def generate_mfi_report_from_csv_async(
     return {
         "run_id": run_id,
         "status": "pending",
+        # The run is already launched: the preview must not fail on an optional field.
         "preview": {
-            "country": csv_data["country"],
-            "markets_count": len(csv_data["markets"]),
-            "collection_period": csv_data["survey_metadata"]["collection_period"],
+            "country": csv_data.get("country"),
+            "markets_count": len(csv_data.get("markets") or []),
+            "collection_period": (csv_data.get("survey_metadata") or {}).get("collection_period"),
         },
     }
 

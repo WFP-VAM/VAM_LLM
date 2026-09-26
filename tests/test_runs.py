@@ -138,7 +138,6 @@ _MOCK_REPORT_REQUEST = {
 
 
 def test_report_request_gets_503_when_run_storage_is_unavailable(monkeypatch):
-    monkeypatch.setattr(dispatcher, "create_run", _unavailable)
     monkeypatch.setattr(market_monitor_router, "create_run", _unavailable)
 
     local = dispatcher.dispatch_request("POST", "/market-monitor/generate-async", json_body=_MOCK_REPORT_REQUEST)

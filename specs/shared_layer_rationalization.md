@@ -530,6 +530,25 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
 - These replace the fake threads of seven tests.
 - **Verification:** full suite 885 tests, 882 passed, 3 skipped, with no outcome changed.
 
+**Phase 4, step 2 (one implementation per endpoint), done 2026-09-26** (Phase 4 is complete):
+- **The dispatcher is a bridge:**
+  - `dispatch_request` hands every page request to the FastAPI application through `httpx.ASGITransport`, on an event loop of its own. There is no network.
+  - Form fields are sent as text and unset ones are left out. An unhandled error becomes a 500 with its message, as before.
+  - Its `httpx` log lines are filtered.
+  - Its Market Monitor and MFI copies (about 1,760 lines) are gone, and Seasonal no longer takes a separate branch.
+- **`app/api.py`** now builds the FastAPI application (it was in `main.py`), so the dispatcher depends on the app package, not on the entry script. `main.py` sets up the environment and logging, then serves it.
+- **Before the switch,** a differential run sent the pages' calls through both copies:
+  - read-only price-cache calls, a French Market Monitor report (start, status, result, both Word exports, an artifact), an MFI report and a Seasonal flow;
+  - everything matched, except the order of MFI's parallel branches, which varies from run to run;
+  - two router gaps showed up and are fixed: `/commodities` let an unavailable price cache escape as an unhandled error (now 503), and the MFI start reply could fail on a CSV without a collection period after launching the run.
+- **Also fixed on the FastAPI path, which is now the only path (§3.6 item 8):** the synchronous MFI generation reported any `ValueError` raised while drafting as a 400 "CSV validation error". Only an unreadable CSV is a 400 now; a drafting failure is a 500, and a model failure a 502 with its stable public details, as in the Market Monitor.
+- **Drift items of §3.4 resolved:** the pages now reach `/cache/refreshes`, and every response they get passes the routers' response models.
+- **Tests:**
+  - The dispatcher tests now patch the routers (or `data_loader`, whose functions the router imports at call time). They pass unchanged otherwise, so the routers did what the production copies did.
+  - Two tests of the dispatcher's own routing and copies became router tests.
+  - `test_transports.py` (19 tests) checks that HTTP and in-process calls answer identically: read-only endpoints, errors, invalid input, uploads, Word downloads, form fields, drafting failures, an unhandled error and quiet logs.
+- **Verification:** full suite 904 tests, 901 passed, 3 skipped, with no outcome changed; every page renders through the bridge; all modules import.
+
 ---
 
 ## 6. Decisions
