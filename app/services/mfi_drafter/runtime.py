@@ -12,8 +12,9 @@ from app.shared.llm import (EMPTY, INVALID_JSON, TRUNCATED_FINISH_REASONS, LLMCa
 from .errors import MFIRunError
 from .reliable_contracts import fingerprint
 from .contracts import (MODEL, NODES, WORKFLOW, MAX_CHARACTERS, MAX_INPUT_TOKENS,
-    MAX_OUTPUT_TOKENS, ReviewResponse, dumps, instructions, inspect_sections,
+    MAX_OUTPUT_TOKENS, ReviewResponse, dumps, inspect_sections,
     parse_response, response_schema)
+from .prompts import instructions
 
 logger = logging.getLogger(__name__)
 

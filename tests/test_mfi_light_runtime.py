@@ -4,7 +4,8 @@ import httpx
 import pytest
 from google.genai import errors as genai_errors
 from app.services.mfi_drafter import runtime as mfi_runtime, service as mfi_service
-from app.services.mfi_drafter.contracts import response_schema, inspect_sections, instructions
+from app.services.mfi_drafter.contracts import response_schema, inspect_sections
+from app.services.mfi_drafter.prompts import instructions
 from app.shared.llm import LLMCallError, LLMClient, LLMResponse, Tracer
 
 
@@ -59,10 +60,10 @@ def calls(model):
 
 @pytest.mark.parametrize("policy_name", ["RECOMMENDATION_POLICY", "ANALYSIS_POLICY", "STYLE_POLICY"])
 def test_shared_policy_change_is_recorded_in_the_effective_contract(monkeypatch, policy_name):
-    from app.services.mfi_drafter import contracts as mfi_contracts
+    from app.services.mfi_drafter import prompts as mfi_prompts
     old_contract = mfi_service.effective_contract()
-    monkeypatch.setattr(mfi_contracts, policy_name,
-                        getattr(mfi_contracts, policy_name) + "\nRevised shared guidance.")
+    monkeypatch.setattr(mfi_prompts, policy_name,
+                        getattr(mfi_prompts, policy_name) + "\nRevised shared guidance.")
     new_contract = mfi_service.effective_contract()
     assert new_contract["schema_hashes"] == old_contract["schema_hashes"]
     assert len(new_contract["prompt_hashes"]) == 7

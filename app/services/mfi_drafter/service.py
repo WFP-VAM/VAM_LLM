@@ -9,7 +9,8 @@ from .runtime import PROFILE, SUMMARY_TIMEOUT_SECONDS, Reporter, RunLedger
 
 
 def effective_contract():
-    from .contracts import instructions, response_schema
+    from .contracts import response_schema
+    from .prompts import instructions
     from .reliable_contracts import fingerprint
     return {"workflow": WORKFLOW, "bundle": BUNDLE, "model": PROFILE.model, "location": PROFILE.location,
         "temperature": PROFILE.temperature, "analysis_schema": "2.1", "narrative_schema": "3.0", "methodology": "databridge-current",
