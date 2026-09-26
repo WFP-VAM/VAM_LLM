@@ -1,6 +1,6 @@
 # Drafter layout: one file layout for the three drafters
 
-**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). Phase 0 done on `refactor/drafter-layout` (not pushed); Phase 1 (MFI) waits for the go-ahead.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
+**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). Phases 0 and 1 (MFI) done on `refactor/drafter-layout` (not pushed); Phase 2 (Seasonal Outlook) waits for the go-ahead.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
 
 ---
 
@@ -68,9 +68,9 @@ app/services/mfi_drafter/
   nodes/prepare_analysis.py    prepare_analysis(inputs)
   nodes/context_retrieval.py   TOPIC_TERMS, retrieve_context_documents(state), retrieve_context(base)
   nodes/charts.py              render_figures(base)
-  nodes/draft.py               draft_family(runtime, ledger, s, f)
-  nodes/review.py              review_family(runtime, ledger, s, f)
-  nodes/correct.py             correction(runtime, ledger, s, f)
+  nodes/draft.py               draft_family(runtime, ledger, s, f, n)
+  nodes/review.py              review_family(runtime, ledger, s, f, n)
+  nodes/correct.py             correction(runtime, ledger, s, f, n)
   nodes/executive_summary.py   synthesis(runtime, s)
   nodes/assemble_report.py     assemble(s)
   sections.py              texts, package_for, generate_family(runtime, ledger, state, family, kind)
@@ -181,9 +181,9 @@ app/services/market_monitor/
 | `light_graph.retrieve_context`; `context.TOPIC_TERMS`, `context.retrieve_context_documents`, `context.logger` | `nodes/context_retrieval.py` (`context.py` removed). `retrieve_context` calls `retrieve_context_documents` in its own module instead of through a lazy import. |
 | `light_graph.render_figures` | `nodes/charts.py` |
 | `light_graph.texts`, closures `package_for`, `generate_family` | `sections.py`: `texts`, `package_for(state, family, ids, kind)`, `generate_family(runtime, ledger, state, family, kind)` |
-| draft lambdas (`generate_family(s, f, "draft_"+f)`) | `nodes/draft.py`: `draft_family(runtime, ledger, s, f)` |
-| review lambdas | `nodes/review.py`: `review_family(runtime, ledger, s, f)` |
-| closure `correction` | `nodes/correct.py`: `correction(runtime, ledger, s, f)` |
+| draft lambdas (`{n: generate_family(s, f, n)}`) | `nodes/draft.py`: `draft_family(runtime, ledger, s, f, n)` |
+| review lambdas | `nodes/review.py`: `review_family(runtime, ledger, s, f, n)` |
+| closure `correction` | `nodes/correct.py`: `correction(runtime, ledger, s, f, n)` |
 | closure `synthesis` | `nodes/executive_summary.py`: `synthesis(runtime, s)` |
 | closure `assemble` | `nodes/assemble_report.py`: `assemble(s)` |
 | `light_contracts.POLICY`, `ANALYSIS_POLICY`, `STYLE_POLICY`, `RECOMMENDATION_POLICY`, `LIMITATION_POLICY`, `DIMENSION_GUIDANCE`, `MARKET_GUIDANCE`, `instructions` | `prompts.py` |
@@ -191,6 +191,7 @@ app/services/market_monitor/
 | `light_runtime`, `light_service`, `light_evidence`, `light_report` | `runtime`, `service`, `evidence`, `report` (whole modules) |
 
 - Each closure body moves verbatim, with its free variables (`runtime`, `ledger`) as parameters. Its local names (`s`, `f`, `n`) are kept so the diff shows only the move.
+- The graph still passes each per-family node its family and its own node name (`f=family, n=draft`, …), as the old lambdas did; the node modules never rebuild a node name.
 - `runtime.py` imports `instructions` from `prompts` and the rest from `contracts`. `service.effective_contract` does the same. Its hashes are of the texts, so they do not change.
 
 ### 5.3 Seasonal Outlook
@@ -281,7 +282,7 @@ Work happens on `refactor/drafter-layout`, based on `refactor/shared-layer` @ `6
 ### 8.1 Tooling (git-ignored, `.tmp/`)
 
 - **Made layout-tolerant in Phase 0** (new import first, old as fallback; originals kept in `.tmp/drafter-layout/tools-orig/`):
-  - `coherence-baseline/snapshot_mfi.py` gained `mfi_service()` and `mfi_retrieve_context()` and uses them;
+  - `coherence-baseline/snapshot_mfi.py` gained `mfi_service()` and `mfi_retrieve_context()` and uses them (the latter also knows the layout between MFI's steps 1 and 3, where `retrieve_context` sat in `graph.py`);
   - `shared-layer/wire_mfi.py`, `p5_outputs.py` and `p5_offline_app.py` import through them;
   - `wire_mm.py` imports `service.run_report_generation`, falling back to `graph`;
   - `p5_outputs.py` also imports `nodes.news_retrieval` and `nodes.context_retrieval`;
@@ -298,6 +299,7 @@ Work happens on `refactor/drafter-layout`, based on `refactor/shared-layer` @ `6
     - `PROBE=module:name` replaces what a test patches there with a callable that raises and counts. Hit > 0 proves the patch is live.
     - `PROBE_WATCH=module:name` counts calls through the real name. It checks the patches that must never be called.
     - One pytest run per target, so one probe's exception cannot hide another's.
+  - `closure_bodies.py [REV]` (MFI step 3): compares the body of each closure of the old `build_graph` with the function that replaced it, adding the `runtime` and `ledger` arguments to the `generate_family` calls the closures made.
 
 ### 8.2 Per commit
 
@@ -360,3 +362,18 @@ Taken on 26 September 2026:
   - The container is built from `git -c core.autocrlf=false archive`.
 - **Network-dependent MM wire count:** 12 requests when TradingEconomics answers, 10 when it doesn't. Compare like with like.
 - **A missed payload or check order** in the Seasonal split would change a prompt byte or a recorded error. The wire and snapshot captures cover all seven stages in three regions.
+
+**Phase 1 (MFI), done 2026-09-26**, three commits, each verified as §8.2 describes:
+- **`fed7ae9` — the six `light_` renames.** `git mv` of `light_graph`, `light_service`, `light_runtime`, `light_contracts`, `light_evidence` and `light_report`; git records all six as renames. Otherwise 14 import lines in the app (the package's lazy exports, the router, the modules' imports of each other) and the tests' import paths: the tests hold the modules as `mfi_graph`, `mfi_service`, `mfi_runtime` and `mfi_contracts`, because `runtime`, `service` and `graph` are local names in them. `moved_code.py`: the 77 MFI definitions identical.
+- **`3204eda` — `prompts.py`.** The seven policy and guidance texts and `instructions` move from `contracts.py` to `prompts.py` (the split was cut at the first text and checked at both ends by script); `runtime.py` and `service.effective_contract` import `instructions` from there. `moved_code.py`: all eight identical; `effective_contract` changed only in its function-local import. The policy-change test patches `prompts`, and its assertions (every prompt hash changes) prove the patch is live.
+- **`030d839` — `nodes/` and `sections.py`.**
+  - `context.py` moved with `git mv` to `nodes/context_retrieval.py` and gained `retrieve_context`, minus its two function-local imports of names now in the same module. Git pairs the two paths as a rename at 48% similarity, just under its 50% default: `git log --follow -M40%` follows the history.
+  - `closure_bodies.py`: the bodies of `package_for`, `generate_family`, `correction`, `synthesis` and `assemble` are identical to the closures they replace.
+  - `build_graph` adds its nodes and edges in the same order as before.
+  - The node modules are imported under aliases. LangGraph never sees a parameter named `runtime`, because every node is still registered through `stage()`.
+  - `import_all`: 121 modules.
+- **Tests:** only import paths and patch targets changed, plus the source paths of the two guard tests (§6.3). After each commit: 912 tests, 909 passed, 3 skipped, no status changed.
+- **Probes after `030d839`:** all 7 retargeted MFI patch sites are live, with the same install and hit counts as at the base: `nodes.charts.render_figures` 19/15, `nodes.context_retrieval.retrieve_context` 18/15, the two retrievers 4/4 each, `retrieve_context_documents` 1/1, `time.sleep` 36/15, and the `graph.build_graph` watch called 1.
+- **Captures after each commit, identical to the base:** MFI wire (14 generation and 14 token-count calls), MFI snapshots including `effective_contract` (Benin, Haiti, Gaza, misc), `p5_outputs` (81 files), the preview (11 fixtures), `import_all`, the pages.
+- **Other drafters:** at the end of the phase, the MM wire (12 requests) and the Seasonal wire (21 requests, stored records) and snapshots are identical to the base.
+- **Tooling fix during the phase:** `snapshot_mfi.py`'s context fallback knew only the old and the final layouts. Step 1's first capture failed on its `misc` part, and passed once the intermediate layout was added (§8.1).
