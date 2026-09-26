@@ -286,7 +286,7 @@ def _optional_identifier(value: Optional[str]) -> Optional[str]:
 class ReportStatusOutput(BaseModel):
     """Status of an in-progress report."""
     run_id: str
-    status: Literal["pending", "running", "completed", "failed"]
+    status: Literal["pending", "running", "completed", "failed", "interrupted"]
     current_node: Optional[str] = None
     progress_pct: int = 0
     warnings: List[str] = []

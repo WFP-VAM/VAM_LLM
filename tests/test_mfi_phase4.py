@@ -194,7 +194,7 @@ def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch):
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "2")
     monkeypatch.setenv("K_REVISION", "pilot-revision")
     monkeypatch.setattr(dispatcher.threading, "Thread", DeferredThread)
-    monkeypatch.setattr(dispatcher, "create_run", lambda run_id: None)
+    monkeypatch.setattr(dispatcher, "create_run", lambda run_id, **fields: None)
     monkeypatch.setattr(dispatcher, "update_run", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         dispatcher,

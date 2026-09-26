@@ -48,7 +48,7 @@ from .schemas import (
     ReportableMonthsInput,
     ReportStatusOutput
 )
-from app.shared.async_runs import (
+from app.shared.runs.report_runs import (
     RunStoreUnavailable,
     create_run,
     get_run,
@@ -137,17 +137,8 @@ def _update_live_metadata(
 ) -> None:
     if not section_updates and not extra_metadata:
         return
-
-    current_run = get_run(run_id)
-    current_metadata = dict(getattr(current_run, "metadata", {}) or {})
-    meta_update: Dict[str, Any] = dict(extra_metadata or {})
-
-    if section_updates:
-        live_outputs = dict(current_metadata.get("live_outputs") or {})
-        live_outputs.update(section_updates)
-        meta_update["live_outputs"] = live_outputs
-
-    update_run(run_id, metadata=meta_update)
+    # One transaction merges both, so concurrent updates never drop a live-output section.
+    update_run(run_id, metadata=dict(extra_metadata or {}), live_outputs=dict(section_updates or {}))
 
 
 @router.post("/generate", response_model=GenerateReportOutput)
@@ -309,7 +300,7 @@ async def generate_market_monitor_async(
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
     try:
-        create_run(run_id)
+        create_run(run_id, service="market-monitor")
     except RunStoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     initial_metadata = {**language_info, "feature_flags": submission_feature_flags}
@@ -481,8 +472,9 @@ async def generate_market_monitor_async(
 
             result = attach_basket_selection_to_result(result, run_basket_selection)
 
-            update_run(
+            set_run_completed(
                 run_id,
+                result=result,
                 warnings=result.get("warnings", []),
                 metadata={
                     "basket_calculation": {
@@ -498,7 +490,6 @@ async def generate_market_monitor_async(
                     "qa_review": normalize_qa_review(result),
                 },
             )
-            set_run_completed(run_id, result=result)
 
         except Exception as e:
             tb_str = None if isinstance(e, LLMCallError) else traceback.format_exc()

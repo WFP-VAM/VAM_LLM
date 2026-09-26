@@ -70,8 +70,9 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
   and its DataBridges client, behind the Price Bulletin Drafter.
 - `app/shared/` — process set-up (environment, logging, Google Cloud project),
   the LLM client (`llm/`: model profiles, the google-genai provider, call
-  tracing), async run store and live run metadata, retrievers, country/ISO3
-  mapping, report blocks and the DOCX exporter.
+  tracing), the run infrastructure (`runs/`: store, background launcher,
+  deadlines, Market Monitor and MFI runs) and live run metadata, retrievers,
+  country/ISO3 mapping, report blocks and the DOCX exporter.
 - `app/streamlit_backend/dispatcher.py` — in-process request dispatcher used by
   the Streamlit UI.
 - `pages/` + `streamlit_app.py` + `streamlit_shared.py` — Streamlit UI (WFP

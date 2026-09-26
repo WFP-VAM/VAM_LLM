@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence
 
-from app.shared.async_runs import add_run_artifact
+from app.shared.runs.report_runs import add_run_artifact
 
 _MAX_EXCERPT_CHARS = 320
 _MAX_PREVIEW_ROWS = 50

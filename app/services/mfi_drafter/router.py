@@ -28,7 +28,7 @@ from .schemas import (
     MFI_DIMENSIONS,
 )
 
-from app.shared.async_runs import (
+from app.shared.runs.report_runs import (
     RunStoreUnavailable,
     create_run,
     get_run,
@@ -78,17 +78,8 @@ def _update_live_metadata(
 ) -> None:
     if not section_updates and not extra_metadata:
         return
-
-    current_run = get_run(run_id)
-    current_metadata = dict(getattr(current_run, "metadata", {}) or {})
-    meta_update: Dict[str, Any] = dict(extra_metadata or {})
-
-    if section_updates:
-        live_outputs = dict(current_metadata.get("live_outputs") or {})
-        live_outputs.update(section_updates)
-        meta_update["live_outputs"] = live_outputs
-
-    update_run(run_id, metadata=meta_update)
+    # One transaction merges both, so concurrent updates never drop a live-output section.
+    update_run(run_id, metadata=dict(extra_metadata or {}), live_outputs=dict(section_updates or {}))
 
 
 def _analysis_run_metadata(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -239,7 +230,7 @@ async def generate_mfi_report_from_csv_async(
 
     run_id = f"mfi_{uuid_module.uuid4().hex[:8]}"
     try:
-        create_run(run_id)
+        create_run(run_id, service="mfi-drafter")
     except RunStoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     try:
@@ -336,8 +327,7 @@ async def generate_mfi_report_from_csv_async(
                 llm_trace_sink=on_llm_trace,
             )
 
-            update_run(run_id, warnings=result.get("warnings", []))
-            set_run_completed(run_id, result=result)
+            set_run_completed(run_id, result=result, warnings=result.get("warnings", []))
         except Exception as e:
             import traceback
 

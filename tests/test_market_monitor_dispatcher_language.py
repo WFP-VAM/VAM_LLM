@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import main
 from app.services.market_monitor.i18n import t
-from app.shared import async_runs
+from app.shared.runs import report_runs
 from app.streamlit_backend import dispatcher
 
 
@@ -20,12 +20,6 @@ class ImmediateThread:
         self._target()
 
 
-def _memory_runs(monkeypatch):
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    async_runs._RUNS.clear()
-    async_runs._RUN_ARTIFACTS.clear()
-
-
 def test_dispatcher_info_matches_the_api():
     api = TestClient(main.app).get("/market-monitor/info").json()
     local = json.loads(dispatcher.dispatch_request("GET", "/market-monitor/info").content)
@@ -34,7 +28,6 @@ def test_dispatcher_info_matches_the_api():
 
 
 def test_dispatcher_async_run_records_the_language_and_translates_live_titles(monkeypatch):
-    _memory_runs(monkeypatch)
     monkeypatch.setattr(dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread))
 
     def fake_run_report_generation(*, country, time_period, on_step, **_kwargs):
@@ -49,7 +42,7 @@ def test_dispatcher_async_run_records_the_language_and_translates_live_titles(mo
         "enabled_modules": [], "use_mock_data": True,
     })
 
-    run = async_runs.get_run(response.json()["run_id"])
+    run = report_runs.get_run(response.json()["run_id"])
     assert run.status == "completed"
     assert run.metadata["language"] == "fr"
     assert run.metadata["language_source"] == "explicit"
@@ -61,9 +54,8 @@ def test_dispatcher_async_run_records_the_language_and_translates_live_titles(mo
 
 
 def test_dispatcher_docx_export_uses_the_report_language(monkeypatch):
-    _memory_runs(monkeypatch)
-    async_runs.create_run("run_es")
-    async_runs.set_run_completed("run_es", result={
+    report_runs.create_run("run_es", service="market-monitor")
+    report_runs.set_run_completed("run_es", result={
         "country": "Colombia", "time_period": "2025-01", "language": "es",
         "report_draft_sections": {"HIGHLIGHTS": "Texto."}, "visualizations": {},
         "document_references": [{"doc_id": "D1", "source": "ReliefWeb", "date": "2025-01-10",

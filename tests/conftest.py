@@ -5,6 +5,17 @@ import httpx
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def run_store(monkeypatch):
+    """Each test starts with an empty in-memory run store, whatever the environment configures."""
+    from app.shared.runs import report_runs
+    from app.shared.runs.store import MemoryStore
+
+    store = MemoryStore("runs", missing="Run not found")
+    monkeypatch.setattr(report_runs, "_STORE", store)
+    return store
+
+
 @pytest.fixture
 def vertex_wire(monkeypatch):
     """google-genai against a local HTTP transport: every request as sent, no network.

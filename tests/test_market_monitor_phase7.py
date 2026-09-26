@@ -20,7 +20,7 @@ from app.services.price_cache.config import load_price_cache_config
 from app.services.price_cache.fixtures import seed_cache_snapshot
 from app.services.price_cache.migrations import MIGRATIONS_ROOT, _ensure_migration_table, _split_sql
 from app.services.price_cache.sql_repository import SqlPriceCacheRepository, create_price_cache_engine
-from app.shared import async_runs
+from app.shared.runs import report_runs
 from app.streamlit_backend import dispatcher
 from scripts.phase7_second_basket_qa import (
     ReleaseQAFailure,
@@ -100,12 +100,6 @@ def _generation_result(**kwargs):
         "document_references": [],
         "warnings": [],
     }
-
-
-def _reset_runs(monkeypatch):
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    async_runs._RUNS.clear()
-    async_runs._RUN_ARTIFACTS.clear()
 
 
 def test_second_basket_flag_is_default_on_and_accepts_existing_false_values(monkeypatch):
@@ -284,7 +278,6 @@ def test_primary_only_generation_and_reportability_remain_available_when_disable
 
 
 def test_accepted_async_run_continues_after_gate_is_disabled(monkeypatch):
-    _reset_runs(monkeypatch)
     monkeypatch.setenv(SECOND_BASKET_FEATURE_ENV, "true")
     monkeypatch.setattr(dispatcher.threading, "Thread", ImmediateToggleThread)
     calls = []
@@ -298,7 +291,7 @@ def test_accepted_async_run_continues_after_gate_is_disabled(monkeypatch):
     response = dispatcher._market_monitor_generate_async(
         json_body={"country": "South Sudan", "time_period": "2025-02"}
     )
-    run = async_runs.get_run(response.json()["run_id"])
+    run = report_runs.get_run(response.json()["run_id"])
 
     assert run is not None and run.status == "completed"
     assert len(calls) == 2
@@ -309,7 +302,6 @@ def test_accepted_async_run_continues_after_gate_is_disabled(monkeypatch):
 
 
 def test_fastapi_accepted_async_run_uses_submission_gate_snapshot(monkeypatch):
-    _reset_runs(monkeypatch)
     monkeypatch.setenv(SECOND_BASKET_FEATURE_ENV, "true")
     calls = []
 
@@ -326,7 +318,7 @@ def test_fastapi_accepted_async_run_uses_submission_gate_snapshot(monkeypatch):
         "/generate-async",
         json={"country": "South Sudan", "time_period": "2025-02"},
     )
-    run = async_runs.get_run(response.json()["run_id"])
+    run = report_runs.get_run(response.json()["run_id"])
 
     assert response.status_code == 200
     assert run is not None and run.status == "completed"

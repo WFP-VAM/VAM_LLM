@@ -488,6 +488,31 @@ Full suite: 855 tests, 852 passed, 3 skipped. Each new test fails on the code be
 - Seasonal's launcher, its phase-write guard (`runner._update`) and its deadline check (`Service.get`) now call them, with the same messages and the same order of clock reads.
 - **Verification:** Seasonal snapshots identical; full suite 880 tests, 877 passed, 3 skipped, with no outcome changed and 4 new tests of the executor itself.
 
+**Phase 3, step 3 (Market Monitor and MFI runs), done 2026-09-26** (Phase 3 is complete):
+- **`app/shared/runs/report_runs.py` replaces `async_runs.py`,** with the same functions, so the routers and the dispatcher changed only where noted here.
+- **Storage:**
+  - Records live on the shared store: memory by default, or Firestore and GCS with the existing `RUNS_*` settings (same database, collection, bucket and prefix).
+  - Every change is a transaction.
+  - The result and the artifacts are content-addressed objects, and the result is read only when asked for, never by status polls.
+  - Values are stored as plain JSON in memory too, as on Firestore.
+- **Lifecycle:**
+  - Each record gains `service`, `revision` and a deadline. Each write from the run's work moves the deadline 30 minutes on.
+  - A run silent past its deadline reads as `interrupted`. From then on its work can no longer write to it, and a finished run keeps its end state.
+  - Completion writes the result, warnings, metadata and status in one transaction.
+  - `update_run(live_outputs=…)` merges live-output sections inside that transaction; the four copies of the read-then-write helper now use it.
+- **Fail closed:** `RUNS_BACKEND=firestore_gcs` without `RUNS_GCS_URI` now refuses new reports (503) instead of using memory.
+- **Old records stay readable:** inline results, `result_gcs_uri`, and artifacts by `storage_uri` or inline. An old record left "running" reads as interrupted.
+- **Status "interrupted"** is accepted by both status schemas, and the pages treat it as a final state.
+- **Tests:**
+  - An autouse fixture gives every test an empty memory run store, whatever the environment configures.
+  - `test_async_run_artifacts.py` moved into `test_runs.py`, with lifecycle tests: interruption, late writers, one-write completion, lazy result, live-output merge, and old records.
+- **Deferred:**
+  - `list_runs(service)`: nothing would call it yet, and on Firestore it needs a composite index. It comes with a history view.
+  - The shared launcher for MM and MFI: seven tests run their threads synchronously through `dispatcher.threading`, and Phase 4 rewrites those endpoints anyway.
+- **Verification:**
+  - Full suite 885 tests, 882 passed, 3 skipped, with no outcome changed. The 13 tests of `async_runs` are replaced by 18 in `test_runs.py`, and one test stub of `create_run` now accepts `service`.
+  - Seasonal snapshots identical; every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

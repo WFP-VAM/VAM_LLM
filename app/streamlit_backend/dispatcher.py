@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import numpy as np
 from pydantic import ValidationError
 
-from app.shared.async_runs import (
+from app.shared.runs.report_runs import (
     RunStoreUnavailable,
     create_run,
     get_run,
@@ -354,17 +354,8 @@ def _update_live_metadata(
 ) -> None:
     if not section_updates and not extra_metadata:
         return
-
-    current_run = get_run(run_id)
-    current_metadata = dict(getattr(current_run, "metadata", {}) or {})
-    meta_update: Dict[str, Any] = dict(extra_metadata or {})
-
-    if section_updates:
-        live_outputs = dict(current_metadata.get("live_outputs") or {})
-        live_outputs.update(section_updates)
-        meta_update["live_outputs"] = live_outputs
-
-    update_run(run_id, metadata=meta_update)
+    # One transaction merges both, so concurrent updates never drop a live-output section.
+    update_run(run_id, metadata=dict(extra_metadata or {}), live_outputs=dict(section_updates or {}))
 
 
 def _mfi_analysis_run_metadata(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -598,7 +589,7 @@ def _mfi_drafter_generate_from_csv_async(
 
     run_id = f"mfi_{uuid.uuid4().hex[:8]}"
     try:
-        create_run(run_id)
+        create_run(run_id, service="mfi-drafter")
     except RunStoreUnavailable as exc:
         raise LocalHTTPException(503, str(exc)) from exc
     try:
@@ -695,8 +686,7 @@ def _mfi_drafter_generate_from_csv_async(
                 llm_trace_sink=on_llm_trace,
             )
 
-            update_run(run_id, warnings=result.get("warnings", []))
-            set_run_completed(run_id, result=result)
+            set_run_completed(run_id, result=result, warnings=result.get("warnings", []))
         except Exception as exc:
             current = get_run(run_id)
             set_run_failed(run_id, error=str(exc), traceback=traceback.format_exc(),
@@ -1043,7 +1033,7 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
     language = language_info["language"]
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     try:
-        create_run(run_id)
+        create_run(run_id, service="market-monitor")
     except RunStoreUnavailable as exc:
         raise LocalHTTPException(503, str(exc)) from exc
     initial_metadata: Dict[str, Any] = {**language_info, "feature_flags": submission_feature_flags}
@@ -1213,8 +1203,9 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
 
             result = attach_basket_selection_to_result(result, run_basket_selection)
 
-            update_run(
+            set_run_completed(
                 run_id,
+                result=result,
                 warnings=result.get("warnings", []),
                 metadata={
                     "basket_calculation": {
@@ -1230,7 +1221,6 @@ def _market_monitor_generate_async(*, json_body: Any) -> LocalResponse:
                     "qa_review": normalize_qa_review(result),
                 },
             )
-            set_run_completed(run_id, result=result)
         except Exception as exc:
             tb_str = None if isinstance(exc, LLMCallError) else traceback.format_exc()
             if isinstance(exc, LLMCallError):

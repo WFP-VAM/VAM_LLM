@@ -56,14 +56,14 @@ The application exposes **three services** through a Streamlit frontend (with a 
 
 Each service is a self-contained FastAPI router whose workflow is a **LangGraph graph**: `market_monitor/graph.py`, `mfi_drafter/light_graph.py` and `seasonal_outlook/graph.py`. None of the graphs uses a checkpointer, and no service has a checkpoint or resume layer:
 
-- **Market Monitor and MFI** run a report in a background thread and keep only a run record (status, progress, result, artifacts). A failed report is run again.
+- **Market Monitor and MFI** run a report in a background thread and keep only a run record (status, progress, result, artifacts). A failed report is run again. A report whose work stays silent for 30 minutes, for example because the server restarted, shows as interrupted, and its late work can no longer write to it.
 - **Seasonal Outlook** has one graph with three entry points, one per phase: extraction (extraction, visual review, refinement), analyst feedback, and report (draft, review, redraft, export). Each phase is one run of the graph. The analyst's review happens *between* two runs, so the service keeps an **analysis record** in Firestore and GCS: inputs, immutable evidence versions, comments, the confirmation of one exact evidence version, and each operation's calls and final output. A failed phase is retried from the same inputs.
 
 The shared layer provides:
 
 - **LLM client** (`llm/`) -- the one client for every model call, on the google-genai SDK. Each drafter has a model profile; every call is retried only on transient errors and traced the same way (records, JSON logs, optional payload capture). The Market Monitor uses Gemini 2.5 Pro by default at zero temperature. The MFI drafter uses Gemini 3.1 Pro and repairs refused replies itself, linking each repair to the attempt it fixes. The Seasonal Outlook uses Gemini 3.1 Pro with its analysis record as the mandatory audit of every attempt.
 - **Retrievers** -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries.
-- **Async run manager** -- tracks long-running jobs with progress, warnings, and artifacts; pluggable backend (in-memory for dev, Firestore + GCS for production).
+- **Runs** (`runs/`) -- one run infrastructure for the three drafters: a store of JSON records changed only in transactions plus immutable objects (Firestore + GCS in production, memory otherwise), a background launcher, and deadlines that mark dead work interrupted and stop late writers. Market Monitor and MFI runs (`report_runs.py`) are single jobs with progress, warnings, a result and artifacts; the Seasonal Outlook keeps its analysis record on the same store.
 - **DOCX exporter** -- converts an abstract `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) into a branded Word document with embedded visualisations.
 
 The DataBridges client for price data lives in the price cache (`app/services/price_cache/`), which the Market Monitor reads.
@@ -140,8 +140,7 @@ UNIFIED APP/
       util.py                  # Small shared helpers (secret redaction)
       llm/                     # LLM client, profiles, google-genai provider, call tracing
       runs/                    # Run infrastructure: store (Firestore/GCS or memory), background launcher,
-                               #   deadlines and late-writer guard
-      async_runs.py            # Run lifecycle & artifact management
+                               #   deadlines and late-writer guard; report_runs.py for Market Monitor and MFI runs
       retrievers.py            # Seerist and ReliefWeb clients
       countries.py             # Country name/ISO3 resolution
       report_blocks.py         # Abstract report block model
@@ -219,11 +218,11 @@ Each arrow group before and after the pause is one phase of the Seasonal graph; 
 
 The application is containerised with Docker. The `start.sh` script launches **Streamlit only** on port 8080 (the current `docker-streamlit-only` branch configuration). In this mode the Streamlit frontend calls service logic directly through the in-process dispatcher rather than over HTTP to a separate FastAPI process.
 
-Long-running work -- Market Monitor and MFI reports, Seasonal Outlook phases -- runs in background threads of that same process, so the Cloud Run service needs CPU always allocated and enough memory for the Word and ZIP exports. If an instance stops mid-run, the report or phase fails (a Seasonal phase shows as interrupted once its deadline passes) and is run again.
+Long-running work -- Market Monitor and MFI reports, Seasonal Outlook phases -- runs in background threads of that same process, so the Cloud Run service needs CPU always allocated and enough memory for the Word and ZIP exports. If an instance stops mid-run, the report or phase shows as interrupted once its deadline passes (for a report, 30 minutes without progress) and is run again.
 
 For production, the app supports:
 
-- **Firestore + GCS** backend for persistent run tracking and artifact storage (toggled via `RUNS_BACKEND=firestore_gcs`).
+- **Firestore + GCS** backend for persistent Market Monitor and MFI run records and artifacts (`RUNS_BACKEND=firestore_gcs` with `RUNS_GCS_URI`). Records written by the previous run store stay readable. If durable storage is configured but unusable, new reports are refused rather than kept in memory.
 - **Seasonal Outlook storage and IAM** (`deploy/seasonal-outlook/`): the analysis collection, bucket, history indexes and the download-link signer, configured through the `SEASONAL_*` variables. The app identity needs `roles/aiplatform.user` in `SEASONAL_PROJECT`.
 - **Google Vertex AI** authentication via service account or application-default credentials.
 - **CORS** configuration for cross-origin API access when the FastAPI backend is exposed separately.

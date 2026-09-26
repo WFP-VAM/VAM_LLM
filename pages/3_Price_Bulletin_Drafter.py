@@ -800,7 +800,7 @@ if submitted and not overlap_errors:
             "mm_docx_error_run_id",
         ):
             st.session_state.pop(key, None)
-        if isinstance(final_status, dict) and final_status.get("status") in {"completed", "failed"}:
+        if isinstance(final_status, dict) and final_status.get("status") in {"completed", "failed", "interrupted"}:
             advance_report_iteration(st.session_state, country)
         st.rerun()
 

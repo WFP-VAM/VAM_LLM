@@ -129,8 +129,8 @@ if run_csv:
                     "mfi_docx_error_run_id",
                 ):
                     st.session_state.pop(key, None)
-                if isinstance(final_status, dict) and final_status.get("status") == "failed":
-                    st.error(final_status.get("error") or "failed")
+                if isinstance(final_status, dict) and final_status.get("status") in ("failed", "interrupted"):
+                    st.error(final_status.get("error") or final_status.get("status"))
     except Exception as e:
         safe_show_error(e)
 
@@ -159,7 +159,7 @@ def _progress_panel(active_run):
             st.dataframe(diagnostics["phases"], hide_index=True)
         if status.get("error"):
             st.warning(status["error"])
-        if status.get("status") == "failed":
+        if status.get("status") in ("failed", "interrupted"):
             st.caption("This report could not be completed. Generate it again from the CSV.")
     except Exception as exc:
         safe_show_error(exc)

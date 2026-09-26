@@ -63,9 +63,7 @@ def api(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.services.mfi_drafter import router
-    from app.shared import async_runs
     monkeypatch.setenv("MFI_DRAFTER_ANALYSIS_VERSION", "2")
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
     app = FastAPI(); app.include_router(router.router, prefix="/mfi-drafter")
     return TestClient(app)
 
@@ -171,12 +169,12 @@ def test_map_preflight_reports_same_configuration_error_in_api_and_streamlit(arg
 
 def test_http_and_streamlit_share_results_and_recovery_endpoints_are_gone(args, api):
     from app.streamlit_backend import dispatcher
-    from app.shared import async_runs
+    from app.shared.runs import report_runs
     from docx import Document
     from io import BytesIO
     result = light_service.run_mfi_report_generation(**args, provider=Provider())
-    async_runs.create_run(args["run_id"])
-    async_runs.set_run_completed(args["run_id"], result=result)
+    report_runs.create_run(args["run_id"], service="mfi-drafter")
+    report_runs.set_run_completed(args["run_id"], result=result)
     reply = api.get("/mfi-drafter/result/"+args["run_id"])
     assert reply.status_code == 200, reply.text
     assert reply.json()["narrative_schema_version"] == "3.0"
@@ -197,9 +195,9 @@ def test_http_and_streamlit_share_results_and_recovery_endpoints_are_gone(args, 
 
 def test_results_of_the_previous_workflow_are_gone_from_both_backends(api):
     from app.streamlit_backend import dispatcher
-    from app.shared import async_runs
-    async_runs.create_run("previous-workflow")
-    async_runs.set_run_completed("previous-workflow", result={"country": "Testland", "dimension_narratives": {},
+    from app.shared.runs import report_runs
+    report_runs.create_run("previous-workflow", service="mfi-drafter")
+    report_runs.set_run_completed("previous-workflow", result={"country": "Testland", "dimension_narratives": {},
         "report_blocks": [{"type": "claim_warning", "text": "Old claim-level notice."}]})
     for method, path in (("GET", "result"), ("POST", "export-docx")):
         reply = api.request(method, f"/mfi-drafter/{path}/previous-workflow", json={} if method == "POST" else None)

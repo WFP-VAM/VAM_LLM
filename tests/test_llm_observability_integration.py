@@ -5,7 +5,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.shared import async_runs
+from app.shared.runs import report_runs
 from app.shared.llm import LLMCallError
 from app.services.market_monitor import router as market_router
 from app.services.mfi_drafter import router as mfi_router
@@ -27,9 +27,6 @@ MFI_CSV = {"country": "Testland", "data_collection_start": "2026-01-01", "data_c
 
 @pytest.fixture(autouse=True)
 def reset_memory_runs(monkeypatch):
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    async_runs._RUNS.clear()
-    async_runs._RUN_ARTIFACTS.clear()
     monkeypatch.setattr(
         dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread)
     )
@@ -72,7 +69,7 @@ def test_mfi_dispatcher_uses_public_run_id_for_graph_and_live_trace(monkeypatch,
     monkeypatch.setattr(dispatcher, "run_mfi_report_generation", fake_generation)
     response = dispatcher._mfi_drafter_generate_from_csv_async(data={}, files={}, params={})
     public_run_id = response.json()["run_id"]
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
 
     assert captured["run_id"] == public_run_id
     assert run is not None and run.status == "completed"
@@ -103,7 +100,7 @@ def test_market_dispatcher_uses_public_run_id_for_graph(monkeypatch):
         }
     )
     public_run_id = response.json()["run_id"]
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
 
     assert captured["run_id"] == public_run_id
     assert run is not None and run.status == "completed"
@@ -153,7 +150,7 @@ def test_fastapi_async_mfi_public_and_graph_run_ids_match(monkeypatch, mfi_csv_u
     public_run_id = response.json()["run_id"]
     assert response.status_code == 200
     assert captured["run_id"] == public_run_id
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
     assert run is not None and run.status == "completed"
 
 
@@ -186,7 +183,7 @@ def test_fastapi_async_market_public_and_graph_run_ids_match(monkeypatch):
     public_run_id = response.json()["run_id"]
     assert response.status_code == 200
     assert captured["run_id"] == public_run_id
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
     assert run is not None and run.status == "completed"
 
 

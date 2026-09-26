@@ -952,7 +952,7 @@ def run_async_and_poll(
     while True:
         status = request_json("GET", status_path_template.format(run_id=run_id), timeout=30)
         last_status = status
-        is_terminal = isinstance(status, dict) and status.get("status") in {"completed", "failed"}
+        is_terminal = isinstance(status, dict) and status.get("status") in {"completed", "failed", "interrupted"}
         with status_placeholder.container():
             render_run_status(
                 status,

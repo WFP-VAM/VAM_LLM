@@ -1,7 +1,7 @@
 from contextlib import nullcontext
 from types import SimpleNamespace
 
-from app.shared import async_runs
+from app.shared.runs import report_runs
 from app.services.market_monitor.price_backfill import (
     BasketReferenceMonthMissing,
     CommodityGapStatus,
@@ -57,14 +57,7 @@ class FakeBasketSelection:
         }
 
 
-def _reset_run_store(monkeypatch):
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    async_runs._RUNS.clear()
-    async_runs._RUN_ARTIFACTS.clear()
-
-
 def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypatch):
-    _reset_run_store(monkeypatch)
     monkeypatch.setattr(
         dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread)
     )
@@ -165,7 +158,7 @@ def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypa
     )
     run_id = response.json()["run_id"]
 
-    run = async_runs.get_run(run_id)
+    run = report_runs.get_run(run_id)
     assert run is not None
     assert run.status == "completed"
     assert len(selections) == 2
@@ -196,7 +189,6 @@ def test_market_monitor_async_status_exposes_live_outputs_and_artifacts(monkeypa
 
 
 def test_market_monitor_async_failure_stores_price_gap_report(monkeypatch):
-    _reset_run_store(monkeypatch)
     monkeypatch.setattr(
         dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread)
     )
@@ -251,7 +243,7 @@ def test_market_monitor_async_failure_stores_price_gap_report(monkeypatch):
             "use_mock_data": False,
         }
     )
-    run = async_runs.get_run(response.json()["run_id"])
+    run = report_runs.get_run(response.json()["run_id"])
 
     assert run is not None
     assert run.status == "failed"
