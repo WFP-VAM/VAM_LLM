@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional, Any, Dict
 import logging
 
-from .light_service import (
+from .service import (
     run_mfi_report_generation,
     runtime_status as light_runtime_status,
     service_info,
@@ -105,7 +105,7 @@ def _require_light_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _build_mfi_output(result: Dict[str, Any]) -> LightMFIReportOutput:
-    from .light_report import public_output
+    from .report import public_output
     return LightMFIReportOutput.model_validate(public_output(_require_light_result(result)))
 
 

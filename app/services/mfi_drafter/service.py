@@ -4,12 +4,12 @@ import inspect
 import uuid
 from importlib.metadata import version
 from .errors import MFIRunError
-from .light_contracts import WORKFLOW, BUNDLE, MAX_CHARACTERS, MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS, NODES
-from .light_runtime import PROFILE, SUMMARY_TIMEOUT_SECONDS, Reporter, RunLedger
+from .contracts import WORKFLOW, BUNDLE, MAX_CHARACTERS, MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS, NODES
+from .runtime import PROFILE, SUMMARY_TIMEOUT_SECONDS, Reporter, RunLedger
 
 
 def effective_contract():
-    from .light_contracts import instructions, response_schema
+    from .contracts import instructions, response_schema
     from .reliable_contracts import fingerprint
     return {"workflow": WORKFLOW, "bundle": BUNDLE, "model": PROFILE.model, "location": PROFILE.location,
         "temperature": PROFILE.temperature, "analysis_schema": "2.1", "narrative_schema": "3.0", "methodology": "databridge-current",
@@ -113,7 +113,7 @@ def run_mfi_report_generation(country, data_collection_start, data_collection_en
         on_step=None, release_control=None, run_id=None, llm_trace_sink=None, *, provider=None):
     from app.shared.llm import LLMClient, Tracer
     from .features import require_mfi_analysis_v2
-    from .light_graph import build_graph
+    from .graph import build_graph
     from .map_basemap import preflight_maps
     control = require_mfi_analysis_v2(release_control)
     preflight_maps(csv_data)

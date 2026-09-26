@@ -2,7 +2,7 @@
 from __future__ import annotations
 import re
 from .coverage import annex_blocks, evaluate_coverage, table_block
-from .light_evidence import section_specs
+from .evidence import section_specs
 
 
 def markdown_blocks(text, section_id):

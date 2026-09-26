@@ -11,7 +11,7 @@ from app.shared.llm import (EMPTY, INVALID_JSON, TRUNCATED_FINISH_REASONS, LLMCa
     ModelProfile, is_transient, log_llm_run_summary)
 from .errors import MFIRunError
 from .reliable_contracts import fingerprint
-from .light_contracts import (MODEL, NODES, WORKFLOW, MAX_CHARACTERS, MAX_INPUT_TOKENS,
+from .contracts import (MODEL, NODES, WORKFLOW, MAX_CHARACTERS, MAX_INPUT_TOKENS,
     MAX_OUTPUT_TOKENS, ReviewResponse, dumps, instructions, inspect_sections,
     parse_response, response_schema)
 

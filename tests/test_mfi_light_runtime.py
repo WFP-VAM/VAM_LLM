@@ -3,8 +3,8 @@ from dataclasses import replace
 import httpx
 import pytest
 from google.genai import errors as genai_errors
-from app.services.mfi_drafter import light_service, light_runtime
-from app.services.mfi_drafter.light_contracts import response_schema, inspect_sections, instructions
+from app.services.mfi_drafter import runtime as mfi_runtime, service as mfi_service
+from app.services.mfi_drafter.contracts import response_schema, inspect_sections, instructions
 from app.shared.llm import LLMCallError, LLMClient, LLMResponse, Tracer
 
 
@@ -40,12 +40,12 @@ def busy():
 
 @pytest.fixture
 def ledger(monkeypatch):
-    monkeypatch.setattr(light_runtime.time, "sleep", lambda _: None)
-    return light_runtime.RunLedger("response")
+    monkeypatch.setattr(mfi_runtime.time, "sleep", lambda _: None)
+    return mfi_runtime.RunLedger("response")
 
 
-def runtime(ledger, provider, profile=light_runtime.PROFILE):
-    return light_runtime.ModelRuntime(ledger, LLMClient(profile, tracer=Tracer(service="mfi-drafter", run_id="response"),
+def runtime(ledger, provider, profile=mfi_runtime.PROFILE):
+    return mfi_runtime.ModelRuntime(ledger, LLMClient(profile, tracer=Tracer(service="mfi-drafter", run_id="response"),
                                                         provider=provider))
 
 
@@ -59,11 +59,11 @@ def calls(model):
 
 @pytest.mark.parametrize("policy_name", ["RECOMMENDATION_POLICY", "ANALYSIS_POLICY", "STYLE_POLICY"])
 def test_shared_policy_change_is_recorded_in_the_effective_contract(monkeypatch, policy_name):
-    from app.services.mfi_drafter import light_contracts
-    old_contract = light_service.effective_contract()
-    monkeypatch.setattr(light_contracts, policy_name,
-                        getattr(light_contracts, policy_name) + "\nRevised shared guidance.")
-    new_contract = light_service.effective_contract()
+    from app.services.mfi_drafter import contracts as mfi_contracts
+    old_contract = mfi_service.effective_contract()
+    monkeypatch.setattr(mfi_contracts, policy_name,
+                        getattr(mfi_contracts, policy_name) + "\nRevised shared guidance.")
+    new_contract = mfi_service.effective_contract()
     assert new_contract["schema_hashes"] == old_contract["schema_hashes"]
     assert len(new_contract["prompt_hashes"]) == 7
     assert all(value != old_contract["prompt_hashes"][node]
@@ -95,7 +95,7 @@ def test_syntax_then_schema_error_has_no_third_attempt(ledger):
     client = Responses(["{", answer("A")])
     model = runtime(ledger, client)
     with pytest.raises(LLMCallError) as caught: invoke(model)
-    assert isinstance(caught.value.__cause__, light_runtime.InvalidResponse)
+    assert isinstance(caught.value.__cause__, mfi_runtime.InvalidResponse)
     assert len(client.calls) == 2
     assert client.calls[1]["response_errors"] == ["Model output is not valid JSON"]
     work = next(iter(ledger.read()["light_work"].values()))
@@ -140,7 +140,7 @@ def test_access_error_is_not_a_format_retry(ledger):
 def test_no_new_call_starts_once_another_step_has_failed(ledger):
     client = Responses([answer("A", "B")])
     ledger.change(lambda v: v.update(light_phases={"draft_markets": {"status": "failed"}}))
-    with pytest.raises(light_runtime.Stopped): invoke(runtime(ledger, client))
+    with pytest.raises(mfi_runtime.Stopped): invoke(runtime(ledger, client))
     assert client.calls == [] and client.counts == 0
 
 
@@ -151,7 +151,7 @@ def test_a_repair_is_not_started_after_another_step_failed(ledger):
             ledger.change(lambda v: v.update(light_phases={"draft_markets": {"status": "failed"}}))
             return reply
     client = SiblingFailsMeanwhile([answer("A"), answer("B")])
-    with pytest.raises(light_runtime.Stopped): invoke(runtime(ledger, client))
+    with pytest.raises(mfi_runtime.Stopped): invoke(runtime(ledger, client))
     assert len(client.calls) == 1
 
 
@@ -159,7 +159,7 @@ def test_diagnostics_describe_calls_without_response_text(ledger):
     client = Responses([answer("A", "B", text="Confidential drafted prose.")])
     model = runtime(ledger, client)
     assert len(invoke(model)["sections"]) == 2
-    diagnostics = light_runtime.public_diagnostics(ledger.read(), model.llm.tracer.snapshot())
+    diagnostics = mfi_runtime.public_diagnostics(ledger.read(), model.llm.tracer.snapshot())
     call = diagnostics["llm_diagnostics"]["calls"][0]
     assert call["status"] == "succeeded" and call["finish_reason"] == "STOP"
     assert diagnostics["llm_diagnostics"]["status"] == "running"
@@ -181,7 +181,7 @@ def test_requests_on_the_wire_keep_the_mfi_contract(ledger, vertex_wire):
     sent, replies = vertex_wire
     replies += [httpx.Response(200, json={"totalTokens": 120}), httpx.Response(200, json={"candidates": [
         {"content": {"role": "model", "parts": [{"text": json.dumps(answer("A", "B"))}]}, "finishReason": "STOP"}]})]
-    model = runtime(ledger, VertexProvider(), replace(light_runtime.PROFILE, project="offline-test"))
+    model = runtime(ledger, VertexProvider(), replace(mfi_runtime.PROFILE, project="offline-test"))
     assert len(invoke(model)["sections"]) == 2
     count, draft = sent
     model_path = "/projects/offline-test/locations/global/publishers/google/models/gemini-3.1-pro-preview"
@@ -208,7 +208,7 @@ def test_unknown_identifiers_and_scalar_notes_are_not_silently_accepted():
 
 
 def test_schema_compilation_never_returns_shared_mutable_dictionary():
-    from app.services.mfi_drafter.light_contracts import SectionsResponse, provider_schema
+    from app.services.mfi_drafter.contracts import SectionsResponse, provider_schema
     first = provider_schema(SectionsResponse)
     first["properties"]["sections"].clear()
     assert provider_schema(SectionsResponse)["properties"]["sections"]["type"] == "array"
@@ -222,6 +222,6 @@ def test_provider_schemas_pin_the_alphabetical_property_order():
 
 @pytest.mark.parametrize("schema", [{"oneOf": [{"type": "string"}, {"type": "number"}]}, {"type": "strin"}])
 def test_unknown_provider_schema_construct_is_configuration_error(schema):
-    from app.services.mfi_drafter.light_contracts import ContractConfigurationError, compile_provider_schema
+    from app.services.mfi_drafter.contracts import ContractConfigurationError, compile_provider_schema
     with pytest.raises(ContractConfigurationError):
         compile_provider_schema(schema)

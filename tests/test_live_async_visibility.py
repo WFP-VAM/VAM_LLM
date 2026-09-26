@@ -579,7 +579,7 @@ def test_mfi_dispatcher_removed_survey_endpoints_return_404():
 
 
 def test_mfi_dispatcher_info_advertises_csv_upload_and_the_light_workflow():
-    from app.services.mfi_drafter.light_contracts import NODES
+    from app.services.mfi_drafter.contracts import NODES
 
     info = dispatcher.dispatch_request("GET", "/mfi-drafter/info").json()
 

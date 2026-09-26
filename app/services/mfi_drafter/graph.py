@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import TypedDict
 from copy import deepcopy
 from langgraph.graph import StateGraph, START, END
-from .light_contracts import WORKFLOW
-from .light_evidence import evidence, section_specs, source_map
-from .light_runtime import ModelRuntime, Oversized
+from .contracts import WORKFLOW
+from .evidence import evidence, section_specs, source_map
+from .runtime import ModelRuntime, Oversized
 
 
 class State(TypedDict, total=False):
@@ -157,7 +157,7 @@ def build_graph(ledger, llm, notify):
     graph.add_node("executive_summary", stage("executive_summary", synthesis))
 
     def assemble(s):
-        from .light_report import build_blocks, output_aliases
+        from .report import build_blocks, output_aliases
         result = {**s["base"], **s["context"], **s["figures"], "success": True,
             "light_narrative": {"dimensions": texts(s["final_dimensions"]), "markets": texts(s["final_markets"]),
                 "summary": texts(s["summary"]), "notes": list(dict.fromkeys([*s["final_dimensions"]["notes"], *s["final_markets"]["notes"], *s["summary"]["notes"]]))},
