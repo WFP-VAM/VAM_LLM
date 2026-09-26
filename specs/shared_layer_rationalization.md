@@ -1,6 +1,6 @@
 # Shared layer rationalization: one LLM client, one observability layer, one run infrastructure
 
-**Status: approved 25 September 2026; all decisions taken (§6). Phases 0–5 done on `refactor/shared-layer` (not pushed); Phase 6's documentation done, its container check and GCP verification to do.** Based on a read-only analysis of `VAM-LLM-Sep2026` @ `41d76af`, after the coherence refactor (`coherence_refactor_plan.md`). Branches:
+**Status: approved 25 September 2026; all decisions taken (§6). Phases 0–5 done on `refactor/shared-layer` (not pushed); Phase 6's documentation and container check done, its GCP verification to do.** Based on a read-only analysis of `VAM-LLM-Sep2026` @ `41d76af`, after the coherence refactor (`coherence_refactor_plan.md`). Branches:
 - The existing defects of §3.6 that D8 covers are fixed on `fix/post-phase7`. They ship once the coherence refactor is accepted on GCP (its Phase 7).
 - The refactor itself happens on `refactor/shared-layer`, which is based on those fixes. Nothing from it is merged or deployed before that acceptance.
 
@@ -654,9 +654,18 @@ Two captures of unchanged code are identical (80 files); `p5-before-1` is the ba
   - Every third-party module the app imports is installed.
   - Pillow, pydantic, starlette and google-auth are imported without being listed, but each comes with a listed parent (matplotlib, FastAPI, the Google libraries).
   - The DataBridges client is loaded dynamically and still used.
-- **Container check: to do.** The Docker engine on this workstation stopped answering (even `docker version`). With Docker back:
-  - build from the committed tree with LF endings: `git -c core.autocrlf=false archive HEAD | docker build -t vam-llm:shared-phase6 -`;
-  - then `pip check`, the suite in the image with the MFI benchmark CSVs mounted read-only, `start.sh` answering `/_stcore/health`, and the installed versions against the Phase 7 image (`tested-image-installed.txt`).
+- **Container check, done 2026-09-26** on `7bf1aad`. The image was built from the committed tree with LF endings (`git -c core.autocrlf=false archive HEAD`), as Cloud Build checks it out:
+  - **Install:** Python 3.11.16, a clean install of `requirements.txt`, `pip check` clean.
+  - **Installed versions:**
+    - Compared with the Phase 7 image, the 11 packages dropped in Phase 2 are gone. Otherwise there are newer releases: protobuf 7, pyarrow 25 and patch versions. The Phase 2 image already had all of them except langsmith 0.14.1.
+    - The list is kept in `.tmp/shared-layer/tested-image-pip-freeze-phase6.txt`, to compare with the Cloud Build log.
+  - **Suite in the image,** with the MFI benchmark CSVs mounted read-only: 909 passed, 3 skipped, as on Windows.
+  - **MFI snapshots taken in the image** match the Windows ones except for:
+    - float noise around 1e-15, including inside the prompts;
+    - re-rendered figure bytes;
+    - the dependency versions each result records (LangGraph 1.2.12 in the image, 1.0.5 locally).
+    Report text and Word text are identical.
+  - **Boot:** `start.sh` starts the app, `/_stcore/health` answers `ok`, and every page loads in a browser, each in its unconfigured state.
 - **GCP verification: to do,** after the coherence refactor's Phase 7 acceptance and the D8 release (D9). As in that Phase 7:
   - **Before deploying:**
     - No new cloud resource or IAM grant: report runs use the same Firestore database and collection and the same `RUNS_GCS_URI` bucket, now through transactions and create-only objects.
