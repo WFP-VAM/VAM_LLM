@@ -128,7 +128,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 UNIFIED APP/
   Home.py                      # Streamlit entry point
   streamlit_app.py             # Landing page with service navigation
-  streamlit_shared.py          # Shared UI components and WFP theme
+  streamlit_shared.py          # Shared UI components and WFP theme; each drafter's own page parts are in its ui.py
   main.py                      # HTTP entry point (uvicorn main:app) for the FastAPI application
   start.sh                     # Docker CMD (launches Streamlit)
   Dockerfile                   # Container image
@@ -152,13 +152,13 @@ UNIFIED APP/
 
     services/
       mfi_drafter/             # MFI report generation
-        router.py, light_graph.py, light_service.py, light_runtime.py, schemas.py, data_loader.py, report_layout.py
+        router.py, light_graph.py, light_service.py, light_runtime.py, schemas.py, data_loader.py, report_layout.py, ui.py
       market_monitor/          # Market Monitor generation
-        router.py, graph.py, schemas.py, data_loader.py, report_blocks.py, basket_ui.py
+        router.py, graph.py, schemas.py, data_loader.py, report_blocks.py, basket_ui.py, ui.py
       price_cache/             # DataBridges price cache used by Market Monitor
         config.py, sql_repository.py, databridges_adapter.py, refresh_worker.py, migrations/
       seasonal_outlook/        # Seasonal Outlook drafting
-        router.py, api.py, service.py, graph.py, runner.py, engine.py, calls.py, storage.py, science/
+        router.py, api.py, service.py, graph.py, runner.py, engine.py, calls.py, storage.py, ui.py, science/
 
     streamlit_backend/
       dispatcher.py            # Hands the pages' requests to the FastAPI application in-process

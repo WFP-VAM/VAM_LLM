@@ -7,8 +7,9 @@ import json
 import pytest
 from pydantic import ValidationError
 
-import streamlit_shared as shared
+import streamlit as st
 from app.services.mfi_drafter.synthetic_fixtures import SyntheticSpec, build_profile
+from app.services.mfi_drafter.ui import render_raw_table_downloads
 from app.services.mfi_drafter.table_projection import (
     MFIReportTableColumn,
     MFIReportTableSpec,
@@ -93,14 +94,14 @@ def test_raw_downloads_are_complete_full_precision_and_deterministic(profile) ->
 
 def test_technical_download_renderer_exposes_json_and_six_csvs(profile, monkeypatch) -> None:
     buttons = []
-    monkeypatch.setattr(shared.st, "markdown", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(shared.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(st, "markdown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(st, "caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        shared.st,
+        st,
         "download_button",
         lambda label, **kwargs: buttons.append((label, kwargs)),
     )
-    shared.render_mfi_raw_table_downloads(profile, key_prefix="r6")
+    render_raw_table_downloads(profile, key_prefix="r6")
     assert len(buttons) == 7
     assert buttons[0][1]["file_name"].endswith(".json")
     assert all(item[1]["file_name"].endswith(".csv") for item in buttons[1:])

@@ -41,6 +41,7 @@ from app.services.market_monitor.basket_ui import (
     unavailable_basket_regions,
 )
 from app.services.market_monitor.i18n import LANGUAGE_NAMES, t
+from app.services.market_monitor.ui import REPORT_TABLES
 
 
 def _clear_cache_version_dependent_state():
@@ -816,7 +817,11 @@ if isinstance(result, dict):
     result_language = str(result.get("language") or "en")
 
     def _preview() -> None:
-        render_report_blocks(result.get("report_blocks"), visualizations=result.get("visualizations"))
+        render_report_blocks(
+            result.get("report_blocks"),
+            visualizations=result.get("visualizations"),
+            tables=REPORT_TABLES,
+        )
 
     def _technical_details() -> None:
         cols = st.columns(4)

@@ -19,8 +19,6 @@ from app.shared.config import configure_logging, load_environment
 load_environment()
 configure_logging()
 
-from app.services.mfi_drafter.table_projection import build_mfi_raw_table_downloads  # noqa: E402
-from app.services.market_monitor.report_blocks import basket_definition_table_display  # noqa: E402
 from app.streamlit_backend.dispatcher import dispatch_request  # noqa: E402
 
 WFP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/WFP_Logo.svg/512px-WFP_Logo.svg.png"
@@ -976,32 +974,19 @@ def run_async_and_poll(
     return run_id, last_status, result
 
 
-def render_mfi_raw_table_downloads(
-    assessment_profile: Any,
+def render_report_blocks(
+    blocks: Any,
+    visualizations: Any = None,
     *,
-    key_prefix: str,
+    tables: Optional[Dict[str, Callable[[Dict[str, Any]], None]]] = None,
+    layout: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
 ) -> None:
-    """Render the complete canonical table bundle in Technical details."""
-    if not isinstance(assessment_profile, dict):
-        return
-    st.markdown("**Complete analytical table downloads**")
-    st.caption(
-        "These files contain the complete unprojected Phase 2 tables at canonical "
-        "precision; reader-facing report tables are selected and formatted projections."
-    )
-    for index, download in enumerate(
-        build_mfi_raw_table_downloads(assessment_profile)
-    ):
-        st.download_button(
-            str(download["label"]),
-            data=download["data"],
-            file_name=str(download["file_name"]),
-            mime=str(download["mime"]),
-            key=f"{key_prefix}_raw_table_{index}",
-        )
+    """Show report blocks on the page.
 
-
-def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
+    A drafter passes how its table kinds look (`tables`, by ReportBlock meta "table_kind"; other tables show as
+    JSON) and how to read its blocks' layout hints (`layout`): a major section after the opening blocks gets a
+    divider.
+    """
     if not isinstance(blocks, list):
         st.write(blocks)
         return
@@ -1015,12 +1000,7 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
 
         btype = block.get("type")
         meta = block.get("meta")
-        layout = (
-            meta.get("mfi_layout")
-            if isinstance(meta, dict)
-            and isinstance(meta.get("mfi_layout"), dict)
-            else {}
-        )
+        hints = layout(block) if layout is not None else {}
 
         if btype == "heading":
             text = str(block.get("text") or "")
@@ -1028,7 +1008,7 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
             if level <= 1:
                 st.title(text)
             elif level == 2:
-                if layout.get("role") == "major_section" and idx > 1:
+                if hints.get("role") == "major_section" and idx > 1:
                     divider = getattr(st, "divider", None)
                     if callable(divider):
                         divider()
@@ -1086,45 +1066,10 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
             continue
 
         if btype == "table":
-            if isinstance(meta, dict) and meta.get("table_kind") == "basket_definitions":
-                headers, rows = basket_definition_table_display(meta)
-                if headers and rows:
-                    st.dataframe(
-                        pd.DataFrame(rows, columns=headers),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                continue
-            if isinstance(meta, dict) and meta.get("table_kind") == "mfi_presentation":
-                rows = meta.get("rows") or []
-                columns = [str(column) for column in meta.get("columns", []) or []]
-                column_specs = meta.get("column_specs") or []
-                if not str(meta.get("spec_id") or "").strip() or not columns:
-                    raise ValueError(
-                        "Projected MFI tables require a spec ID and explicit columns"
-                    )
-                if not isinstance(column_specs, list) or [
-                    str(item.get("key") or "") if isinstance(item, dict) else ""
-                    for item in column_specs
-                ] != columns:
-                    raise ValueError(
-                        "Projected MFI table columns do not match column_specs"
-                    )
-                display_rows = []
-                labels = [str(item.get("label") or "") for item in column_specs]
-                for row in rows:
-                    values = row.get("values") if isinstance(row, dict) else None
-                    if not isinstance(values, dict) or any(
-                        column not in values for column in columns
-                    ):
-                        raise ValueError("Projected MFI table contains a malformed row")
-                    display_rows.append([values[column] for column in columns])
-                if display_rows:
-                    title = str(meta.get("title") or "").strip()
-                    if title:
-                        st.markdown(f"**{title}**")
-                    dataframe = pd.DataFrame(display_rows, columns=labels)
-                    st.dataframe(dataframe, width="stretch", hide_index=True)
+            kind = meta.get("table_kind") if isinstance(meta, dict) else None
+            render_table = (tables or {}).get(kind) if isinstance(kind, str) else None
+            if render_table is not None:
+                render_table(meta)
                 continue
 
             if isinstance(meta, dict):

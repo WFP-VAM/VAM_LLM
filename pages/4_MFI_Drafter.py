@@ -6,7 +6,6 @@ from streamlit_shared import (
     render_bug_report_sidebar_link,
     render_instructions_sidebar_button,
     render_onboarding_sidebar_button,
-    render_mfi_raw_table_downloads,
     render_llm_diagnostics,
     render_report_delivery,
     render_report_blocks,
@@ -15,6 +14,7 @@ from streamlit_shared import (
     run_async_and_poll,
     safe_show_error,
 )
+from app.services.mfi_drafter.ui import REPORT_TABLES, render_raw_table_downloads, report_layout
 
 st.set_page_config(page_title="MFI Drafter", layout="wide")
 apply_wfp_theme()
@@ -225,7 +225,12 @@ if isinstance(result, dict):
     review_columns[2].metric("Model calls", str(result.get("llm_calls", 0)))
 
     def _preview() -> None:
-        render_report_blocks(result.get("report_blocks"), visualizations=result.get("visualizations"))
+        render_report_blocks(
+            result.get("report_blocks"),
+            visualizations=result.get("visualizations"),
+            tables=REPORT_TABLES,
+            layout=report_layout,
+        )
 
     def _technical_details() -> None:
         cols = st.columns(4)
@@ -263,7 +268,7 @@ if isinstance(result, dict):
             st.markdown("**Generation notices**")
             for warning in result.get("warnings") or []:
                 st.warning(str(warning))
-        render_mfi_raw_table_downloads(
+        render_raw_table_downloads(
             assessment_profile,
             key_prefix=f"mfi_{display_run_id or 'completed'}",
         )

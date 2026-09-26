@@ -3,6 +3,7 @@ import io
 from docx import Document
 
 from app.services.market_monitor.report_blocks import WORD_THEME, build_market_monitor_report_blocks
+from app.services.market_monitor.ui import REPORT_TABLES
 from app.shared.documents.docx import render_docx
 import streamlit_shared as shared
 
@@ -170,7 +171,9 @@ def test_streamlit_renderer_shows_read_only_basket_table(monkeypatch):
     monkeypatch.setattr(shared.st, "write", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(shared, "decode_base64_data", lambda value: str(value).encode("utf-8"))
 
-    shared.render_report_blocks([table.model_dump(), {"type": "figure", "figure_id": "missing"}], {})
+    shared.render_report_blocks(
+        [table.model_dump(), {"type": "figure", "figure_id": "missing"}], {}, tables=REPORT_TABLES
+    )
 
     assert rendered_frames[0].columns.tolist() == ["Basket / role", "Description", "Scope", "Composition"]
     assert rendered_frames[0].iloc[1, 0] == "Pastoral basket (Secondary)"

@@ -598,6 +598,16 @@ Two captures of unchanged code are identical (80 files); `p5-before-1` is the ba
   - Market Monitor wire requests (12) and MFI snapshots unchanged;
   - full suite 905 tests, 902 passed, 3 skipped, with no outcome changed; every page renders and all modules import.
 
+**Phase 5, step 4 (drafter page parts), done 2026-09-26:**
+- `streamlit_shared.py` no longer imports a drafter. What belonged to one drafter moves to its `ui.py`, as the Seasonal Outlook already had:
+  - `market_monitor/ui.py`: how the basket table appears in the report preview;
+  - `mfi_drafter/ui.py`: how its projected tables appear, how its blocks' layout hints are read, and the downloads of its complete analytical tables.
+- `render_report_blocks` takes the drafter's table renderers and layout reader, which the pages pass. A table of a kind the drafter did not name still shows as JSON, and a major section after the opening blocks still gets a divider.
+- **Verification:**
+  - A recording of the Streamlit calls (`.tmp/shared-layer/p5_page_blocks.py`) shows the report preview identical for all 11 fixtures, old renderer against new: titles, headers, dividers, images, tables and notices.
+  - Four tests call the moved functions where they now live. The MFI page test replaces the MFI's `ui.py` the way it replaces `streamlit_shared`.
+  - Full suite 905 tests, 902 passed, 3 skipped, with no outcome changed; every page renders and all modules import.
+
 ---
 
 ## 6. Decisions

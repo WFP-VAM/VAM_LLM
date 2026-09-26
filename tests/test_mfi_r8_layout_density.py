@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+from app.services.mfi_drafter.ui import report_layout
 from app.shared.documents.blocks import ReportBlock
 import streamlit_shared as shared
 
@@ -36,7 +37,7 @@ def test_streamlit_uses_mfi_major_section_dividers_without_reordering(monkeypatc
             meta={"mfi_layout": {"role": "claim"}},
         ).model_dump(),
     ]
-    shared.render_report_blocks(blocks, {})
+    shared.render_report_blocks(blocks, {}, layout=report_layout)
     assert events == [
         ("title", "MFI Report - Testland"),
         ("header", "Assessment metadata and coverage"),

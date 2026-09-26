@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import builtins
+import sys
+import types
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -84,6 +86,11 @@ def _element(elements, label):
 
 def _app(monkeypatch, backend, run_id=None):
     monkeypatch.setattr(builtins, "_mfi_drafter_test_backend", backend, raising=False)
+    mfi_ui = types.ModuleType("app.services.mfi_drafter.ui")
+    mfi_ui.REPORT_TABLES = {}
+    mfi_ui.report_layout = lambda block: {}
+    mfi_ui.render_raw_table_downloads = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "app.services.mfi_drafter.ui", mfi_ui)
     page_path = str(PAGE).replace("\\", "\\\\")
     source = f'''
 import builtins
@@ -106,7 +113,6 @@ shared.render_bug_report_sidebar_link = lambda **kwargs: None
 shared.render_bug_report_header_link = lambda **kwargs: None
 shared.render_report_delivery = lambda **kwargs: kwargs["render_technical_details"]()
 shared.render_report_blocks = lambda *args, **kwargs: None
-shared.render_mfi_raw_table_downloads = lambda *args, **kwargs: None
 shared.render_llm_diagnostics = lambda *args, **kwargs: None
 shared.request_json = backend.request_json
 shared.request_bytes = lambda *args, **kwargs: (b"draft", {{}})

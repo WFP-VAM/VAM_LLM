@@ -80,7 +80,8 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 - `app/streamlit_backend/dispatcher.py` — hands the Streamlit UI's requests to
   that application in-process, with no network.
 - `pages/` + `streamlit_app.py` + `streamlit_shared.py` — Streamlit UI (WFP
-  theme, onboarding, instructions, one page per drafter).
+  theme, onboarding, instructions, one page per drafter). The parts of a page
+  that belong to one drafter live in that drafter's `ui.py`.
 - `deploy/seasonal-outlook/` — Terraform and console setup for the Seasonal
   Outlook's storage, indexes and IAM.
 - `tests/` — pytest suite; `scripts/check_mfi_reliable.py` runs the MFI subset
