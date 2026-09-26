@@ -12,6 +12,11 @@ stores each attempt's request before the call and its response before
 validation, in the Seasonal bucket, and a call fails if either cannot be
 stored. Payload capture is therefore off for Seasonal runs.
 
+All three pages show the calls in the same diagnostics panel
+(`render_llm_diagnostics`), live while a run or phase is working: the Market
+Monitor and MFI pages from the run snapshot, the Seasonal Outlook page from the
+call entries of its analysis record.
+
 ## Runtime configuration
 
 The two call settings below apply to the Market Monitor. The other drafters'

@@ -1,6 +1,6 @@
 # Shared layer rationalization: one LLM client, one observability layer, one run infrastructure
 
-**Status: approved 25 September 2026; all decisions taken (§6).** Based on a read-only analysis of `VAM-LLM-Sep2026` @ `41d76af`, after the coherence refactor (`coherence_refactor_plan.md`). Branches:
+**Status: approved 25 September 2026; all decisions taken (§6). Phases 0–5 done on `refactor/shared-layer` (not pushed); Phase 6's documentation done, its container check and GCP verification to do.** Based on a read-only analysis of `VAM-LLM-Sep2026` @ `41d76af`, after the coherence refactor (`coherence_refactor_plan.md`). Branches:
 - The existing defects of §3.6 that D8 covers are fixed on `fix/post-phase7`. They ship once the coherence refactor is accepted on GCP (its Phase 7).
 - The refactor itself happens on `refactor/shared-layer`, which is based on those fixes. Nothing from it is merged or deployed before that acceptance.
 
@@ -644,6 +644,35 @@ Two captures of unchanged code are identical (80 files); `p5-before-1` is the ba
   - Seasonal snapshots identical;
   - in a browser against the offline app: a phase's calls live, including a transport failure and its successful retry, then the operation's full table;
   - full suite 912 tests, 909 passed, 3 skipped, with no outcome changed; every page renders and all modules import.
+
+**Phase 6 (close-out), started 2026-09-26:**
+- **Documentation:**
+  - `.env.example` now documents what the shared layer reads and the template left out: `VERTEX_PROJECT_ID`, `VERTEX_LOCATION`, `LLM_MAX_OUTPUT_TOKENS` and `RELIEFWEB_APPNAME`. It also says that payload capture now covers the MFI Drafter (D4). No variable was renamed or removed.
+  - The app overview, the README, the observability spec and the Seasonal Outlook spec describe the new layout, the shared diagnostics panel and where each model call's project comes from.
+  - The dated plans (coherence refactor, repository split, integration assessment) keep their old paths, as records.
+- **Requirements:** no change.
+  - Every third-party module the app imports is installed.
+  - Pillow, pydantic, starlette and google-auth are imported without being listed, but each comes with a listed parent (matplotlib, FastAPI, the Google libraries).
+  - The DataBridges client is loaded dynamically and still used.
+- **Container check: to do.** The Docker engine on this workstation stopped answering (even `docker version`). With Docker back:
+  - build from the committed tree with LF endings: `git -c core.autocrlf=false archive HEAD | docker build -t vam-llm:shared-phase6 -`;
+  - then `pip check`, the suite in the image with the MFI benchmark CSVs mounted read-only, `start.sh` answering `/_stcore/health`, and the installed versions against the Phase 7 image (`tested-image-installed.txt`).
+- **GCP verification: to do,** after the coherence refactor's Phase 7 acceptance and the D8 release (D9). As in that Phase 7:
+  - **Before deploying:**
+    - No new cloud resource or IAM grant: report runs use the same Firestore database and collection and the same `RUNS_GCS_URI` bucket, now through transactions and create-only objects.
+    - Environment names are unchanged. Keep `LLM_TRACE_PAYLOADS=false` unless the private bucket is ready, since capture now includes MFI.
+    - Compare the Cloud Build log's installed versions with those of the image tested locally.
+  - **On a Cloud Run revision with no traffic:**
+    - one Price Bulletin: the progress refreshes in place, a click during the run does not lose it, the report and its Word file arrive, and reloading the page URL (`?mm_run=`) reopens it;
+    - one MFI report (Benin CSV), reopened from its URL (`?mfi_run=`);
+    - one full Seasonal cycle (extract → feedback → confirm → report → downloads), with the model calls shown live and per operation;
+    - with durable runs: a report completed on the previous revision still opens (status, result, Word export), and a new run record carries `service`, `revision`, `deadline` and `result_object`;
+    - `app.llm_trace` log lines now appear for MFI and Seasonal calls too.
+  - **Switching traffic:** a report still running on the previous revision keeps running there, and the new revision reads its progress and result.
+  - **Rollback:**
+    - Route traffic back.
+    - Reports completed on the new revision do not open on the previous one: their result and downloads are stored as objects that the old run store does not read. Run them again.
+    - Seasonal analyses keep their format (call entries only gained fields), so they open on both revisions. Opening one on the previous revision before the switch confirms it.
 
 ---
 

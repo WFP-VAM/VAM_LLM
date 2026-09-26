@@ -92,8 +92,10 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 - `docs/app-overview.md` — architecture, integrations, pipelines.
 - `specs/` — dated design and assessment documents, including
   `seasonal_outlook_implementation.md`, `mfi_light_workflow.md`,
-  `repo_split_plan.md` and `coherence_refactor_plan.md` (the September 2026
-  refactor that moved all three drafters to checkpoint-free LangGraph graphs).
+  `repo_split_plan.md`, `coherence_refactor_plan.md` (the September 2026
+  refactor that moved all three drafters to checkpoint-free LangGraph graphs)
+  and `shared_layer_rationalization.md` (the one that followed: one LLM client,
+  one run infrastructure and one implementation per endpoint for all three).
   Specs marked *Historical* describe code that no longer exists.
 - `evals/` — alpha-test evaluation framework (bug reports, surveys, time
   savings). Written when the app had four services; from the split onwards the

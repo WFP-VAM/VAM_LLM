@@ -48,9 +48,9 @@ The application exposes **three services** through a Streamlit frontend (with a 
                        +--------v--------+
                        |  Shared Layer   |
                        |  - LLM (Vertex) |
-                       |  - Retrievers   |
+                       |  - Context      |
                        |  - Runs         |
-                       |  - DOCX Export  |
+                       |  - Documents    |
                        +-----------------+
 ```
 
@@ -227,6 +227,6 @@ For production, the app supports:
 
 - **Firestore + GCS** backend for persistent Market Monitor and MFI run records and artifacts (`RUNS_BACKEND=firestore_gcs` with `RUNS_GCS_URI`). Records written by the previous run store stay readable. If durable storage is configured but unusable, new reports are refused rather than kept in memory.
 - **Seasonal Outlook storage and IAM** (`deploy/seasonal-outlook/`): the analysis collection, bucket, history indexes and the download-link signer, configured through the `SEASONAL_*` variables. The app identity needs `roles/aiplatform.user` in `SEASONAL_PROJECT`.
-- **Google Vertex AI** authentication via service account or application-default credentials.
+- **Google Vertex AI** authentication via service account or application-default credentials. The Market Monitor and MFI calls run in `VERTEX_PROJECT_ID` (or the default project), the Seasonal Outlook's in `SEASONAL_PROJECT`.
 - **CORS** configuration for cross-origin API access when the FastAPI backend is exposed separately.
 - **Reversible second-basket rollout** via `MARKET_MONITOR_SECOND_BASKET_ENABLED`. It defaults to enabled; setting it to `false` blocks new secondary configuration and selection while preserving history and completed report exports.
