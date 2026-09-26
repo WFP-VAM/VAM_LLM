@@ -180,6 +180,7 @@ Independent of the refactor; most are small fixes. Items 1–4 and 9 are fixed o
    - `GET /runs/{id}` exposes `gs://` URIs, including the bucket name.
    - Call errors are stored unsanitised.
 10. From Phase 7: `requirements.txt` is unpinned. MFI's private LangChain calls are the most exposed to an upgrade. You chose not to pin; the Cloud Build log is compared with the tested versions instead.
+11. Found in Phase 5: artifact downloads through the API name their file with a `.docx` suffix (for example `…price-data.csv.docx`), because the `Content-Disposition` helper was written for the Word exports. The pages name their downloads themselves, so only API clients see it [not scheduled; awaiting your decision].
 
 ---
 
@@ -574,6 +575,15 @@ Two captures of unchanged code are identical (80 files); `p5-before-1` is the ba
   - MFI snapshots identical;
   - full suite 905 tests, 902 passed, 3 skipped, with no outcome changed;
   - every page renders and all modules import.
+
+**Phase 5, step 2 (live outputs), done 2026-09-26:**
+- `live_outputs.py` moves to `app/shared/runs/`, next to the report runs whose live previews and downloads it builds.
+- Its table preview was named after DataBridges but knows nothing about it. It stays shared, as `build_table_live_output` and `create_table_artifacts`, instead of moving into the Market Monitor.
+- **Verification:**
+  - identical: the news context, the live outputs and artifacts of full runs, and the price-rows table with its JSON and CSV downloads (captured directly, since mock-data runs skip that branch);
+  - full suite 905 tests, 902 passed, 3 skipped, with no outcome changed;
+  - every page renders and all modules import.
+- The capture showed defect 11 of §3.6 (API artifact downloads named `….docx`); it is left unchanged.
 
 ---
 

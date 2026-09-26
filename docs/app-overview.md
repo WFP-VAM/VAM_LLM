@@ -143,11 +143,11 @@ UNIFIED APP/
       util.py                  # Small shared helpers (secret redaction)
       llm/                     # LLM client, profiles, google-genai provider, call tracing
       runs/                    # Run infrastructure: store (Firestore/GCS or memory), background launcher,
-                               #   deadlines and late-writer guard; report_runs.py for Market Monitor and MFI runs
+                               #   deadlines and late-writer guard; report_runs.py for Market Monitor and MFI runs,
+                               #   live_outputs.py for their live previews and downloads
       documents/               # Report blocks and their Word rendering; drafters supply a theme and labels
       retrievers.py            # Seerist and ReliefWeb clients
       countries.py             # Country name/ISO3 resolution
-      live_outputs.py          # Real-time run metadata formatting
 
     services/
       mfi_drafter/             # MFI report generation

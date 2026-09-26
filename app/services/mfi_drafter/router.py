@@ -39,7 +39,7 @@ from app.shared.runs.report_runs import (
     update_run,
     update_run_progress,
 )
-from app.shared.live_outputs import (
+from app.shared.runs.live_outputs import (
     build_document_live_output,
     create_document_previews_with_artifacts,
 )

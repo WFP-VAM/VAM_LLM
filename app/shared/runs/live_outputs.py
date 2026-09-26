@@ -1,3 +1,7 @@
+"""Live outputs of a report run: previews shown while it runs (tables of rows, documents) and their downloads.
+
+The downloads are the run's artifacts (report_runs.add_run_artifact); the previews go into the run's live_outputs.
+"""
 from __future__ import annotations
 
 import csv
@@ -7,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence
 
-from app.shared.runs.report_runs import add_run_artifact
+from .report_runs import add_run_artifact
 
 _MAX_EXCERPT_CHARS = 320
 _MAX_PREVIEW_ROWS = 50
@@ -47,7 +51,7 @@ def build_preview_table(
     }
 
 
-def build_databridges_live_output(
+def build_table_live_output(
     *,
     title: str,
     summary: str,
@@ -55,6 +59,7 @@ def build_databridges_live_output(
     download_artifacts: Sequence[Dict[str, Any]],
     status: str = "completed",
 ) -> Dict[str, Any]:
+    """A preview of table rows (the first rows and columns) with the downloads of all of them."""
     preview = build_preview_table(rows)
     return {
         "kind": "table",
@@ -87,7 +92,7 @@ def build_document_live_output(
     }
 
 
-def create_databridges_artifacts(
+def create_table_artifacts(
     *,
     run_id: str,
     service_slug: str,
@@ -95,6 +100,7 @@ def create_databridges_artifacts(
     file_stem: str,
     rows: Sequence[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+    """The rows as the run's JSON and CSV downloads."""
     json_bytes = json.dumps(_json_safe(list(rows)), ensure_ascii=False, indent=2).encode("utf-8")
     csv_bytes = rows_to_csv_bytes(rows)
     return [

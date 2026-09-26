@@ -59,11 +59,11 @@ from app.shared.runs.report_runs import (
     update_run,
     update_run_progress,
 )
-from app.shared.live_outputs import (
-    build_databridges_live_output,
+from app.shared.runs.live_outputs import (
     build_document_live_output,
-    create_databridges_artifacts,
+    build_table_live_output,
     create_document_previews_with_artifacts,
+    create_table_artifacts,
 )
 
 from app.shared.documents.docx import build_content_disposition, render_docx
@@ -371,14 +371,14 @@ async def generate_market_monitor_async(input_data: GenerateReportInput):
                 if node_name == "data_agent":
                     rows = _state.get("databridges_rows") or []
                     if isinstance(rows, list) and rows:
-                        artifacts = create_databridges_artifacts(
+                        artifacts = create_table_artifacts(
                             run_id=run_id,
                             service_slug="market-monitor",
                             label_prefix="Price data rows",
                             file_stem=f"market-monitor-price-data-{input_data.country}-{input_data.time_period}",
                             rows=rows,
                         )
-                        section_updates["databridges"] = build_databridges_live_output(
+                        section_updates["databridges"] = build_table_live_output(
                             title=t(language, "live.price_data.title"),
                             summary=(
                                 t(
@@ -393,7 +393,7 @@ async def generate_market_monitor_async(input_data: GenerateReportInput):
                             download_artifacts=artifacts,
                         )
                     elif input_data.use_mock_data:
-                        section_updates["databridges"] = build_databridges_live_output(
+                        section_updates["databridges"] = build_table_live_output(
                             title=t(language, "live.price_data.title"),
                             summary=t(language, "live.price_data.mock"),
                             rows=[],
