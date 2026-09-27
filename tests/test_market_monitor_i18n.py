@@ -6,7 +6,7 @@ from app.services.market_monitor.i18n import (
     resolve_report_language,
     t,
 )
-from app.services.market_monitor.prompt_registry import assert_prompt_manifest_valid
+from app.services.market_monitor.prompts import assert_prompt_manifest_valid
 from app.services.market_monitor import graph as market_graph
 from app.services.market_monitor.report_blocks import build_market_monitor_report_blocks
 
