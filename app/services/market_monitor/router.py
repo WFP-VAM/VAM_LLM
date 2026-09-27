@@ -14,7 +14,7 @@ import logging
 import threading
 import traceback
 
-from .graph import run_report_generation
+from .service import run_report_generation
 from .modules import AVAILABLE_MODULES
 from .qa import normalize_qa_review
 from .price_backfill import PriceDataGateError

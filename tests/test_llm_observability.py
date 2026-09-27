@@ -451,9 +451,11 @@ def test_report_workflows_have_no_direct_model_invocations():
     # The only permitted invoke: the compiled Market Monitor graph, and the MFI model runtime.
     mfi = ["app/services/mfi_drafter/graph.py", "app/services/mfi_drafter/sections.py",
            *sorted(p.relative_to(root).as_posix() for p in (root / "app/services/mfi_drafter/nodes").glob("*.py"))]
+    mm = ["app/services/market_monitor/graph.py", "app/services/market_monitor/service.py",
+          *sorted(p.relative_to(root).as_posix() for p in (root / "app/services/market_monitor/nodes").glob("*.py"))]
     for relative, permitted in (
         *((path, "runtime.invoke(") for path in mfi),
-        ("app/services/market_monitor/graph.py", "agent.invoke("),
+        *((path, "agent.invoke(") for path in mm),
     ):
         source = (root / relative).read_text(encoding="utf-8")
         direct_invocations = [

@@ -1,6 +1,7 @@
 import json
 
 from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor import service as mm_service
 from app.services.market_monitor.nodes import highlights_drafter as highlights_drafter_node
 from app.services.market_monitor.nodes import narrative_drafter as narrative_drafter_node
 from app.services.market_monitor.nodes import prepare_correction as prepare_correction_node
@@ -441,8 +442,8 @@ def test_qa_review_contract_and_legacy_normalization(monkeypatch):
                 },
             }
 
-    monkeypatch.setattr(market_graph, "build_graph", lambda on_step=None: FakeAgent())
-    result = market_graph.run_report_generation(
+    monkeypatch.setattr(mm_service, "build_graph", lambda on_step=None: FakeAgent())
+    result = mm_service.run_report_generation(
         country="Somalia",
         time_period="2026-06",
         commodity_list=[],

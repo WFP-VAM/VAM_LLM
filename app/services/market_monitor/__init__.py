@@ -26,10 +26,9 @@ def __getattr__(name: str):
         from .router import router
 
         return router
-    if name in {
-        "run_report_generation",
-        "build_graph",
-    }:
+    if name == "run_report_generation":
+        return getattr(import_module(".service", __name__), name)
+    if name == "build_graph":
         return getattr(import_module(".graph", __name__), name)
     if name == "create_initial_state":
         return getattr(import_module(".state", __name__), name)
