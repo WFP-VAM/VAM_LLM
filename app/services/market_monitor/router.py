@@ -3,7 +3,7 @@ Market Monitor - Router
 =======================
 FastAPI endpoints for the Market Monitor service.
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Body, Query
+from fastapi import APIRouter, HTTPException, Body, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, ValidationError
 from typing import Optional, List, Any, Dict
@@ -14,7 +14,9 @@ import logging
 import threading
 import traceback
 
-from .graph import run_report_generation, AVAILABLE_MODULES, normalize_qa_review
+from .service import run_report_generation
+from .modules import AVAILABLE_MODULES
+from .qa import normalize_qa_review
 from .price_backfill import PriceDataGateError
 from .basket_calculation import BasketScopeValidationError
 from .food_basket import (
@@ -48,7 +50,9 @@ from .schemas import (
     ReportableMonthsInput,
     ReportStatusOutput
 )
-from app.shared.async_runs import (
+from app.shared.runs import executor
+from app.shared.runs.report_runs import (
+    RunStoreUnavailable,
     create_run,
     get_run,
     get_run_artifact,
@@ -57,17 +61,12 @@ from app.shared.async_runs import (
     update_run,
     update_run_progress,
 )
-from app.shared.live_outputs import (
-    build_databridges_live_output,
-    build_document_live_output,
-    create_databridges_artifacts,
-    create_document_previews_with_artifacts,
-)
+from app.shared.runs.live_outputs import build_table_live_output, create_table_artifacts
+from app.shared.context.news import SourceLabels, live_document_sections
 
-from app.shared.docx_export import build_content_disposition, build_docx_bytes_from_report_blocks
-from app.shared.report_blocks import build_market_monitor_report_blocks
-from app.shared.llm_observability import LLMCallError, observability_config
-from app.shared.llm import llm_runtime_status
+from app.shared.documents.docx import build_content_disposition, render_docx
+from .report_blocks import WORD_THEME, build_market_monitor_report_blocks, word_labels
+from app.shared.llm import LLMCallError, llm_runtime_status, observability_config
 from .i18n import resolve_report_language, t
 
 logger = logging.getLogger(__name__)
@@ -117,18 +116,6 @@ def _cache_json(value: Any) -> Any:
     return value
 
 
-def _trace_error(traces: List[Dict[str, Any]], retriever_name: str) -> Optional[str]:
-    for trace in traces:
-        if not isinstance(trace, dict):
-            continue
-        if str(trace.get("retriever") or "") != retriever_name:
-            continue
-        error = trace.get("error")
-        if error:
-            return str(error)
-    return None
-
-
 def _update_live_metadata(
     run_id: str,
     *,
@@ -137,17 +124,8 @@ def _update_live_metadata(
 ) -> None:
     if not section_updates and not extra_metadata:
         return
-
-    current_run = get_run(run_id)
-    current_metadata = dict(getattr(current_run, "metadata", {}) or {})
-    meta_update: Dict[str, Any] = dict(extra_metadata or {})
-
-    if section_updates:
-        live_outputs = dict(current_metadata.get("live_outputs") or {})
-        live_outputs.update(section_updates)
-        meta_update["live_outputs"] = live_outputs
-
-    update_run(run_id, metadata=meta_update)
+    # One transaction merges both, so concurrent updates never drop a live-output section.
+    update_run(run_id, metadata=dict(extra_metadata or {}), live_outputs=dict(section_updates or {}))
 
 
 @router.post("/generate", response_model=GenerateReportOutput)
@@ -271,10 +249,7 @@ async def generate_market_monitor(input_data: GenerateReportInput):
 
 
 @router.post("/generate-async")
-async def generate_market_monitor_async(
-    input_data: GenerateReportInput,
-    background_tasks: BackgroundTasks
-):
+async def generate_market_monitor_async(input_data: GenerateReportInput):
     """
     Starts report generation in the background.
     Useful for reports that take a long time.
@@ -308,7 +283,10 @@ async def generate_market_monitor_async(
     language = language_info["language"]
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
-    create_run(run_id)
+    try:
+        create_run(run_id, service="market-monitor")
+    except RunStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     initial_metadata = {**language_info, "feature_flags": submission_feature_flags}
     if basket_selection is not None:
         initial_metadata["basket_selection"] = basket_selection.to_metadata()
@@ -379,14 +357,14 @@ async def generate_market_monitor_async(
                 if node_name == "data_agent":
                     rows = _state.get("databridges_rows") or []
                     if isinstance(rows, list) and rows:
-                        artifacts = create_databridges_artifacts(
+                        artifacts = create_table_artifacts(
                             run_id=run_id,
                             service_slug="market-monitor",
                             label_prefix="Price data rows",
                             file_stem=f"market-monitor-price-data-{input_data.country}-{input_data.time_period}",
                             rows=rows,
                         )
-                        section_updates["databridges"] = build_databridges_live_output(
+                        section_updates["databridges"] = build_table_live_output(
                             title=t(language, "live.price_data.title"),
                             summary=(
                                 t(
@@ -401,7 +379,7 @@ async def generate_market_monitor_async(
                             download_artifacts=artifacts,
                         )
                     elif input_data.use_mock_data:
-                        section_updates["databridges"] = build_databridges_live_output(
+                        section_updates["databridges"] = build_table_live_output(
                             title=t(language, "live.price_data.title"),
                             summary=t(language, "live.price_data.mock"),
                             rows=[],
@@ -410,44 +388,19 @@ async def generate_market_monitor_async(
                         )
 
                 if node_name == "news_retrieval":
-                    seerist_docs = _state.get("seerist_documents") or []
-                    reliefweb_docs = _state.get("reliefweb_documents") or []
-                    if isinstance(seerist_docs, list):
-                        seerist_error = _trace_error(traces_list, "Seerist")
-                        seerist_previews = create_document_previews_with_artifacts(
+                    section_updates.update(
+                        live_document_sections(
+                            _state,
                             run_id=run_id,
                             service_slug="market-monitor",
-                            source_slug="seerist",
-                            documents=seerist_docs,
-                        )
-                        section_updates["seerist"] = build_document_live_output(
-                            title=t(language, "live.seerist.title"),
-                            summary=(
-                                t(language, "live.docs.unavailable", source="Seerist", error=seerist_error)
-                                if seerist_error
-                                else t(language, "live.docs.summary", count=len(seerist_docs), source="Seerist")
+                            labels=SourceLabels(
+                                seerist_title=t(language, "live.seerist.title"),
+                                reliefweb_title=t(language, "live.reliefweb.title"),
+                                summary=t(language, "live.docs.summary"),
+                                unavailable=t(language, "live.docs.unavailable"),
                             ),
-                            documents=seerist_previews,
-                            status="failed" if seerist_error else "completed",
                         )
-                    if isinstance(reliefweb_docs, list):
-                        reliefweb_error = _trace_error(traces_list, "ReliefWeb")
-                        reliefweb_previews = create_document_previews_with_artifacts(
-                            run_id=run_id,
-                            service_slug="market-monitor",
-                            source_slug="reliefweb",
-                            documents=reliefweb_docs,
-                        )
-                        section_updates["reliefweb"] = build_document_live_output(
-                            title=t(language, "live.reliefweb.title"),
-                            summary=(
-                                t(language, "live.docs.unavailable", source="ReliefWeb", error=reliefweb_error)
-                                if reliefweb_error
-                                else t(language, "live.docs.summary", count=len(reliefweb_docs), source="ReliefWeb")
-                            ),
-                            documents=reliefweb_previews,
-                            status="failed" if reliefweb_error else "completed",
-                        )
+                    )
 
                 _update_live_metadata(
                     run_id,
@@ -478,8 +431,9 @@ async def generate_market_monitor_async(
 
             result = attach_basket_selection_to_result(result, run_basket_selection)
 
-            update_run(
+            set_run_completed(
                 run_id,
+                result=result,
                 warnings=result.get("warnings", []),
                 metadata={
                     "basket_calculation": {
@@ -495,7 +449,6 @@ async def generate_market_monitor_async(
                     "qa_review": normalize_qa_review(result),
                 },
             )
-            set_run_completed(run_id, result=result)
 
         except Exception as e:
             tb_str = None if isinstance(e, LLMCallError) else traceback.format_exc()
@@ -514,7 +467,7 @@ async def generate_market_monitor_async(
             error = json.dumps(e.to_public_dict(), sort_keys=True) if isinstance(e, LLMCallError) else str(e)
             set_run_failed(run_id, error=error, traceback=tb_str, current_node=current_node)
 
-    background_tasks.add_task(run_in_background)
+    executor.launch(run_in_background, name=f"market-monitor-{run_id}")
 
     return {"run_id": run_id, "status": "pending"}
 
@@ -684,12 +637,13 @@ async def export_market_monitor_docx(
 
     try:
         report_blocks = build_market_monitor_report_blocks(result)
-        docx_bytes = build_docx_bytes_from_report_blocks(
+        docx_bytes = render_docx(
             report_blocks,
+            theme=WORD_THEME,
+            labels=word_labels(result.get("language", "en")),
             visualizations=result.get("visualizations", {}),
             include_sources=options.include_sources,
             include_visualizations=options.include_visualizations,
-            language=result.get("language", "en"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX generation failed: {str(e)}")
@@ -933,6 +887,7 @@ def get_commodities(country: Optional[str] = None):
     Returns PriceCache commodities available for a country.
     """
     from .data_loader import (
+        PriceCacheUnavailableError,
         get_available_commodities,
         get_commodity_categories,
         normalize_country_name
@@ -940,7 +895,10 @@ def get_commodities(country: Optional[str] = None):
 
     if country:
         country_normalized = normalize_country_name(country)
-        commodity_list = get_available_commodities(country_normalized)
+        try:
+            commodity_list = get_available_commodities(country_normalized)
+        except PriceCacheUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
         categories = get_commodity_categories(commodity_list)
 
         return {

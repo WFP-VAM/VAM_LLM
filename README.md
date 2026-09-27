@@ -48,9 +48,10 @@ copy .env.example .env         # then fill in the values
 streamlit run Home.py
 ```
 
-The Streamlit UI calls the services in-process through
-`app/streamlit_backend/dispatcher.py` — no separate backend process is needed.
-`main.py` exposes the same three services as a FastAPI app for programmatic use:
+Every endpoint has one implementation: the FastAPI routers, assembled in
+`app/api.py`. The Streamlit UI calls that application in-process through
+`app/streamlit_backend/dispatcher.py`, so no separate backend process is needed.
+`main.py` serves the same application over HTTP for programmatic use:
 `uvicorn main:app --reload`.
 
 Tests:
@@ -64,17 +65,25 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 
 - `app/services/market_monitor/`, `app/services/mfi_drafter/`,
   `app/services/seasonal_outlook/` — one package per drafter (LangGraph graph
-  without checkpointer, FastAPI router, schemas). The Seasonal Outlook keeps an
+  without checkpointer, FastAPI router, schemas), each laid out the same way:
+  `graph.py` (the graph), `nodes/` (one module per node type), `prompts.py`
+  (prompt texts) and `service.py` (the entry point). The Seasonal Outlook keeps an
   analysis record for its analyst review; see `docs/app-overview.md`.
 - `app/services/price_cache/` — DataBridges price cache (SQLite or Cloud SQL)
   and its DataBridges client, behind the Price Bulletin Drafter.
-- `app/shared/` — Vertex LLM configuration, LLM call observability, async run
-  store and live run metadata, retrievers, country/ISO3 mapping, report blocks,
-  the DOCX exporter and the Price Bulletin basket UI helpers.
-- `app/streamlit_backend/dispatcher.py` — in-process request dispatcher used by
-  the Streamlit UI.
+- `app/shared/` — process set-up (environment, logging, Google Cloud project),
+  the LLM client (`llm/`: model profiles, the google-genai provider, call
+  tracing), the run infrastructure (`runs/`: store, background launcher,
+  deadlines, Market Monitor and MFI runs and their live outputs), the news
+  context (`context/`: Seerist and ReliefWeb), country/ISO3 mapping, and
+  report blocks with their Word renderer
+  (`documents/`; each drafter supplies its theme and labels).
+- `app/api.py` — the FastAPI application (every drafter's router).
+- `app/streamlit_backend/dispatcher.py` — hands the Streamlit UI's requests to
+  that application in-process, with no network.
 - `pages/` + `streamlit_app.py` + `streamlit_shared.py` — Streamlit UI (WFP
-  theme, onboarding, instructions, one page per drafter).
+  theme, onboarding, instructions, one page per drafter). The parts of a page
+  that belong to one drafter live in that drafter's `ui.py`.
 - `deploy/seasonal-outlook/` — Terraform and console setup for the Seasonal
   Outlook's storage, indexes and IAM.
 - `tests/` — pytest suite; `scripts/check_mfi_reliable.py` runs the MFI subset
@@ -85,8 +94,10 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 - `docs/app-overview.md` — architecture, integrations, pipelines.
 - `specs/` — dated design and assessment documents, including
   `seasonal_outlook_implementation.md`, `mfi_light_workflow.md`,
-  `repo_split_plan.md` and `coherence_refactor_plan.md` (the September 2026
-  refactor that moved all three drafters to checkpoint-free LangGraph graphs).
+  `repo_split_plan.md`, `coherence_refactor_plan.md` (the September 2026
+  refactor that moved all three drafters to checkpoint-free LangGraph graphs)
+  and `shared_layer_rationalization.md` (the one that followed: one LLM client,
+  one run infrastructure and one implementation per endpoint for all three).
   Specs marked *Historical* describe code that no longer exists.
 - `evals/` — alpha-test evaluation framework (bug reports, surveys, time
   savings). Written when the app had four services; from the split onwards the

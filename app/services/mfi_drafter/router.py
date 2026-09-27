@@ -3,13 +3,13 @@ MFI Drafter - Router
 ====================
 FastAPI endpoints for the MFI Report Generator service.
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Body, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import Response
 from pydantic import BaseModel
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict
 import logging
 
-from .light_service import (
+from .service import (
     run_mfi_report_generation,
     runtime_status as light_runtime_status,
     service_info,
@@ -28,7 +28,9 @@ from .schemas import (
     MFI_DIMENSIONS,
 )
 
-from app.shared.async_runs import (
+from app.shared.runs import executor
+from app.shared.runs.report_runs import (
+    RunStoreUnavailable,
     create_run,
     get_run,
     get_run_artifact,
@@ -37,14 +39,11 @@ from app.shared.async_runs import (
     update_run,
     update_run_progress,
 )
-from app.shared.live_outputs import (
-    build_document_live_output,
-    create_document_previews_with_artifacts,
-)
+from app.shared.context.news import live_document_sections
 
-from app.shared.docx_export import build_content_disposition, build_docx_bytes_from_report_blocks
-from app.shared.report_blocks import resolve_mfi_report_blocks
-from app.shared.llm_observability import observability_config
+from app.shared.documents.docx import build_content_disposition, render_docx
+from .report_layout import WORD_THEME, resolve_mfi_report_blocks
+from app.shared.llm import LLMCallError, observability_config
 
 logger = logging.getLogger(__name__)
 
@@ -57,18 +56,6 @@ class ExportDocxOptions(BaseModel):
     template: Optional[str] = None
 
 
-def _trace_error(traces: List[Dict[str, Any]], retriever_name: str) -> Optional[str]:
-    for trace in traces:
-        if not isinstance(trace, dict):
-            continue
-        if str(trace.get("retriever") or "") != retriever_name:
-            continue
-        error = trace.get("error")
-        if error:
-            return str(error)
-    return None
-
-
 def _update_live_metadata(
     run_id: str,
     *,
@@ -77,17 +64,8 @@ def _update_live_metadata(
 ) -> None:
     if not section_updates and not extra_metadata:
         return
-
-    current_run = get_run(run_id)
-    current_metadata = dict(getattr(current_run, "metadata", {}) or {})
-    meta_update: Dict[str, Any] = dict(extra_metadata or {})
-
-    if section_updates:
-        live_outputs = dict(current_metadata.get("live_outputs") or {})
-        live_outputs.update(section_updates)
-        meta_update["live_outputs"] = live_outputs
-
-    update_run(run_id, metadata=meta_update)
+    # One transaction merges both, so concurrent updates never drop a live-output section.
+    update_run(run_id, metadata=dict(extra_metadata or {}), live_outputs=dict(section_updates or {}))
 
 
 def _analysis_run_metadata(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -127,7 +105,7 @@ def _require_light_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _build_mfi_output(result: Dict[str, Any]) -> LightMFIReportOutput:
-    from .light_report import public_output
+    from .report import public_output
     return LightMFIReportOutput.model_validate(public_output(_require_light_result(result)))
 
 
@@ -160,16 +138,23 @@ async def generate_mfi_report_from_csv(
     if not filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must be a CSV")
 
+    content = await file.read()
+    # Only a CSV that cannot be read is the caller's error; a failure while drafting is not.
     try:
-        content = await file.read()
-
-        logger.info(f"Loading CSV file: {filename}")
+        logger.info("Loading CSV file: %s", filename)
         csv_data = load_mfi_from_csv(
             file_content=content,
             country_override=country_override,
             start_date_override=data_collection_start_override,
             end_date_override=data_collection_end_override,
         )
+    except ValueError as e:
+        logger.error("CSV validation error: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("MFI CSV could not be loaded: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
         logger.info(
             "Starting MFI report generation from CSV for %s (%s markets)",
             csv_data["country"],
@@ -179,16 +164,16 @@ async def generate_mfi_report_from_csv(
             csv_data,
             release_control=release_control,
         )
-        logger.info(f"MFI report generation from CSV completed: {output.run_id}")
+        logger.info("MFI report generation from CSV completed: %s", output.run_id)
         return output
     except MFIRunError as e:
         logger.error("MFI report generation from CSV stopped: %s", e)
         raise HTTPException(status_code=e.status_code, detail=str(e))
-    except ValueError as e:
-        logger.error(f"CSV validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+    except LLMCallError as e:
+        logger.error("MFI report generation from CSV stopped: %s", e)
+        raise HTTPException(status_code=502, detail=e.to_public_dict())
     except Exception as e:
-        logger.error(f"MFI report generation from CSV failed: {e}")
+        logger.error("MFI report generation from CSV failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -210,7 +195,6 @@ async def validate_mfi_csv(
 
 @router.post("/generate-from-csv-async")
 async def generate_mfi_report_from_csv_async(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Processed MFI CSV file"),
     country_override: Optional[str] = Form(None),
     data_collection_start_override: Optional[str] = Form(None),
@@ -237,7 +221,10 @@ async def generate_mfi_report_from_csv_async(
         raise HTTPException(status_code=400, detail=str(e))
 
     run_id = f"mfi_{uuid_module.uuid4().hex[:8]}"
-    create_run(run_id)
+    try:
+        create_run(run_id, service="mfi-drafter")
+    except RunStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     try:
         validate_submission(csv_data)
     except MFIRunError as exc:
@@ -275,44 +262,9 @@ async def generate_mfi_report_from_csv_async(
 
                 section_updates: Dict[str, Any] = {}
                 if node_name == "context_retrieval":
-                    seerist_docs = _state.get("seerist_documents") or []
-                    reliefweb_docs = _state.get("reliefweb_documents") or []
-                    if isinstance(seerist_docs, list):
-                        seerist_error = _trace_error(traces_list, "Seerist")
-                        seerist_previews = create_document_previews_with_artifacts(
-                            run_id=run_id,
-                            service_slug="mfi-drafter",
-                            source_slug="seerist",
-                            documents=seerist_docs,
-                        )
-                        section_updates["seerist"] = build_document_live_output(
-                            title="Seerist Documents",
-                            summary=(
-                                f"Seerist retrieval unavailable: {seerist_error}"
-                                if seerist_error
-                                else f"{len(seerist_docs)} Seerist documents retrieved."
-                            ),
-                            documents=seerist_previews,
-                            status="failed" if seerist_error else "completed",
-                        )
-                    if isinstance(reliefweb_docs, list):
-                        reliefweb_error = _trace_error(traces_list, "ReliefWeb")
-                        reliefweb_previews = create_document_previews_with_artifacts(
-                            run_id=run_id,
-                            service_slug="mfi-drafter",
-                            source_slug="reliefweb",
-                            documents=reliefweb_docs,
-                        )
-                        section_updates["reliefweb"] = build_document_live_output(
-                            title="ReliefWeb Documents",
-                            summary=(
-                                f"ReliefWeb retrieval unavailable: {reliefweb_error}"
-                                if reliefweb_error
-                                else f"{len(reliefweb_docs)} ReliefWeb documents retrieved."
-                            ),
-                            documents=reliefweb_previews,
-                            status="failed" if reliefweb_error else "completed",
-                        )
+                    section_updates.update(
+                        live_document_sections(_state, run_id=run_id, service_slug="mfi-drafter")
+                    )
 
                 _update_live_metadata(
                     run_id,
@@ -332,8 +284,7 @@ async def generate_mfi_report_from_csv_async(
                 llm_trace_sink=on_llm_trace,
             )
 
-            update_run(run_id, warnings=result.get("warnings", []))
-            set_run_completed(run_id, result=result)
+            set_run_completed(run_id, result=result, warnings=result.get("warnings", []))
         except Exception as e:
             import traceback
 
@@ -341,15 +292,16 @@ async def generate_mfi_report_from_csv_async(
             set_run_failed(run_id, error=str(e), traceback=traceback.format_exc(),
                            current_node=current.current_node if current is not None else None)
 
-    background_tasks.add_task(run_in_background)
+    executor.launch(run_in_background, name=f"mfi-drafter-{run_id}")
 
     return {
         "run_id": run_id,
         "status": "pending",
+        # The run is already launched: the preview must not fail on an optional field.
         "preview": {
-            "country": csv_data["country"],
-            "markets_count": len(csv_data["markets"]),
-            "collection_period": csv_data["survey_metadata"]["collection_period"],
+            "country": csv_data.get("country"),
+            "markets_count": len(csv_data.get("markets") or []),
+            "collection_period": (csv_data.get("survey_metadata") or {}).get("collection_period"),
         },
     }
 
@@ -417,8 +369,9 @@ async def export_mfi_docx(
     result = _require_light_result(run.result or {})
     try:
         report_blocks = resolve_mfi_report_blocks(result)
-        docx_bytes = build_docx_bytes_from_report_blocks(
+        docx_bytes = render_docx(
             report_blocks,
+            theme=WORD_THEME,
             visualizations=result.get("visualizations", {}),
             include_sources=options.include_sources,
             include_visualizations=options.include_visualizations,

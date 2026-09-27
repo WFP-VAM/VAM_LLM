@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import builtins
+import sys
+import types
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
+
+import streamlit_shared
 
 
 PAGE = Path(__file__).resolve().parents[1] / "pages" / "4_MFI_Drafter.py"
@@ -57,25 +61,22 @@ class FakeMFIBackend:
                 },
             }
         if path.startswith("/mfi-drafter/status/"):
-            return self.status
-        assert path == "/mfi-drafter/validate-csv"
-        return self.validation
-
-    def run_async_and_poll(self, **kwargs):
-        self.runs.append(kwargs)
-        if self.result is not None:
-            return ("mfi-run-1", {"status": "completed"}, self.result)
-        return (
-            "mfi-run-1",
-            {"status": "completed"},
-            {
+            return self.status or {"run_id": "mfi-run-1", "status": "completed", "progress_pct": 100}
+        if path == "/mfi-drafter/generate-from-csv-async":
+            self.runs.append(kwargs)
+            return {"run_id": "mfi-run-1"}
+        if path == "/mfi-drafter/result/mfi-run-1":
+            if self.result is not None:
+                return self.result
+            return {
                 "run_id": "mfi-run-1",
                 "country": "South Sudan",
                 "national_mfi": 6.2,
                 "llm_calls": 1,
                 "report_blocks": [],
-            },
-        )
+            }
+        assert path == "/mfi-drafter/validate-csv"
+        return self.validation
 
 
 def _element(elements, label):
@@ -84,6 +85,16 @@ def _element(elements, label):
 
 def _app(monkeypatch, backend, run_id=None):
     monkeypatch.setattr(builtins, "_mfi_drafter_test_backend", backend, raising=False)
+    # The page follows its run with the real start_run and follow_run, over the fake backend.
+    monkeypatch.setattr(builtins, "_streamlit_shared_real", streamlit_shared, raising=False)
+    monkeypatch.setattr(streamlit_shared, "request_json", backend.request_json)
+    # The page's script replaces streamlit_shared in sys.modules; put the real module back afterwards.
+    monkeypatch.setitem(sys.modules, "streamlit_shared", streamlit_shared)
+    mfi_ui = types.ModuleType("app.services.mfi_drafter.ui")
+    mfi_ui.REPORT_TABLES = {}
+    mfi_ui.report_layout = lambda block: {}
+    mfi_ui.render_raw_table_downloads = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "app.services.mfi_drafter.ui", mfi_ui)
     page_path = str(PAGE).replace("\\", "\\\\")
     source = f'''
 import builtins
@@ -106,11 +117,11 @@ shared.render_bug_report_sidebar_link = lambda **kwargs: None
 shared.render_bug_report_header_link = lambda **kwargs: None
 shared.render_report_delivery = lambda **kwargs: kwargs["render_technical_details"]()
 shared.render_report_blocks = lambda *args, **kwargs: None
-shared.render_mfi_raw_table_downloads = lambda *args, **kwargs: None
 shared.render_llm_diagnostics = lambda *args, **kwargs: None
 shared.request_json = backend.request_json
 shared.request_bytes = lambda *args, **kwargs: (b"draft", {{}})
-shared.run_async_and_poll = backend.run_async_and_poll
+shared.start_run = builtins._streamlit_shared_real.start_run
+shared.follow_run = builtins._streamlit_shared_real.follow_run
 shared.safe_show_error = lambda error: st.error(str(error))
 sys.modules["streamlit_shared"] = shared
 
@@ -179,10 +190,10 @@ def test_valid_mfi_metadata_starts_async_generation_without_overrides(monkeypatc
 
     assert not app.exception
     assert len(backend.runs) == 1
-    assert backend.runs[0]["start_data"] == {}
-    assert "country_override" not in backend.runs[0]["start_data"]
-    assert "data_collection_start_override" not in backend.runs[0]["start_data"]
-    assert "data_collection_end_override" not in backend.runs[0]["start_data"]
+    assert backend.runs[0]["data"] == {}
+    assert "country_override" not in backend.runs[0]["data"]
+    assert "data_collection_start_override" not in backend.runs[0]["data"]
+    assert "data_collection_end_override" not in backend.runs[0]["data"]
 
 
 def test_methodology_warning_is_prominent_in_result_view(monkeypatch):
@@ -318,7 +329,7 @@ def test_failed_run_shows_phase_progress_and_offers_no_recovery_actions(monkeypa
     app = _app(monkeypatch, backend, run_id="mfi-run-7")
 
     assert not app.exception
-    assert any("Attempts exhausted" in warning.value for warning in app.warning)
+    assert any("Attempts exhausted" in error.value for error in app.error)
     assert any("Generate it again" in caption.value for caption in app.caption)
     assert not [button for button in app.button
                 if button.label in {"Resume", "Prepare incomplete draft", "Prepare analytical download"}]

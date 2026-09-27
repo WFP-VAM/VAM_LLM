@@ -1,7 +1,8 @@
 import json
 from importlib import import_module
 
-from app.shared.retrievers import SeeristRetriever
+from app.shared.context.news import gather_context
+from app.shared.context.retrievers import SeeristRetriever
 
 
 class FakeResponse:
@@ -242,19 +243,22 @@ def test_seerist_palestine_uses_ps_without_gaza_override():
 
 
 def test_mfi_and_market_monitor_share_the_gaza_aware_seerist_retriever():
-    mfi_context = import_graph_module("app.services.mfi_drafter.context")
-    market_graph = import_graph_module("app.services.market_monitor.graph")
+    mfi_context = import_graph_module("app.services.mfi_drafter.nodes.context_retrieval")
+    mm_news = import_graph_module("app.services.market_monitor.nodes.news_retrieval")
 
     assert mfi_context.SeeristRetriever is SeeristRetriever
-    assert market_graph.SeeristRetriever is SeeristRetriever
+    assert mm_news.SeeristRetriever is SeeristRetriever
+    assert mfi_context.gather_context is gather_context
+    assert mm_news.gather_context is gather_context
 
 
 def test_market_monitor_news_retrieval_combines_and_deduplicates(monkeypatch):
-    market_graph = import_graph_module("app.services.market_monitor.graph")
-    monkeypatch.setattr(market_graph, "ReliefWebRetriever", FakeReliefWebRetriever)
-    monkeypatch.setattr(market_graph, "SeeristRetriever", FakeSeeristRetriever)
+    mm_news = import_graph_module("app.services.market_monitor.nodes.news_retrieval")
+    mm_state = import_graph_module("app.services.market_monitor.state")
+    monkeypatch.setattr(mm_news, "ReliefWebRetriever", FakeReliefWebRetriever)
+    monkeypatch.setattr(mm_news, "SeeristRetriever", FakeSeeristRetriever)
 
-    state = market_graph.create_initial_state(
+    state = mm_state.create_initial_state(
         country="South Sudan",
         time_period="2025-01",
         commodity_list=[],
@@ -262,7 +266,7 @@ def test_market_monitor_news_retrieval_combines_and_deduplicates(monkeypatch):
         currency_code="SSP",
         enabled_modules=[],
     )
-    result = market_graph.node_news_retrieval(state)
+    result = mm_news.node_news_retrieval(state)
 
     assert result["news_counts"] == {"Seerist": 2, "ReliefWeb": 1, "total": 3}
     assert len(result["documents"]) == 3

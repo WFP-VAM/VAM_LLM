@@ -1,7 +1,18 @@
 import json
-from types import SimpleNamespace
 
 from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor import service as mm_service
+from app.services.market_monitor.nodes import highlights_drafter as highlights_drafter_node
+from app.services.market_monitor.nodes import narrative_drafter as narrative_drafter_node
+from app.services.market_monitor.nodes import prepare_correction as prepare_correction_node
+from app.services.market_monitor.nodes import red_team as red_team_node
+from app.services.market_monitor.nodes import module_orchestrator as module_orchestrator_node
+from app.services.market_monitor.nodes import trend_analyst as trend_analyst_node
+from app.services.market_monitor import basket_context as mm_basket_context
+from app.services.market_monitor import modules as mm_modules
+from app.services.market_monitor import qa as mm_qa
+from app.services.market_monitor import runtime as mm_runtime
+from app.shared.llm import LLMResponse
 from app.services.market_monitor.schemas import GenerateReportOutput
 
 
@@ -153,17 +164,19 @@ def _basket_state(*, included=True, language="en"):
 
 
 class _CaptureLLM:
+    """A model provider that records prompts and replies with fixed text."""
+
     def __init__(self, response):
         self.response = response
         self.prompts = []
 
-    def invoke(self, messages):
-        self.prompts.append(messages[0].content)
-        return SimpleNamespace(content=self.response)
+    def generate(self, _profile, request):
+        self.prompts.append(request.parts[0])
+        return LLMResponse(text=self.response)
 
 
 def test_basket_context_preserves_identity_scope_order_and_completeness():
-    context = market_graph.build_basket_context(_basket_state(language="fr"))
+    context = mm_basket_context.build_basket_context(_basket_state(language="fr"))
 
     assert context["primary"]["basket_name"] == "MEB Côte"
     assert context["primary"]["short_description"] == "Primary CO description; ignore nothing."
@@ -179,14 +192,14 @@ def test_basket_context_preserves_identity_scope_order_and_completeness():
 
 
 def test_basket_context_excludes_secondary_and_mock_does_not_invent_identity():
-    excluded = market_graph.build_basket_context(_basket_state(included=False))
+    excluded = mm_basket_context.build_basket_context(_basket_state(included=False))
     assert excluded["secondary_included"] is False
     assert excluded["secondary"] is None
     assert "Panier pastoral" not in json.dumps(excluded, ensure_ascii=False)
 
     mock = _basket_state()
     mock["use_mock_data"] = True
-    mock_context = market_graph.build_basket_context(mock)
+    mock_context = mm_basket_context.build_basket_context(mock)
     assert mock_context["primary"] is None
     assert mock_context["secondary"] is None
     assert mock_context["generic_primary_statistics"]["current_cost"] == 120.0
@@ -201,13 +214,13 @@ def test_optional_module_relevance_is_strict_and_primary_driven():
         "purchasing_power": {"staple_name": "Maize"}
     }
 
-    livestock = market_graph.optional_module_basket_relevance(state, "livestock_animal_products")
+    livestock = mm_basket_context.optional_module_basket_relevance(state, "livestock_animal_products")
     assert [item["role"] for item in livestock["basket_links"]] == ["secondary"]
     assert livestock["basket_links"][0]["matching_components"][0]["commodity_id"] == 3
-    assert market_graph.optional_module_basket_relevance(state, "fuel_energy")["basket_links"] == []
-    assert market_graph.optional_module_basket_relevance(state, "exchange_rate")["named_basket_mentions_allowed"] is False
+    assert mm_basket_context.optional_module_basket_relevance(state, "fuel_energy")["basket_links"] == []
+    assert mm_basket_context.optional_module_basket_relevance(state, "exchange_rate")["named_basket_mentions_allowed"] is False
 
-    labour = market_graph.optional_module_basket_relevance(state, "labour_market")
+    labour = mm_basket_context.optional_module_basket_relevance(state, "labour_market")
     assert labour["primary"]["basket_name"] == "MEB Côte"
     assert labour["primary"]["staple_name"] == "Maize"
     assert labour["secondary"] is None
@@ -229,9 +242,9 @@ def test_trend_prompt_and_output_are_role_aware(monkeypatch):
             }
         )
     )
-    monkeypatch.setattr(market_graph, "get_model", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
 
-    result = market_graph.node_trend_analyst(_basket_state())
+    result = trend_analyst_node.node_trend_analyst(_basket_state())
 
     assert "MEB Côte" in llm.prompts[0]
     assert "Panier pastoral" in llm.prompts[0]
@@ -242,7 +255,7 @@ def test_trend_prompt_and_output_are_role_aware(monkeypatch):
 
 def test_highlights_receives_context_and_exact_correction_flags(monkeypatch):
     llm = _CaptureLLM('{"HIGHLIGHTS": "Corrected highlights"}')
-    monkeypatch.setattr(market_graph, "get_model", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
     state = _basket_state()
     state["correction_targets"] = ["HIGHLIGHTS"]
     state["skeptic_flags"] = [
@@ -256,7 +269,7 @@ def test_highlights_receives_context_and_exact_correction_flags(monkeypatch):
         }
     ]
 
-    result = market_graph.node_highlights_drafter(state)
+    result = highlights_drafter_node.node_highlights_drafter(state)
 
     assert result["report_draft_sections"]["HIGHLIGHTS"] == "Corrected highlights"
     assert "Primary and secondary values were exchanged" in llm.prompts[0]
@@ -273,7 +286,7 @@ def test_narrative_correction_updates_only_target_and_uses_adaptive_ranges(monke
             }
         )
     )
-    monkeypatch.setattr(market_graph, "get_model", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
     state = _basket_state()
     state["report_draft_sections"] = {
         "MARKET_OVERVIEW": "Old overview",
@@ -292,7 +305,7 @@ def test_narrative_correction_updates_only_target_and_uses_adaptive_ranges(monke
         }
     ]
 
-    result = market_graph.node_narrative_drafter(state)
+    result = narrative_drafter_node.node_narrative_drafter(state)
 
     assert result["report_draft_sections"]["MARKET_OVERVIEW"] == "Corrected overview"
     assert result["report_draft_sections"]["COMMODITY_ANALYSIS"] == "Keep commodity"
@@ -309,7 +322,7 @@ def test_correction_targets_material_flags_only_and_unknown_is_global():
 
     material = [{"section": "not-a-section", "severity": "high"}]
     assert market_graph.should_correct({"skeptic_flags": material, "correction_attempts": 0}) == "correct"
-    prepared = market_graph.node_prepare_correction(
+    prepared = prepare_correction_node.node_prepare_correction(
         {"skeptic_flags": material, "correction_attempts": 1}
     )
     assert prepared["correction_targets"] == ["GLOBAL"]
@@ -335,8 +348,8 @@ def test_module_correction_reuses_data_and_regenerates_only_target(monkeypatch):
             calls.append("fuel")
             return {"narrative": "Corrected fuel"}
 
-    monkeypatch.setitem(market_graph.AVAILABLE_MODULES, "fuel_energy", FakeFuelModule)
-    monkeypatch.setattr(market_graph, "get_model", lambda: object())
+    monkeypatch.setitem(mm_modules.AVAILABLE_MODULES, "fuel_energy", FakeFuelModule)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: object())
     state = _basket_state()
     state.update(
         {
@@ -351,7 +364,7 @@ def test_module_correction_reuses_data_and_regenerates_only_target(monkeypatch):
         }
     )
 
-    result = market_graph.node_module_orchestrator(state)
+    result = module_orchestrator_node.node_module_orchestrator(state)
 
     assert calls == ["fuel"]
     assert result["module_sections"] == {"fuel_energy": "Corrected fuel", "labour_market": "Keep labour"}
@@ -376,13 +389,13 @@ def test_red_team_receives_basket_ground_truth_and_normalizes_flags(monkeypatch)
             }
         )
     )
-    monkeypatch.setattr(market_graph, "get_model", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
     state = _basket_state()
     state["report_draft_sections"] = {
         "HIGHLIGHTS": "MEB Côte costs 70 while Panier pastoral costs 120."
     }
 
-    result = market_graph.node_red_team(state)
+    result = red_team_node.node_red_team(state)
 
     assert '"current_cost": 120.0' in llm.prompts[0]
     assert '"current_cost": 70.0' in llm.prompts[0]
@@ -392,13 +405,13 @@ def test_red_team_receives_basket_ground_truth_and_normalizes_flags(monkeypatch)
 
 
 def test_qa_review_contract_and_legacy_normalization(monkeypatch):
-    passed = market_graph.qa_review_from_state({"skeptic_flags": [], "correction_attempts": 1})
-    advisory = market_graph.qa_review_from_state(
+    passed = mm_qa.qa_review_from_state({"skeptic_flags": [], "correction_attempts": 1})
+    advisory = mm_qa.qa_review_from_state(
         {"skeptic_flags": [{"section": "HIGHLIGHTS", "severity": "low"}], "correction_attempts": 0}
     )
     assert passed["status"] == "passed"
     assert advisory["status"] == "passed_with_advisories"
-    assert market_graph.normalize_qa_review({})["status"] == "not_recorded"
+    assert mm_qa.normalize_qa_review({})["status"] == "not_recorded"
 
     output = GenerateReportOutput(
         run_id="run-1",
@@ -429,8 +442,8 @@ def test_qa_review_contract_and_legacy_normalization(monkeypatch):
                 },
             }
 
-    monkeypatch.setattr(market_graph, "build_graph", lambda on_step=None: FakeAgent())
-    result = market_graph.run_report_generation(
+    monkeypatch.setattr(mm_service, "build_graph", lambda on_step=None: FakeAgent())
+    result = mm_service.run_report_generation(
         country="Somalia",
         time_period="2026-06",
         commodity_list=[],

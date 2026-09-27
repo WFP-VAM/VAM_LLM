@@ -56,7 +56,7 @@ def test_preflight_does_not_keep_country_geometries_in_main_process():
 
 @pytest.mark.parametrize('defect', ['missing', 'corrupt', 'malformed'])
 def test_bad_asset_fails_before_model_invocation(tmp_path, monkeypatch, defect):
-    from app.services.mfi_drafter import light_graph, light_service
+    from app.services.mfi_drafter import graph as mfi_graph, service as mfi_service
     from app.services.mfi_drafter.errors import MFIRunError
     from app.services.mfi_drafter.schemas import MFIReleaseControl
     raw = (basemap.ASSET_DIRECTORY / 'countries.geojson.gz').read_bytes()
@@ -68,13 +68,13 @@ def test_bad_asset_fails_before_model_invocation(tmp_path, monkeypatch, defect):
     if defect != 'missing': (tmp_path / 'countries.geojson.gz').write_bytes(raw if defect != 'corrupt' else b'corrupt')
     (tmp_path / 'manifest.json').write_text(json.dumps(manifest))
     monkeypatch.setattr(basemap, 'ASSET_DIRECTORY', tmp_path)
-    monkeypatch.setattr(light_graph, 'build_graph', lambda *a, **k: pytest.fail('Preflight should precede execution'))
+    monkeypatch.setattr(mfi_graph, 'build_graph', lambda *a, **k: pytest.fail('Preflight should precede execution'))
     data = state()
     with pytest.raises(MFIRunError, match='cartography') as error:
-        light_service.validate_submission(data)
+        mfi_service.validate_submission(data)
     assert error.value.status_code == 503
     with pytest.raises(basemap.MFICartographyError):
-        light_service.run_mfi_report_generation(country='Benin', markets=[], csv_data=data,
+        mfi_service.run_mfi_report_generation(country='Benin', markets=[], csv_data=data,
             data_collection_start='2026-01-01', data_collection_end='2026-01-02',
             release_control=MFIReleaseControl(analysis_version='2', enabled=True, configuration_status='configured'))
 

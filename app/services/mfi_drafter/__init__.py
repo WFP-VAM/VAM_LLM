@@ -38,13 +38,13 @@ __all__ = [
 
 def __getattr__(name: str):
     if name == "run_mfi_report_generation":
-        return getattr(import_module(".light_service", __name__), name)
+        return getattr(import_module(".service", __name__), name)
     if name == "router":
         from .router import router
 
         return router
     if name == "build_graph":
-        return getattr(import_module(".light_graph", __name__), name)
+        return getattr(import_module(".graph", __name__), name)
     if name == "DIMENSION_DESCRIPTIONS":
         return getattr(import_module(".methodology", __name__), name)
     if name == "build_assessment_profile":

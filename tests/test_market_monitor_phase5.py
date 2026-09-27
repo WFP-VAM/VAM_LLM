@@ -2,8 +2,9 @@ import io
 
 from docx import Document
 
-from app.shared.docx_export import build_docx_bytes_from_report_blocks
-from app.shared.report_blocks import build_market_monitor_report_blocks
+from app.services.market_monitor.report_blocks import WORD_THEME, build_market_monitor_report_blocks
+from app.services.market_monitor.ui import REPORT_TABLES
+from app.shared.documents.docx import render_docx
 import streamlit_shared as shared
 
 
@@ -151,7 +152,7 @@ def test_docx_renders_basket_definition_table_without_missing_figure_placeholder
     result["visualizations"] = {}
     result["report_draft_sections"] = {}
     blocks = build_market_monitor_report_blocks(result)
-    document = Document(io.BytesIO(build_docx_bytes_from_report_blocks(blocks, visualizations={})))
+    document = Document(io.BytesIO(render_docx(blocks, theme=WORD_THEME, visualizations={})))
 
     basket_table = next(table for table in document.tables if table.cell(0, 0).text == "Basket / role")
     assert len(basket_table.rows) == 3
@@ -170,7 +171,9 @@ def test_streamlit_renderer_shows_read_only_basket_table(monkeypatch):
     monkeypatch.setattr(shared.st, "write", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(shared, "decode_base64_data", lambda value: str(value).encode("utf-8"))
 
-    shared.render_report_blocks([table.model_dump(), {"type": "figure", "figure_id": "missing"}], {})
+    shared.render_report_blocks(
+        [table.model_dump(), {"type": "figure", "figure_id": "missing"}], {}, tables=REPORT_TABLES
+    )
 
     assert rendered_frames[0].columns.tolist() == ["Basket / role", "Description", "Scope", "Composition"]
     assert rendered_frames[0].iloc[1, 0] == "Pastoral basket (Secondary)"

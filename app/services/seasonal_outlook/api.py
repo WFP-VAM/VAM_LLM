@@ -13,7 +13,22 @@ class Reply:
     filename: str = ''
 
 
+def _public(data):
+    """Drop storage URIs, which name the bucket; clients read objects through the API instead."""
+    if isinstance(data, dict):
+        return {key: _public(value) for key, value in data.items() if key != 'uri'}
+    if isinstance(data, list):
+        return [_public(value) for value in data]
+    return data
+
+
 def handle(method, parts, body=None, params=None, upload=None):
+    reply = _handle(method, parts, body, params, upload)
+    reply.data = _public(reply.data)
+    return reply
+
+
+def _handle(method, parts, body, params, upload):
     body, params = body or {}, params or {}
     try:
         if method == 'GET' and parts == ['info']:

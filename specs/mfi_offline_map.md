@@ -45,7 +45,7 @@ There are no inset maps, automatic cluster zooms or new administrative layers.
 
 ## Preflight and compatibility
 
-Before scheduling CSV generation, `light_service.validate_submission` checks that
+Before scheduling CSV generation, `service.validate_submission` checks that
 the required local asset is readable, has the expected checksum and contains
 valid geometry. Both API and Streamlit return an explicit 503 cartography error
 on failure. Direct execution also checks before the graph or any model call.

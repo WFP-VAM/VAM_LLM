@@ -6,9 +6,9 @@ from app.services.market_monitor.i18n import (
     resolve_report_language,
     t,
 )
-from app.services.market_monitor.prompt_registry import assert_prompt_manifest_valid
-from app.services.market_monitor import graph as market_graph
-from app.shared.report_blocks import build_market_monitor_report_blocks
+from app.services.market_monitor.prompts import assert_prompt_manifest_valid
+from app.services.market_monitor import modules as mm_modules
+from app.services.market_monitor.report_blocks import build_market_monitor_report_blocks
 
 
 def test_report_language_auto_defaults_and_explicit_override():
@@ -108,7 +108,7 @@ def test_phase5_basket_chart_and_table_labels_are_localized():
 
 
 def test_deterministic_fuel_narrative_localizes_french_numbers_and_terms():
-    module = market_graph.FuelEnergyModule()
+    module = mm_modules.FuelEnergyModule()
     state = {
             "country": "Democratic Republic of the Congo",
             "time_period": "2026-06",

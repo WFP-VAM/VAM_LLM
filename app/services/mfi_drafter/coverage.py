@@ -4,7 +4,7 @@ from copy import deepcopy
 
 
 def table_block(title, rows, columns, *, requirements=()):
-    from app.shared.report_blocks import ReportBlock
+    from app.shared.documents.blocks import ReportBlock
     return ReportBlock(type="table", text=title, meta={"table_kind": "mfi_presentation",
         "spec_id": "mfi.analytical_annex.v1", "title": title, "columns": [key for key, _ in columns],
         "column_specs": [{"key": key, "label": label, "width_hint": 3 if index == 0 else 1,
@@ -13,7 +13,7 @@ def table_block(title, rows, columns, *, requirements=()):
 
 
 def annex_blocks(result):
-    from app.shared.report_blocks import ReportBlock
+    from app.shared.documents.blocks import ReportBlock
     profile = result["assessment_profile"]
     requirements = profile.get("coverage_manifest", [])
     blocks = [ReportBlock(type="heading", text="Analytical annex: complete dimension evidence", level=2)]

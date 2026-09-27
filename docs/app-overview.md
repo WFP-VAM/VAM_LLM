@@ -31,10 +31,10 @@ The application exposes **three services** through a Streamlit frontend (with a 
                        |   Streamlit UI  |  (Home.py / pages/)
                        +--------+--------+
                                 |
-                   local call or HTTP
+          in-process call (dispatcher.py), or HTTP (main.py)
                                 |
                        +--------v--------+
-                       |   FastAPI API   |  (main.py)
+                       |   FastAPI API   |  (app/api.py)
                        +--------+--------+
                                 |
           +----------------+----------------+
@@ -48,23 +48,25 @@ The application exposes **three services** through a Streamlit frontend (with a 
                        +--------v--------+
                        |  Shared Layer   |
                        |  - LLM (Vertex) |
-                       |  - Retrievers   |
-                       |  - Async Runs   |
-                       |  - DOCX Export  |
+                       |  - Context      |
+                       |  - Runs         |
+                       |  - Documents    |
                        +-----------------+
 ```
 
-Each service is a self-contained FastAPI router whose workflow is a **LangGraph graph**: `market_monitor/graph.py`, `mfi_drafter/light_graph.py` and `seasonal_outlook/graph.py`. None of the graphs uses a checkpointer, and no service has a checkpoint or resume layer:
+The FastAPI routers are the only implementation of the endpoints: the Streamlit pages reach them in-process, through `app/streamlit_backend/dispatcher.py`, and HTTP clients through `main.py`, so both get the same validation, errors and responses.
 
-- **Market Monitor and MFI** run a report in a background thread and keep only a run record (status, progress, result, artifacts). A failed report is run again.
+Each service is a self-contained FastAPI router whose workflow is a **LangGraph graph**: `market_monitor/graph.py`, `mfi_drafter/graph.py` and `seasonal_outlook/graph.py`. The three drafters share one layout: `graph.py` holds only the graph (state where the nodes need none of it, node wiring, edges, routing), `nodes/` holds one module per node type, `prompts.py` holds the prompt texts and the functions that assemble them, `service.py` is the public entry point, and what several nodes share lives in modules named for it. No node module imports `graph.py`; a structural test (`tests/test_drafter_layout.py`) keeps it so. None of the graphs uses a checkpointer, and no service has a checkpoint or resume layer:
+
+- **Market Monitor and MFI** run a report in a background thread and keep only a run record (status, progress, result, artifacts). A failed report is run again. A report whose work stays silent for 30 minutes, for example because the server restarted, shows as interrupted, and its late work can no longer write to it. Their pages follow a run the same way (`follow_run` in `streamlit_shared.py`): the progress refreshes in place, the page stays usable, the page URL names the run so a reload picks it up again, and a run that failed keeps its final status on the page.
 - **Seasonal Outlook** has one graph with three entry points, one per phase: extraction (extraction, visual review, refinement), analyst feedback, and report (draft, review, redraft, export). Each phase is one run of the graph. The analyst's review happens *between* two runs, so the service keeps an **analysis record** in Firestore and GCS: inputs, immutable evidence versions, comments, the confirmation of one exact evidence version, and each operation's calls and final output. A failed phase is retried from the same inputs.
 
 The shared layer provides:
 
-- **Vertex model factory** (`llm.py`) -- the Market Monitor's Gemini models (Gemini 2.5 Pro by default), zero temperature, cached per timeout and retry setting. The MFI drafter and the Seasonal Outlook configure their own Vertex clients.
-- **Retrievers** -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries.
-- **Async run manager** -- tracks long-running jobs with progress, warnings, and artifacts; pluggable backend (in-memory for dev, Firestore + GCS for production).
-- **DOCX exporter** -- converts an abstract `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) into a branded Word document with embedded visualisations.
+- **LLM client** (`llm/`) -- the one client for every model call, on the google-genai SDK. Each drafter has a model profile; every call is retried only on transient errors and traced the same way (records, JSON logs, optional payload capture). All three pages show the calls in the same diagnostics panel, live while a run or phase is working. The Market Monitor uses Gemini 2.5 Pro by default at zero temperature. The MFI drafter uses Gemini 3.1 Pro and repairs refused replies itself, linking each repair to the attempt it fixes. The Seasonal Outlook uses Gemini 3.1 Pro with its analysis record as the mandatory audit of every attempt.
+- **Context** (`context/`) -- Seerist and ReliefWeb clients that fetch contextual news for 60+ WFP-relevant countries. The Market Monitor and the MFI drafter gather their documents the same way (`news.py`): fetched for the period, merged, de-duplicated by URL or id, and shown live per source with their downloads.
+- **Runs** (`runs/`) -- one run infrastructure for the three drafters: a store of JSON records changed only in transactions plus immutable objects (Firestore + GCS in production, memory otherwise), a background launcher, and deadlines that mark dead work interrupted and stop late writers. Market Monitor and MFI runs (`report_runs.py`) are single jobs with progress, warnings, a result and artifacts; the Seasonal Outlook keeps its analysis record on the same store.
+- **Documents** (`documents/`) -- the `ReportBlock` model (headings, paragraphs, tables, figures, notices, references) and its Word renderer, with embedded visualisations. Each drafter supplies its look and words: the Market Monitor its basket table and translated labels (`market_monitor/report_blocks.py`, which also builds its blocks), the MFI drafter its styles, page, header, footer and tables (`mfi_drafter/report_layout.py`, with the layout contract its blocks carry).
 
 The DataBridges client for price data lives in the price cache (`app/services/price_cache/`), which the Market Monitor reads.
 
@@ -98,7 +100,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 | **Seerist** | Intelligence/news aggregation. Provides contextual documents on markets, prices, inflation, currency, and trade for a given country and time window. |
 | **ReliefWeb** | UN humanitarian reporting. Supplements Seerist with reports on food security and market conditions. |
 | **Trading Economics** | Exchange-rate data for 15+ currencies used in the Market Monitor. |
-| **Google Vertex AI** | LLM backend. Gemini 2.5 Pro for the Market Monitor; Gemini 3.1 Pro for the MFI drafter (LangChain Vertex client) and for the Seasonal Outlook (Google Gen AI SDK). Powers narrative generation, event extraction, trend analysis, map evidence extraction, review and QA. |
+| **Google Vertex AI** | LLM backend, through the shared LLM client and the Google Gen AI SDK. Gemini 2.5 Pro for the Market Monitor; Gemini 3.1 Pro for the MFI drafter and the Seasonal Outlook. Powers narrative generation, event extraction, trend analysis, map evidence extraction, review and QA. |
 | **Google Cloud Storage** | Stores run artifacts, Seasonal Outlook inputs, evidence versions and exports, and cached reference data in production. |
 | **Google Firestore** | Persistent run records and Seasonal Outlook analysis records in production. |
 
@@ -111,7 +113,7 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 | Frontend | Streamlit (WFP-branded theme) |
 | Backend API | FastAPI, Uvicorn |
 | Workflow orchestration | LangGraph (one graph per service, no checkpointer) |
-| LLM integration | LangChain (langchain-core, langchain-google-vertexai); Google Gen AI SDK for the Seasonal Outlook |
+| LLM integration | Google Gen AI SDK (`google-genai`), behind the shared LLM client |
 | Data processing | Pandas, NumPy |
 | Visualisation | Matplotlib (charts exported as Base64 PNG) |
 | Report export | python-docx |
@@ -126,37 +128,45 @@ Risk classification: **Very High** (< 4.0), **High** (4.0 -- 5.5), **Medium** (5
 UNIFIED APP/
   Home.py                      # Streamlit entry point
   streamlit_app.py             # Landing page with service navigation
-  streamlit_shared.py          # Shared UI components and WFP theme
-  main.py                      # FastAPI application
+  streamlit_shared.py          # Shared UI components and WFP theme; each drafter's own page parts are in its ui.py
+  main.py                      # HTTP entry point (uvicorn main:app) for the FastAPI application
   start.sh                     # Docker CMD (launches Streamlit)
   Dockerfile                   # Container image
   requirements.txt             # Python dependencies
   .env.example                 # Environment variable template
 
   app/
+    api.py                     # The FastAPI application: every drafter's router
     shared/
-      llm.py                   # Vertex model factory (Market Monitor)
-      llm_observability.py     # LLM call tracing
-      async_runs.py            # Run lifecycle & artifact management
-      retrievers.py            # Seerist and ReliefWeb clients
+      config.py                # Process set-up: .env, logging, Google Cloud project
+      cloud.py                 # Cached Firestore and Storage clients, gs:// URIs
+      util.py                  # Small shared helpers (secret redaction)
+      llm/                     # LLM client, profiles, google-genai provider, call tracing
+      runs/                    # Run infrastructure: store (Firestore/GCS or memory), background launcher,
+                               #   deadlines and late-writer guard; report_runs.py for Market Monitor and MFI runs,
+                               #   live_outputs.py for their live previews and downloads
+      documents/               # Report blocks and their Word rendering; drafters supply a theme and labels
+      context/                 # Seerist and ReliefWeb clients; news.py gathers, merges and de-duplicates
+                               #   the context documents of the Market Monitor and MFI reports
       countries.py             # Country name/ISO3 resolution
-      report_blocks.py         # Abstract report block model
-      docx_export.py           # DOCX rendering engine
-      live_outputs.py          # Real-time run metadata formatting
-      market_monitor_basket_ui.py # Price Bulletin basket configuration helpers
 
     services/
       mfi_drafter/             # MFI report generation
-        router.py, light_graph.py, light_service.py, light_runtime.py, schemas.py, data_loader.py
+        router.py, service.py, graph.py, nodes/ (prepare_analysis, context_retrieval, charts, draft, review,
+        correct, executive_summary, assemble_report), sections.py (what the drafting nodes share), prompts.py,
+        contracts.py, runtime.py, evidence.py, report.py, schemas.py, data_loader.py, report_layout.py, ui.py
       market_monitor/          # Market Monitor generation
-        router.py, graph.py, schemas.py, data_loader.py
+        router.py, service.py, graph.py, nodes/ (one module per node), prompts.py with prompt_templates/
+        (localized templates and their hash manifest), state.py, runtime.py, text.py, basket_context.py, qa.py,
+        modules.py (optional report modules), schemas.py, data_loader.py, report_blocks.py, basket_ui.py, ui.py
       price_cache/             # DataBridges price cache used by Market Monitor
         config.py, sql_repository.py, databridges_adapter.py, refresh_worker.py, migrations/
       seasonal_outlook/        # Seasonal Outlook drafting
-        router.py, api.py, service.py, graph.py, runner.py, engine.py, provider.py, storage.py, science/
+        router.py, api.py, service.py, graph.py, nodes/ (one module per stage, and export), engine.py (what the
+        stages share), prompts.py, runner.py, calls.py, exports.py, storage.py, ui.py, science/
 
     streamlit_backend/
-      dispatcher.py            # Local request dispatcher (bypasses HTTP)
+      dispatcher.py            # Hands the pages' requests to the FastAPI application in-process
 
   pages/
     0_Tester_Onboarding.py     # Onboarding guide for testers
@@ -214,14 +224,14 @@ Each arrow group before and after the pause is one phase of the Seasonal graph; 
 
 ## Deployment
 
-The application is containerised with Docker. The `start.sh` script launches **Streamlit only** on port 8080 (the current `docker-streamlit-only` branch configuration). In this mode the Streamlit frontend calls service logic directly through the in-process dispatcher rather than over HTTP to a separate FastAPI process.
+The application is containerised with Docker. The `start.sh` script launches **Streamlit only** on port 8080 (the current `docker-streamlit-only` branch configuration). In this mode the Streamlit frontend calls the FastAPI application in the same process, through the dispatcher, rather than over HTTP to a separate FastAPI process.
 
-Long-running work -- Market Monitor and MFI reports, Seasonal Outlook phases -- runs in background threads of that same process, so the Cloud Run service needs CPU always allocated and enough memory for the Word and ZIP exports. If an instance stops mid-run, the report or phase fails (a Seasonal phase shows as interrupted once its deadline passes) and is run again.
+Long-running work -- Market Monitor and MFI reports, Seasonal Outlook phases -- runs in background threads of that same process, so the Cloud Run service needs CPU always allocated and enough memory for the Word and ZIP exports. If an instance stops mid-run, the report or phase shows as interrupted once its deadline passes (for a report, 30 minutes without progress) and is run again.
 
 For production, the app supports:
 
-- **Firestore + GCS** backend for persistent run tracking and artifact storage (toggled via `RUNS_BACKEND=firestore_gcs`).
+- **Firestore + GCS** backend for persistent Market Monitor and MFI run records and artifacts (`RUNS_BACKEND=firestore_gcs` with `RUNS_GCS_URI`). Records written by the previous run store stay readable. If durable storage is configured but unusable, new reports are refused rather than kept in memory.
 - **Seasonal Outlook storage and IAM** (`deploy/seasonal-outlook/`): the analysis collection, bucket, history indexes and the download-link signer, configured through the `SEASONAL_*` variables. The app identity needs `roles/aiplatform.user` in `SEASONAL_PROJECT`.
-- **Google Vertex AI** authentication via service account or application-default credentials.
+- **Google Vertex AI** authentication via service account or application-default credentials. The Market Monitor and MFI calls run in `VERTEX_PROJECT_ID` (or the default project), the Seasonal Outlook's in `SEASONAL_PROJECT`.
 - **CORS** configuration for cross-origin API access when the FastAPI backend is exposed separately.
 - **Reversible second-basket rollout** via `MARKET_MONITOR_SECOND_BASKET_ENABLED`. It defaults to enabled; setting it to `false` blocks new secondary configuration and selection while preserving history and completed report exports.

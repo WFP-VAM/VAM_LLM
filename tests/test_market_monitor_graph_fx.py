@@ -4,9 +4,12 @@ import pandas as pd
 import pytest
 from types import SimpleNamespace
 
-from app.shared.llm_observability import LLMCallError
-from app.shared.report_blocks import build_market_monitor_report_blocks
-from app.services.market_monitor import graph as market_graph
+from app.shared.llm import LLMCallError, LLMClient, market_monitor_profile
+from app.services.market_monitor.report_blocks import build_market_monitor_report_blocks
+from app.services.market_monitor.nodes import module_orchestrator as module_orchestrator_node
+from app.services.market_monitor.nodes import data_agent as data_agent_node
+from app.services.market_monitor.nodes import graph_designer as graph_designer_node
+from app.services.market_monitor import modules as mm_modules
 
 
 def _state_with_frames(df_national, df_history=None, df_regional=None):
@@ -27,16 +30,16 @@ def _state_with_frames(df_national, df_history=None, df_regional=None):
 
 
 def test_currency_axis_label_uses_resolved_code():
-    assert market_graph._currency_axis_label("Cost", "CDF") == "Cost (CDF)"
-    assert market_graph._fx_axis_label("CDF") == "CDF per 1 USD"
-    assert market_graph._fuel_axis_label("CDF") == "CDF/Litre"
+    assert graph_designer_node._currency_axis_label("Cost", "CDF") == "Cost (CDF)"
+    assert graph_designer_node._fx_axis_label("CDF") == "CDF per 1 USD"
+    assert graph_designer_node._fuel_axis_label("CDF") == "CDF/Litre"
 
 
 def test_history_overlay_values_skip_gracefully_with_short_history():
     target = pd.date_range("2026-01-01", periods=2, freq="MS")
     history = pd.DataFrame({"FoodBasket": [10.0]}, index=pd.DatetimeIndex(["2025-01-01"]))
 
-    prior, five_year_mean, low, high, counts = market_graph._history_overlay_values(history, target, "FoodBasket")
+    prior, five_year_mean, low, high, counts = graph_designer_node._history_overlay_values(history, target, "FoodBasket")
 
     assert prior.loc[pd.Timestamp("2026-01-01")] == 10.0
     assert pd.isna(prior.loc[pd.Timestamp("2026-02-01")])
@@ -53,7 +56,7 @@ def test_history_overlay_values_require_five_prior_same_month_values_for_five_ye
         index=pd.DatetimeIndex(["2021-01-01", "2022-01-01", "2023-01-01", "2024-01-01", "2025-01-01"]),
     )
 
-    prior, five_year_mean, low, high, counts = market_graph._history_overlay_values(history, target, "FoodBasket")
+    prior, five_year_mean, low, high, counts = graph_designer_node._history_overlay_values(history, target, "FoodBasket")
 
     assert prior.loc[pd.Timestamp("2026-01-01")] == 14.0
     assert five_year_mean.loc[pd.Timestamp("2026-01-01")] == 12.0
@@ -89,7 +92,7 @@ def test_graph_designer_renders_fx_chart_and_skips_blank_regional_chart():
         }
     )
 
-    result = market_graph.node_graph_designer(_state_with_frames(df_national, df_history, df_regional))
+    result = graph_designer_node.node_graph_designer(_state_with_frames(df_national, df_history, df_regional))
 
     assert "food_basket_trend" in result["visualizations"]
     assert "commodity_trends" in result["visualizations"]
@@ -202,8 +205,8 @@ def test_graph_designer_emits_separate_role_charts_and_exact_primary_aliases(mon
         plt.close()
         return value
 
-    monkeypatch.setattr(market_graph, "_encode_matplotlib_figure", fake_encode)
-    result = market_graph.node_graph_designer(_phase5_basket_state())
+    monkeypatch.setattr(graph_designer_node, "_encode_matplotlib_figure", fake_encode)
+    result = graph_designer_node.node_graph_designer(_phase5_basket_state())
     figures = result["visualizations"]
 
     assert figures["food_basket_trend"] == figures["food_basket_trend_primary"]
@@ -233,17 +236,17 @@ def test_selected_region_trend_keeps_individual_lines_and_target_region_order():
         }
     )
     national = pd.read_json(io.StringIO(state["time_series_data_national"]))
-    national = market_graph._normalise_time_index(national)
-    basket_national = market_graph._basket_series_frame(state["basket_series_national"])
-    basket_regional = market_graph._basket_series_frame(state["basket_series_regional"])
-    trend = market_graph._basket_trend_chart_data(
+    national = graph_designer_node._normalise_time_index(national)
+    basket_national = graph_designer_node._basket_series_frame(state["basket_series_national"])
+    basket_regional = graph_designer_node._basket_series_frame(state["basket_series_regional"])
+    trend = graph_designer_node._basket_trend_chart_data(
         state,
         "secondary",
         national,
         basket_national,
         basket_regional,
     )
-    target = market_graph._basket_regional_target_data(state, "secondary", basket_regional)
+    target = graph_designer_node._basket_regional_target_data(state, "secondary", basket_regional)
 
     assert trend["scope_type"] == "selected_regions"
     assert [label for label, _series in trend["series"]] == ["Region B", "Region A"]
@@ -254,14 +257,14 @@ def test_selected_region_trend_keeps_individual_lines_and_target_region_order():
 
 def test_excluded_secondary_never_emits_secondary_chart_data():
     state = _phase5_basket_state(included=False)
-    national = market_graph._normalise_time_index(pd.read_json(io.StringIO(state["time_series_data_national"])))
+    national = graph_designer_node._normalise_time_index(pd.read_json(io.StringIO(state["time_series_data_national"])))
 
-    assert market_graph._basket_trend_chart_data(
+    assert graph_designer_node._basket_trend_chart_data(
         state,
         "secondary",
         national,
-        market_graph._basket_series_frame(state["basket_series_national"]),
-        market_graph._basket_series_frame(state["basket_series_regional"]),
+        graph_designer_node._basket_series_frame(state["basket_series_national"]),
+        graph_designer_node._basket_series_frame(state["basket_series_regional"]),
     ) == {}
 
 
@@ -320,7 +323,7 @@ def test_data_agent_uses_captured_two_basket_snapshots_and_emits_role_results(mo
             basket_applicable_regions={"primary": [], "secondary": ["Juba"]},
         )
 
-    monkeypatch.setattr(market_graph, "resolve_report_price_data", fake_resolve)
+    monkeypatch.setattr(data_agent_node, "resolve_report_price_data", fake_resolve)
     state = {
         "country": "South Sudan",
         "time_period": "2025-02",
@@ -351,7 +354,7 @@ def test_data_agent_uses_captured_two_basket_snapshots_and_emits_role_results(mo
         "food_basket": {},
     }
 
-    result = market_graph.node_data_agent(state)
+    result = data_agent_node.node_data_agent(state)
 
     assert [spec.role for spec in captured["basket_specs"]] == ["primary", "secondary"]
     assert captured["commodities"] == ["Maize", "Beans", "Salt"]
@@ -367,7 +370,7 @@ def test_graph_designer_applies_commodity_overlays_only_to_single_commodity_page
     def fake_overlay(_ax, _history, _target_index, column, **kwargs):
         calls.append((column, kwargs.get("label_prefix")))
 
-    monkeypatch.setattr(market_graph, "_plot_history_overlays", fake_overlay)
+    monkeypatch.setattr(graph_designer_node, "_plot_history_overlays", fake_overlay)
     dates = pd.date_range("2025-02-01", periods=13, freq="MS")
     history_dates = pd.date_range("2020-02-01", periods=73, freq="MS")
     df_history = pd.DataFrame(
@@ -387,14 +390,14 @@ def test_graph_designer_applies_commodity_overlays_only_to_single_commodity_page
         index=dates,
     )
 
-    market_graph.node_graph_designer(_state_with_frames(df_multi, df_history))
+    graph_designer_node.node_graph_designer(_state_with_frames(df_multi, df_history))
 
     assert calls == [("FoodBasket", None)]
 
     calls.clear()
     df_single = df_multi.drop(columns=["Sorghum"])
 
-    market_graph.node_graph_designer(_state_with_frames(df_single, df_history))
+    graph_designer_node.node_graph_designer(_state_with_frames(df_single, df_history))
 
     assert calls == [("FoodBasket", None), ("Maize", "Maize")]
 
@@ -405,7 +408,7 @@ def test_graph_designer_renders_fuel_chart_and_applies_overlays_for_two_or_fewer
     def fake_overlay(_ax, _history, _target_index, column, **kwargs):
         calls.append((column, kwargs.get("label_prefix")))
 
-    monkeypatch.setattr(market_graph, "_plot_history_overlays", fake_overlay)
+    monkeypatch.setattr(graph_designer_node, "_plot_history_overlays", fake_overlay)
     dates = pd.date_range("2025-06-01", periods=13, freq="MS")
     df_national = pd.DataFrame(
         {
@@ -432,7 +435,7 @@ def test_graph_designer_renders_fuel_chart_and_applies_overlays_for_two_or_fewer
         ],
     }
 
-    result = market_graph.node_graph_designer(state)
+    result = graph_designer_node.node_graph_designer(state)
 
     assert "fuel_prices" in result["visualizations"]
     assert ("Fuel (diesel)", "Diesel") in calls
@@ -445,7 +448,7 @@ def test_graph_designer_skips_fuel_overlays_when_chart_has_more_than_two_series(
     def fake_overlay(_ax, _history, _target_index, column, **kwargs):
         calls.append((column, kwargs.get("label_prefix")))
 
-    monkeypatch.setattr(market_graph, "_plot_history_overlays", fake_overlay)
+    monkeypatch.setattr(graph_designer_node, "_plot_history_overlays", fake_overlay)
     dates = pd.date_range("2025-06-01", periods=13, freq="MS")
     df_national = pd.DataFrame(
         {
@@ -467,7 +470,7 @@ def test_graph_designer_skips_fuel_overlays_when_chart_has_more_than_two_series(
         ],
     }
 
-    result = market_graph.node_graph_designer(state)
+    result = graph_designer_node.node_graph_designer(state)
 
     assert "fuel_prices" in result["visualizations"]
     assert all(not column.startswith("Fuel") for column, _label in calls)
@@ -479,7 +482,7 @@ def test_graph_designer_renders_livestock_chart_and_applies_absolute_overlays(mo
     def fake_overlay(_ax, _history, _target_index, column, **kwargs):
         calls.append((column, kwargs.get("label_prefix")))
 
-    monkeypatch.setattr(market_graph, "_plot_history_overlays", fake_overlay)
+    monkeypatch.setattr(graph_designer_node, "_plot_history_overlays", fake_overlay)
     dates = pd.date_range("2025-06-01", periods=13, freq="MS")
     df_national = pd.DataFrame(
         {
@@ -511,7 +514,7 @@ def test_graph_designer_renders_livestock_chart_and_applies_absolute_overlays(mo
         "series": [],
     }
 
-    result = market_graph.node_graph_designer(state)
+    result = graph_designer_node.node_graph_designer(state)
 
     assert "livestock_animal_products" in result["visualizations"]
     assert ("Animal Products - Meat (beef)", "Meat (beef)") in calls
@@ -524,7 +527,7 @@ def test_graph_designer_renders_livestock_indexed_chart_without_mixed_unit_overl
     def fake_overlay(_ax, _history, _target_index, column, **kwargs):
         calls.append((column, kwargs.get("label_prefix")))
 
-    monkeypatch.setattr(market_graph, "_plot_history_overlays", fake_overlay)
+    monkeypatch.setattr(graph_designer_node, "_plot_history_overlays", fake_overlay)
     dates = pd.date_range("2025-06-01", periods=13, freq="MS")
     df_national = pd.DataFrame(
         {
@@ -550,7 +553,7 @@ def test_graph_designer_renders_livestock_indexed_chart_without_mixed_unit_overl
         "series": [],
     }
 
-    result = market_graph.node_graph_designer(state)
+    result = graph_designer_node.node_graph_designer(state)
 
     assert "livestock_animal_products" in result["visualizations"]
     assert all(not column.startswith("Animal Products") and not column.startswith("Livestock") for column, _ in calls)
@@ -562,7 +565,7 @@ def test_graph_designer_renders_labour_market_chart(monkeypatch):
     def fake_overlay(_ax, _history, _target_index, column, **kwargs):
         calls.append((column, kwargs.get("label_prefix")))
 
-    monkeypatch.setattr(market_graph, "_plot_history_overlays", fake_overlay)
+    monkeypatch.setattr(graph_designer_node, "_plot_history_overlays", fake_overlay)
     dates = pd.date_range("2025-06-01", periods=13, freq="MS")
     df_national = pd.DataFrame(
         {
@@ -594,7 +597,7 @@ def test_graph_designer_renders_labour_market_chart(monkeypatch):
         "series": [],
     }
 
-    result = market_graph.node_graph_designer(state)
+    result = graph_designer_node.node_graph_designer(state)
 
     assert "labour_market" in result["visualizations"]
     assert ("Labour - Purchasing power (Maize)", "Purchasing power") in calls
@@ -637,7 +640,7 @@ def test_market_monitor_report_blocks_use_human_module_heading():
     ("module", "state"),
     [
         (
-            market_graph.FuelEnergyModule(),
+            mm_modules.FuelEnergyModule(),
             {
                 "fuel_energy_data": {
                     "available": True,
@@ -648,7 +651,7 @@ def test_market_monitor_report_blocks_use_human_module_heading():
             },
         ),
         (
-            market_graph.LivestockAnimalProductsModule(),
+            mm_modules.LivestockAnimalProductsModule(),
             {
                 "livestock_animal_products_data": {
                     "available": True,
@@ -658,7 +661,7 @@ def test_market_monitor_report_blocks_use_human_module_heading():
             },
         ),
         (
-            market_graph.LabourMarketModule(),
+            mm_modules.LabourMarketModule(),
             {
                 "labour_market_data": {
                     "available": True,
@@ -670,8 +673,8 @@ def test_market_monitor_report_blocks_use_human_module_heading():
     ],
 )
 def test_optional_module_llm_failure_interrupts_instead_of_using_fallback(module, state):
-    class FailingLLM:
-        def invoke(self, *_args, **_kwargs):
+    class FailingProvider:
+        def generate(self, *_args, **_kwargs):
             raise RuntimeError("offline")
 
     call_state = {
@@ -681,13 +684,13 @@ def test_optional_module_llm_failure_interrupts_instead_of_using_fallback(module
         **state,
     }
     with pytest.raises(LLMCallError) as caught:
-        module.generate_section(call_state, FailingLLM())
+        module.generate_section(call_state, LLMClient(market_monitor_profile(), provider=FailingProvider()))
     assert caught.value.failure_code == "llm_transport_error"
     assert caught.value.node == "module_orchestrator"
 
 
 def test_exchange_rate_module_uses_existing_databridges_data_without_te(monkeypatch):
-    module = market_graph.ExchangeRateModule(api_key=None)
+    module = mm_modules.ExchangeRateModule(api_key=None)
 
     def fail_fetch(*_args, **_kwargs):
         raise AssertionError("TradingEconomics should not be called when DataBridges FX exists")
@@ -705,7 +708,7 @@ def test_exchange_rate_module_uses_existing_databridges_data_without_te(monkeypa
 
 
 def test_exchange_rate_module_falls_back_to_te_when_state_has_no_fx(monkeypatch):
-    module = market_graph.ExchangeRateModule(api_key="key")
+    module = mm_modules.ExchangeRateModule(api_key="key")
     dates = pd.date_range("2024-01-01", "2025-02-28", freq="D")
     te_df = pd.DataFrame({"Close": range(1, len(dates) + 1)}, index=dates)
     monkeypatch.setattr(module, "_fetch_historical_series", lambda **_kwargs: te_df)
@@ -725,9 +728,8 @@ def test_exchange_rate_module_falls_back_to_te_when_state_has_no_fx(monkeypatch)
 
 def test_exchange_rate_module_skip_warning_when_no_databridges_fx_or_te(monkeypatch):
     monkeypatch.delenv("TE_API_KEY", raising=False)
-    monkeypatch.setattr(market_graph, "get_model", lambda: None)
 
-    result = market_graph.node_module_orchestrator(
+    result = module_orchestrator_node.node_module_orchestrator(
         {
             "enabled_modules": ["exchange_rate"],
             "exchange_rate_data": None,

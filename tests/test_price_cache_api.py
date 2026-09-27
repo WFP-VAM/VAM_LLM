@@ -4,7 +4,7 @@ from importlib import import_module
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.shared import async_runs
+from app.shared.runs import report_runs
 from app.services.market_monitor import data_loader
 from app.services.price_cache.schemas import (
     CacheRefreshSummary,
@@ -813,10 +813,7 @@ def test_generate_mock_data_returns_empty_basket_selection(monkeypatch):
     assert response.json()["qa_review"]["status"] == "not_recorded"
 
 
-def test_generate_async_persists_and_returns_revalidated_basket_selection(monkeypatch):
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    async_runs._RUNS.clear()
-    async_runs._RUN_ARTIFACTS.clear()
+def test_generate_async_persists_and_returns_revalidated_basket_selection(monkeypatch, immediate_launch):
     selection = FakeBasketSelection(include_secondary=True)
     revalidated_selection = FakeBasketSelection(include_secondary=True)
     resolve_calls = []
@@ -880,7 +877,7 @@ def test_generate_async_persists_and_returns_revalidated_basket_selection(monkey
         },
     )
     run_id = start_response.json()["run_id"]
-    run = async_runs.get_run(run_id)
+    run = report_runs.get_run(run_id)
     result_response = client.get(f"/result/{run_id}")
 
     assert start_response.status_code == 200

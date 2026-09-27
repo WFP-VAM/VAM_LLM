@@ -2,10 +2,9 @@ from __future__ import annotations
 
 
 from app.services.mfi_drafter import router
-from app.streamlit_backend import dispatcher
 
 
-def test_analysis_metadata_is_exposed_by_router_and_dispatcher_helpers():
+def test_analysis_metadata_is_exposed_by_the_router_helper():
     profile = {
         "analysis_version": "mfi-analysis-phase2-v1",
         "analysis_schema_version": "2.1",
@@ -20,9 +19,7 @@ def test_analysis_metadata_is_exposed_by_router_and_dispatcher_helpers():
     }
 
     router_metadata = router._analysis_run_metadata(state)
-    dispatcher_metadata = dispatcher._mfi_analysis_run_metadata(state)
 
-    assert router_metadata == dispatcher_metadata
     assert router_metadata["analysis_version"] == "mfi-analysis-phase2-v1"
     assert router_metadata["priority_dimension_names"] == ["Service"]
     assert router_metadata["priority_market_names"] == ["Juba"]

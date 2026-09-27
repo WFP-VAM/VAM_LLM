@@ -6,15 +6,16 @@ from streamlit_shared import (
     render_bug_report_sidebar_link,
     render_instructions_sidebar_button,
     render_onboarding_sidebar_button,
-    render_mfi_raw_table_downloads,
     render_llm_diagnostics,
     render_report_delivery,
     render_report_blocks,
     render_wfp_sidebar_logo,
+    follow_run,
     request_json,
-    run_async_and_poll,
     safe_show_error,
+    start_run,
 )
+from app.services.mfi_drafter.ui import REPORT_TABLES, render_raw_table_downloads, report_layout
 
 st.set_page_config(page_title="MFI Drafter", layout="wide")
 apply_wfp_theme()
@@ -78,12 +79,6 @@ with st.form("mfi_drafter_csv"):
         disabled=not generation_enabled,
     )
 
-def _remember_run(run_id):
-    st.session_state["mfi_last_run_id"] = run_id
-    st.session_state.pop("mfi_last_result", None)
-    st.query_params["mfi_run"] = run_id
-
-
 if run_csv:
     try:
         if uploaded is None:
@@ -109,63 +104,44 @@ if run_csv:
                     else {"errors": ["The CSV could not be validated."]}
                 )
             else:
-                run_id, final_status, result = run_async_and_poll(
-                    start_method="POST",
-                    start_path="/mfi-drafter/generate-from-csv-async",
-                    status_path_template="/mfi-drafter/status/{run_id}",
-                    result_path_template="/mfi-drafter/result/{run_id}",
-                    start_data={},
-                    start_files=files,
-                    poll_interval_seconds=2.0,
-                    timeout_seconds=3600,
-                    on_started=_remember_run,
-                )
-                st.session_state["mfi_last_result"] = result
-                st.session_state["mfi_last_run_id"] = run_id
-                for key in (
-                    "mfi_docx_bytes",
-                    "mfi_docx_run_id",
-                    "mfi_docx_error",
-                    "mfi_docx_error_run_id",
-                ):
+                start_run("mfi", "/mfi-drafter/generate-from-csv-async", data={}, files=files)
+                for key in ("mfi_last_result", "mfi_last_run_id"):
                     st.session_state.pop(key, None)
-                if isinstance(final_status, dict) and final_status.get("status") == "failed":
-                    st.error(final_status.get("error") or "failed")
     except Exception as e:
         safe_show_error(e)
 
+
+def _run_ended(run_id, final_status, result):
+    st.session_state["mfi_last_result"] = result
+    st.session_state["mfi_last_run_id"] = run_id
+    for key in (
+        "mfi_docx_bytes",
+        "mfi_docx_run_id",
+        "mfi_docx_error",
+        "mfi_docx_error_run_id",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _generation_phases(status):
+    # The run's progress bar comes with its status; the phases are the MFI's own.
+    diagnostics = (status.get("metadata") or {}).get("generation_diagnostics") or {}
+    if diagnostics.get("phases"):
+        st.dataframe(diagnostics["phases"], hide_index=True)
+    if status.get("status") in ("failed", "interrupted"):
+        st.caption("This report could not be completed. Generate it again from the CSV.")
+
+
+follow_run(
+    "mfi",
+    status_path="/mfi-drafter/status/{run_id}",
+    result_path="/mfi-drafter/result/{run_id}",
+    on_end=_run_ended,
+    render_details=_generation_phases,
+)
+
 result = st.session_state.get("mfi_last_result")
 run_id = st.session_state.get("mfi_last_run_id")
-if not run_id and st.query_params.get("mfi_run"):
-    run_id = str(st.query_params["mfi_run"])
-    st.session_state["mfi_last_run_id"] = run_id
-
-
-@st.fragment(run_every="10s")
-def _progress_panel(active_run):
-    if not active_run:
-        return
-    try:
-        status = request_json("GET", f"/mfi-drafter/status/{active_run}", timeout=30)
-        if status.get("status") == "completed":
-            if st.session_state.get("mfi_last_result") is None:
-                st.session_state["mfi_last_result"] = request_json("GET", f"/mfi-drafter/result/{active_run}", timeout=120)
-                st.rerun()
-            return
-        st.caption(f"Run {active_run} · {status.get('status')} · {status.get('current_node') or 'starting'}")
-        diagnostics = (status.get("metadata") or {}).get("generation_diagnostics") or {}
-        if diagnostics.get("phases"):
-            st.progress(int(diagnostics.get("progress_pct", 0)) / 100)
-            st.dataframe(diagnostics["phases"], hide_index=True)
-        if status.get("error"):
-            st.warning(status["error"])
-        if status.get("status") == "failed":
-            st.caption("This report could not be completed. Generate it again from the CSV.")
-    except Exception as exc:
-        safe_show_error(exc)
-
-
-_progress_panel(run_id)
 
 if isinstance(result, dict):
 
@@ -225,7 +201,12 @@ if isinstance(result, dict):
     review_columns[2].metric("Model calls", str(result.get("llm_calls", 0)))
 
     def _preview() -> None:
-        render_report_blocks(result.get("report_blocks"), visualizations=result.get("visualizations"))
+        render_report_blocks(
+            result.get("report_blocks"),
+            visualizations=result.get("visualizations"),
+            tables=REPORT_TABLES,
+            layout=report_layout,
+        )
 
     def _technical_details() -> None:
         cols = st.columns(4)
@@ -263,7 +244,7 @@ if isinstance(result, dict):
             st.markdown("**Generation notices**")
             for warning in result.get("warnings") or []:
                 st.warning(str(warning))
-        render_mfi_raw_table_downloads(
+        render_raw_table_downloads(
             assessment_profile,
             key_prefix=f"mfi_{display_run_id or 'completed'}",
         )

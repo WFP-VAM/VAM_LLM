@@ -1,7 +1,6 @@
 import base64
 import json
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutureTimeoutError
 from datetime import datetime, timezone
@@ -12,9 +11,14 @@ from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 
-from app.services.mfi_drafter.table_projection import build_mfi_raw_table_downloads
-from app.shared.report_blocks import basket_definition_table_display
-from app.streamlit_backend.dispatcher import dispatch_request
+from app.shared.config import configure_logging, load_environment
+
+# Every page imports this module, so it sets up the Streamlit process, as main.py
+# does for FastAPI. Pages import it before any service.
+load_environment()
+configure_logging()
+
+from app.streamlit_backend.dispatcher import dispatch_request  # noqa: E402
 
 WFP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/WFP_Logo.svg/512px-WFP_Logo.svg.png"
 INSTRUCTIONS_PAGE_URL = "/How_To_Use_The_Tools"
@@ -524,14 +528,12 @@ def render_live_outputs(
     live_outputs: Any,
     *,
     key_prefix: str,
-    render_instance_id: Optional[str] = None,
     enable_downloads: bool = True,
 ) -> None:
     sections = ordered_live_output_sections(live_outputs)
     if not sections:
         return
 
-    suffix = f"-{render_instance_id}" if render_instance_id else ""
     st.markdown("#### Live Retrieval Outputs")
     for section_name, section in sections:
         kind = str(section.get("kind") or "")
@@ -556,13 +558,13 @@ def render_live_outputs(
             if kind == "table":
                 render_live_table_section(
                     section,
-                    key_prefix=f"{key_prefix}-{section_name}{suffix}",
+                    key_prefix=f"{key_prefix}-{section_name}",
                     enable_downloads=enable_downloads,
                 )
             elif kind == "documents":
                 render_live_document_section(
                     section,
-                    key_prefix=f"{key_prefix}-{section_name}{suffix}",
+                    key_prefix=f"{key_prefix}-{section_name}",
                     enable_downloads=enable_downloads,
                 )
             else:
@@ -854,7 +856,6 @@ def render_llm_diagnostics(diagnostics: Any, *, live: bool = False) -> None:
 def render_run_status(
     status: Any,
     *,
-    render_instance_id: Optional[str] = None,
     enable_downloads: bool = True,
 ) -> None:
     if not isinstance(status, dict):
@@ -888,7 +889,6 @@ def render_run_status(
             render_live_outputs(
                 live_outputs,
                 key_prefix=str(status.get("run_id") or status.get("current_node") or "run"),
-                render_instance_id=render_instance_id,
                 enable_downloads=enable_downloads,
             )
 
@@ -908,93 +908,91 @@ def render_run_status(
             st.code(str(status.get("traceback")))
 
 
-def run_async_and_poll(
+RUN_ENDED = {"completed", "failed", "interrupted"}
+
+
+def start_run(key: str, path: str, **request: Any) -> str:
+    """Start a report run and make it the page's run: this session follows it, and the page URL names it.
+
+    `key` names the page's run in the session and the URL (for example "mfi" gives ?mfi_run=...). `request` is what
+    request_json sends: json_body, data or files.
+    """
+    started = request_json("POST", path, timeout=60, **request)
+    if not isinstance(started, dict) or "run_id" not in started:
+        raise RuntimeError(f"Unexpected start response: {started}")
+    run_id = str(started["run_id"])
+    st.session_state[f"{key}_active_run"] = run_id
+    st.session_state.pop(f"{key}_final_status", None)
+    st.query_params[f"{key}_run"] = run_id
+    return run_id
+
+
+def follow_run(
+    key: str,
     *,
-    start_method: str,
-    start_path: str,
-    status_path_template: str,
-    result_path_template: str,
-    start_json: Any = None,
-    start_data: Optional[dict] = None,
-    start_files: Optional[dict] = None,
-    poll_interval_seconds: float = 2.0,
-    timeout_seconds: int = 1800,
-    on_started: Any = None,
-) -> Tuple[str, Any, Any]:
-    start_resp = request_json(
-        start_method,
-        start_path,
-        json_body=start_json,
-        data=start_data,
-        files=start_files,
-        timeout=60,
-    )
-
-    if not isinstance(start_resp, dict) or "run_id" not in start_resp:
-        raise RuntimeError(f"Unexpected start response: {start_resp}")
-
-    run_id = str(start_resp.get("run_id"))
-    if on_started is not None:
-        on_started(run_id)
-
-    status_placeholder = st.empty()
-    started = time.time()
-    last_status: Any = None
-    render_count = 0
-
-    while True:
-        status = request_json("GET", status_path_template.format(run_id=run_id), timeout=30)
-        last_status = status
-        is_terminal = isinstance(status, dict) and status.get("status") in {"completed", "failed"}
-        with status_placeholder.container():
-            render_run_status(
-                status,
-                render_instance_id=None if is_terminal else f"poll-{render_count}",
-                enable_downloads=is_terminal,
-            )
-        render_count += 1
-
-        if is_terminal:
-            break
-
-        if time.time() - started > timeout_seconds:
-            raise RuntimeError("Polling timeout")
-
-        time.sleep(poll_interval_seconds)
-
-    result: Any = None
-    if isinstance(last_status, dict) and last_status.get("status") == "completed":
-        result = request_json("GET", result_path_template.format(run_id=run_id), timeout=120)
-
-    return run_id, last_status, result
-
-
-def render_mfi_raw_table_downloads(
-    assessment_profile: Any,
-    *,
-    key_prefix: str,
+    status_path: str,
+    result_path: str,
+    on_end: Callable[[str, Dict[str, Any], Any], None],
+    render_details: Optional[Callable[[Dict[str, Any]], None]] = None,
+    interval_seconds: float = 2.0,
 ) -> None:
-    """Render the complete canonical table bundle in Technical details."""
-    if not isinstance(assessment_profile, dict):
+    """Show the page's report run until it ends, refreshing only this part of the page every interval_seconds.
+
+    The run is the one start_run began in this session, or else the one the page URL names, so a reloaded or
+    shared page picks it up again. The page stays usable meanwhile, and the run goes on on the server whatever the
+    page does. When the run ends, its result is loaded if it completed, on_end(run_id, final status, result) is
+    called once, and the whole page runs again to show the outcome. A run that failed or was interrupted keeps
+    showing its final status. render_details adds the drafter's own parts to the status.
+    """
+    run_id = st.session_state.get(f"{key}_active_run")
+    url_run = st.query_params.get(f"{key}_run")
+    if not run_id and url_run and url_run != st.session_state.get(f"{key}_ended_run"):
+        run_id = st.session_state[f"{key}_active_run"] = url_run
+    if not run_id:
+        final_status = st.session_state.get(f"{key}_final_status")
+        if isinstance(final_status, dict) and final_status.get("status") != "completed":
+            render_run_status(final_status)
+            if render_details is not None:
+                render_details(final_status)
         return
-    st.markdown("**Complete analytical table downloads**")
-    st.caption(
-        "These files contain the complete unprojected Phase 2 tables at canonical "
-        "precision; reader-facing report tables are selected and formatted projections."
-    )
-    for index, download in enumerate(
-        build_mfi_raw_table_downloads(assessment_profile)
-    ):
-        st.download_button(
-            str(download["label"]),
-            data=download["data"],
-            file_name=str(download["file_name"]),
-            mime=str(download["mime"]),
-            key=f"{key_prefix}_raw_table_{index}",
-        )
+
+    def poll() -> None:
+        try:
+            status = request_json("GET", status_path.format(run_id=run_id), timeout=30)
+            ended = isinstance(status, dict) and status.get("status") in RUN_ENDED
+            if not ended:
+                render_run_status(status, enable_downloads=False)
+                if render_details is not None and isinstance(status, dict):
+                    render_details(status)
+                return
+            result = None
+            if status.get("status") == "completed":
+                result = request_json("GET", result_path.format(run_id=run_id), timeout=120)
+        except Exception as err:
+            safe_show_error(err)  # the next refresh tries again
+            return
+        st.session_state.pop(f"{key}_active_run", None)
+        st.session_state[f"{key}_ended_run"] = run_id
+        st.session_state[f"{key}_final_status"] = status
+        on_end(run_id, status, result)
+        st.rerun()
+
+    st.fragment(poll, run_every=interval_seconds)()
 
 
-def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
+def render_report_blocks(
+    blocks: Any,
+    visualizations: Any = None,
+    *,
+    tables: Optional[Dict[str, Callable[[Dict[str, Any]], None]]] = None,
+    layout: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+) -> None:
+    """Show report blocks on the page.
+
+    A drafter passes how its table kinds look (`tables`, by ReportBlock meta "table_kind"; other tables show as
+    JSON) and how to read its blocks' layout hints (`layout`): a major section after the opening blocks gets a
+    divider.
+    """
     if not isinstance(blocks, list):
         st.write(blocks)
         return
@@ -1008,12 +1006,7 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
 
         btype = block.get("type")
         meta = block.get("meta")
-        layout = (
-            meta.get("mfi_layout")
-            if isinstance(meta, dict)
-            and isinstance(meta.get("mfi_layout"), dict)
-            else {}
-        )
+        hints = layout(block) if layout is not None else {}
 
         if btype == "heading":
             text = str(block.get("text") or "")
@@ -1021,7 +1014,7 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
             if level <= 1:
                 st.title(text)
             elif level == 2:
-                if layout.get("role") == "major_section" and idx > 1:
+                if hints.get("role") == "major_section" and idx > 1:
                     divider = getattr(st, "divider", None)
                     if callable(divider):
                         divider()
@@ -1079,45 +1072,10 @@ def render_report_blocks(blocks: Any, visualizations: Any = None) -> None:
             continue
 
         if btype == "table":
-            if isinstance(meta, dict) and meta.get("table_kind") == "basket_definitions":
-                headers, rows = basket_definition_table_display(meta)
-                if headers and rows:
-                    st.dataframe(
-                        pd.DataFrame(rows, columns=headers),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                continue
-            if isinstance(meta, dict) and meta.get("table_kind") == "mfi_presentation":
-                rows = meta.get("rows") or []
-                columns = [str(column) for column in meta.get("columns", []) or []]
-                column_specs = meta.get("column_specs") or []
-                if not str(meta.get("spec_id") or "").strip() or not columns:
-                    raise ValueError(
-                        "Projected MFI tables require a spec ID and explicit columns"
-                    )
-                if not isinstance(column_specs, list) or [
-                    str(item.get("key") or "") if isinstance(item, dict) else ""
-                    for item in column_specs
-                ] != columns:
-                    raise ValueError(
-                        "Projected MFI table columns do not match column_specs"
-                    )
-                display_rows = []
-                labels = [str(item.get("label") or "") for item in column_specs]
-                for row in rows:
-                    values = row.get("values") if isinstance(row, dict) else None
-                    if not isinstance(values, dict) or any(
-                        column not in values for column in columns
-                    ):
-                        raise ValueError("Projected MFI table contains a malformed row")
-                    display_rows.append([values[column] for column in columns])
-                if display_rows:
-                    title = str(meta.get("title") or "").strip()
-                    if title:
-                        st.markdown(f"**{title}**")
-                    dataframe = pd.DataFrame(display_rows, columns=labels)
-                    st.dataframe(dataframe, width="stretch", hide_index=True)
+            kind = meta.get("table_kind") if isinstance(meta, dict) else None
+            render_table = (tables or {}).get(kind) if isinstance(kind, str) else None
+            if render_table is not None:
+                render_table(meta)
                 continue
 
             if isinstance(meta, dict):

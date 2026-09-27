@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import builtins
+import sys
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
+
+import streamlit_shared
 
 
 PAGE = Path(__file__).resolve().parents[1] / "pages" / "3_Price_Bulletin_Drafter.py"
@@ -149,24 +152,22 @@ class FakePriceBulletinBackend:
                 "rows_saved": 4 if self.refresh_status == "updated" else 0,
                 "warnings": ["operator detail that must not be shown"],
             }
-        raise AssertionError(f"Unexpected request: {method} {path} {payload}")
-
-    def run_async_and_poll(self, **kwargs):
-        payload = deepcopy(kwargs.get("start_json"))
-        self.run_payloads.append(payload)
-        if self.reject_run:
-            raise RuntimeError("submission rejected")
-        return (
-            "run-1",
-            {"status": "completed"},
-            {
+        if path == "/market-monitor/generate-async" and method == "POST":
+            self.run_payloads.append(payload)
+            if self.reject_run:
+                raise RuntimeError("submission rejected")
+            return {"run_id": "run-1"}
+        if path == "/market-monitor/status/run-1":
+            return {"run_id": "run-1", "status": "completed", "progress_pct": 100}
+        if path == "/market-monitor/result/run-1":
+            return {
                 "run_id": "run-1",
                 "country": "South Sudan",
-                "time_period": payload["time_period"],
+                "time_period": self.run_payloads[-1]["time_period"],
                 "language": "en",
                 "llm_calls": 0,
-            },
-        )
+            }
+        raise AssertionError(f"Unexpected request: {method} {path} {payload}")
 
     @staticmethod
     def _saved_basket(role, version_id, payload):
@@ -210,6 +211,11 @@ def _app(monkeypatch, backend):
     # in every local backend and can deadlock Streamlit's AppTest import thread.
     # Install the page's narrow dependency surface before executing it instead.
     monkeypatch.setattr(builtins, "_price_bulletin_test_backend", backend, raising=False)
+    # The page follows its run with the real start_run and follow_run, over the fake backend.
+    monkeypatch.setattr(builtins, "_streamlit_shared_real", streamlit_shared, raising=False)
+    monkeypatch.setattr(streamlit_shared, "request_json", backend.request_json)
+    # The page's script replaces streamlit_shared in sys.modules; put the real module back afterwards.
+    monkeypatch.setitem(sys.modules, "streamlit_shared", streamlit_shared)
     page_path = str(PAGE).replace("\\", "\\\\")
     source = f'''
 import builtins
@@ -232,7 +238,8 @@ shared.render_llm_diagnostics = lambda *args, **kwargs: None
 shared.quote_path_param = lambda value: quote(str(value), safe="")
 shared.request_json = backend.request_json
 shared.request_bytes = lambda *args, **kwargs: b""
-shared.run_async_and_poll = backend.run_async_and_poll
+shared.start_run = builtins._streamlit_shared_real.start_run
+shared.follow_run = builtins._streamlit_shared_real.follow_run
 shared.safe_show_error = lambda error: st.error(str(error))
 sys.modules["streamlit_shared"] = shared
 

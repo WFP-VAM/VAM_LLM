@@ -1,24 +1,15 @@
 import json
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.shared import async_runs
-from app.shared.llm_observability import LLMCallError
+from app.shared.runs import report_runs
+from app.shared.llm import LLMCallError
 from app.services.market_monitor import router as market_router
 from app.services.mfi_drafter import router as mfi_router
 from app.services.mfi_drafter.features import MFI_DRAFTER_ANALYSIS_VERSION_ENV
 from app.streamlit_backend import dispatcher
-
-
-class ImmediateThread:
-    def __init__(self, *, target, daemon):
-        self.target = target
-
-    def start(self):
-        self.target()
 
 
 MFI_CSV = {"country": "Testland", "data_collection_start": "2026-01-01", "data_collection_end": "2026-01-31",
@@ -26,21 +17,15 @@ MFI_CSV = {"country": "Testland", "data_collection_start": "2026-01-01", "data_c
 
 
 @pytest.fixture(autouse=True)
-def reset_memory_runs(monkeypatch):
-    monkeypatch.setattr(async_runs, "_BACKEND", "memory")
-    async_runs._RUNS.clear()
-    async_runs._RUN_ARTIFACTS.clear()
-    monkeypatch.setattr(
-        dispatcher, "threading", SimpleNamespace(Thread=ImmediateThread)
-    )
+def background_work_runs_at_once(immediate_launch):
+    return immediate_launch
 
 
 @pytest.fixture
 def mfi_csv_upload(monkeypatch):
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "2")
-    monkeypatch.setattr(dispatcher, "_extract_file", lambda *args: SimpleNamespace(filename="mfi.csv", content=b"csv"))
-    monkeypatch.setattr(dispatcher, "load_mfi_from_csv", lambda **kwargs: dict(MFI_CSV))
     monkeypatch.setattr(mfi_router, "load_mfi_from_csv", lambda **kwargs: dict(MFI_CSV))
+    return {"file": ("mfi.csv", b"csv", "text/csv")}
 
 
 def _trace(service, run_id, status, total_calls=0):
@@ -69,10 +54,10 @@ def test_mfi_dispatcher_uses_public_run_id_for_graph_and_live_trace(monkeypatch,
         llm_trace_sink(_trace("mfi-drafter", run_id, "running", total_calls=1))
         return {"run_id": run_id, "warnings": [], "llm_diagnostics": {}}
 
-    monkeypatch.setattr(dispatcher, "run_mfi_report_generation", fake_generation)
-    response = dispatcher._mfi_drafter_generate_from_csv_async(data={}, files={}, params={})
+    monkeypatch.setattr(mfi_router, "run_mfi_report_generation", fake_generation)
+    response = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv-async", files=mfi_csv_upload)
     public_run_id = response.json()["run_id"]
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
 
     assert captured["run_id"] == public_run_id
     assert run is not None and run.status == "completed"
@@ -94,8 +79,10 @@ def test_market_dispatcher_uses_public_run_id_for_graph(monkeypatch):
             "report_draft_sections": {},
         }
 
-    monkeypatch.setattr(dispatcher, "run_report_generation", fake_generation)
-    response = dispatcher._market_monitor_generate_async(
+    monkeypatch.setattr(market_router, "run_report_generation", fake_generation)
+    response = dispatcher.dispatch_request(
+        "POST",
+        "/market-monitor/generate-async",
         json_body={
             "country": "Testland",
             "time_period": "2026-01",
@@ -103,7 +90,7 @@ def test_market_dispatcher_uses_public_run_id_for_graph(monkeypatch):
         }
     )
     public_run_id = response.json()["run_id"]
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
 
     assert captured["run_id"] == public_run_id
     assert run is not None and run.status == "completed"
@@ -153,7 +140,7 @@ def test_fastapi_async_mfi_public_and_graph_run_ids_match(monkeypatch, mfi_csv_u
     public_run_id = response.json()["run_id"]
     assert response.status_code == 200
     assert captured["run_id"] == public_run_id
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
     assert run is not None and run.status == "completed"
 
 
@@ -186,7 +173,7 @@ def test_fastapi_async_market_public_and_graph_run_ids_match(monkeypatch):
     public_run_id = response.json()["run_id"]
     assert response.status_code == 200
     assert captured["run_id"] == public_run_id
-    run = async_runs.get_run(public_run_id)
+    run = report_runs.get_run(public_run_id)
     assert run is not None and run.status == "completed"
 
 

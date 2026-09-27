@@ -6,11 +6,11 @@ Classi e modelli per la generazione di Market Monitor Reports.
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator
-from app.shared.llm_observability import LLMRunDiagnostics
+from app.shared.llm import LLMRunDiagnostics
 from typing import Optional, List, Dict, Any, Literal
 from dataclasses import dataclass, field, asdict
 
-from app.shared.report_blocks import ReportBlock
+from app.shared.documents.blocks import ReportBlock
 
 
 # ============================================================================
@@ -286,7 +286,7 @@ def _optional_identifier(value: Optional[str]) -> Optional[str]:
 class ReportStatusOutput(BaseModel):
     """Status of an in-progress report."""
     run_id: str
-    status: Literal["pending", "running", "completed", "failed"]
+    status: Literal["pending", "running", "completed", "failed", "interrupted"]
     current_node: Optional[str] = None
     progress_pct: int = 0
     warnings: List[str] = []

@@ -8,8 +8,8 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Optional, List, Dict, Any, Literal
 
-from app.shared.report_blocks import ReportBlock
-from app.shared.llm_observability import LLMRunDiagnostics
+from app.shared.documents.blocks import ReportBlock
+from app.shared.llm import LLMRunDiagnostics
 from .methodology import ANALYSIS_SCHEMA_VERSION, DISPLAY_DIMENSIONS
 
 
@@ -674,7 +674,7 @@ class LightMFIReportOutput(BaseModel):
 class MFIReportStatusOutput(BaseModel):
     """Status of an in-progress report; phase progress is in metadata.generation_diagnostics."""
     run_id: str
-    status: Literal["pending", "running", "completed", "failed"]
+    status: Literal["pending", "running", "completed", "failed", "interrupted"]
     current_node: Optional[str] = None
     progress_pct: int = 0
     warnings: List[str] = Field(default_factory=list)

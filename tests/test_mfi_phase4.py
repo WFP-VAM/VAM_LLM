@@ -163,8 +163,8 @@ def test_dispatcher_generation_paths_return_stable_503(
         raise AssertionError("generation work must not start")
 
     monkeypatch.delenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, raising=False)
-    monkeypatch.setattr(dispatcher, "run_mfi_report_generation", forbidden)
-    monkeypatch.setattr(dispatcher, "create_run", forbidden)
+    monkeypatch.setattr(router, "run_mfi_report_generation", forbidden)
+    monkeypatch.setattr(router, "create_run", forbidden)
 
     response = dispatcher.dispatch_request(
         "POST",
@@ -180,40 +180,27 @@ def test_dispatcher_generation_paths_return_stable_503(
     assert called is False
 
 
-def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch):
-    targets = []
+def test_dispatcher_async_run_retains_submission_snapshot(monkeypatch, deferred_launch):
+    targets = deferred_launch
     captured = {}
-
-    class DeferredThread:
-        def __init__(self, *, target, daemon):
-            targets.append(target)
-
-        def start(self):
-            return None
 
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "2")
     monkeypatch.setenv("K_REVISION", "pilot-revision")
-    monkeypatch.setattr(dispatcher.threading, "Thread", DeferredThread)
-    monkeypatch.setattr(dispatcher, "create_run", lambda run_id: None)
-    monkeypatch.setattr(dispatcher, "update_run", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        dispatcher,
-        "set_run_completed",
-        lambda *args, **kwargs: None,
-    )
+    monkeypatch.setattr(router, "create_run", lambda run_id, **fields: None)
+    monkeypatch.setattr(router, "update_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(router, "set_run_completed", lambda *args, **kwargs: None)
 
     def fake_run(*args, release_control, **kwargs):
         captured["control"] = release_control.model_dump()
         return {"warnings": []}
 
-    monkeypatch.setattr(dispatcher, "run_mfi_report_generation", fake_run)
-    monkeypatch.setattr(dispatcher, "_extract_file",
-                        lambda *args: SimpleNamespace(filename="mfi.csv", content=b"csv"))
-    monkeypatch.setattr(dispatcher, "load_mfi_from_csv", lambda **kwargs: {
+    monkeypatch.setattr(router, "run_mfi_report_generation", fake_run)
+    monkeypatch.setattr(router, "load_mfi_from_csv", lambda **kwargs: {
         "country": "Testland", "data_collection_start": "2026-01-01", "data_collection_end": "2026-01-31",
         "markets": ["Central"], "survey_metadata": {}})
 
-    response = dispatcher._mfi_drafter_generate_from_csv_async(data={}, files={}, params={})
+    response = dispatcher.dispatch_request("POST", "/mfi-drafter/generate-from-csv-async",
+                                           files={"file": ("mfi.csv", b"csv", "text/csv")})
     monkeypatch.setenv(MFI_DRAFTER_ANALYSIS_VERSION_ENV, "invalid")
     targets[0]()
 
