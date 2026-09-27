@@ -1,6 +1,6 @@
 # Drafter layout: one file layout for the three drafters
 
-**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). Phases 0 to 3 (MFI, Seasonal Outlook, Market Monitor) done on `refactor/drafter-layout` (not pushed); Phase 4 (close-out) waits for the go-ahead.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
+**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). All phases (0 to 4) done on `refactor/drafter-layout` (not pushed); merging waits for the user's review and the release gate below.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
 
 ---
 
@@ -330,7 +330,7 @@ Work happens on `refactor/drafter-layout`, based on `refactor/shared-layer` @ `6
 ### 8.3 Per phase
 
 - All captures of all three drafters: a move in one drafter must not change another.
-- Phase 4: the container check (`p6_container.sh`, built from an LF archive of `HEAD`).
+- Phase 4: the container check (`.tmp/drafter-layout/container.sh`, a copy of `.tmp/tools/p6_container.sh` with its own output folder and container name, built from an LF archive of `HEAD`).
 
 ### Progress
 
@@ -427,3 +427,28 @@ Taken on 26 September 2026:
   - One slip reached a commit: `4ddd79a`'s `graph.py` imports three node functions twice. It is harmless, since the same objects are imported, but untidy. The mover then merged statements of the same module, `448bdba` removes the duplicates, and a scan finds no repeated import in any MM module.
   - In step 4, a test failed because its `resolve_report_price_data` patch still targeted `graph.py`. It failed loudly, since no shim was left, and the probe pinpointed the target. It was retargeted before the commit.
 - **Phase-end check after `d9ba22a`:** every capture of all three drafters is identical to the base. That is MM, MFI (wire and snapshots), Seasonal (wire, stored records and snapshots), `p5_outputs`, the preview and the pages, with `stage_diff.py` at 448 comparisons and 0 differences.
+
+**Phase 4 (close-out), done 2026-09-27:**
+- **`ef467b0` — `tests/test_drafter_layout.py`.** Nine checks, three per drafter:
+  - `graph.py`, `prompts.py` and a `nodes/` package with node modules exist;
+  - no module under `nodes/` imports its drafter's `graph.py`, in any import form;
+  - only `graph.py` builds a `StateGraph`.
+  - On a tree of `68cec22` (git archive), four checks fail: the layout of all three drafters, and MFI's graph built in `light_graph.py`. The others pass there only because no `nodes/` existed.
+  - A planted `from .. import graph` or `from ..graph import build_graph`, in an MM node module or in Seasonal's `nodes/__init__.py`, makes the import check fail. Each planted file was restored byte for byte.
+  - Suite: 921 tests, 918 passed, 3 skipped. The only change from the base is the 9 new tests; no status changed.
+- **`9317b78` — docs.**
+  - `docs/app-overview.md` (staged with `git add -f`): the three graphs' paths, the common layout, the structural test, and each drafter's modules.
+  - The README's layout paragraph.
+  - The specs: `mfi_light_workflow.md` (`runtime.RunLedger`), `mfi_offline_map.md` (`service.validate_submission`) and `seasonal_outlook_implementation.md` (where each stage's code and the prompts live).
+  - `docs/second_food_basket.md` is a dated implementation plan ("proposed implementation plan"). It keeps its old paths, like the other dated plans.
+  - No live document names a moved module any more (checked with `grep`).
+- **Container check**, on `9317b78`, image `vam-llm:drafter-layout`, built from the committed tree with LF endings:
+  - Python 3.11.16. `pip check` is clean. The 100 installed packages are identical to the Phase 6 image (`.tmp/shared-layer/tested-image-pip-freeze-phase6.txt`).
+  - Suite in the image, with the MFI benchmark CSVs mounted read-only: 918 passed, 3 skipped, as on Windows.
+  - MFI snapshots in the image, classified against the Windows base: float noise, figure hashes, and the dependency versions each result records (LangGraph 1.2.12 in the image, 1.0.5 locally; pydantic 2.13.5 and 2.13.4). The Phase 6 image showed the same. `misc` is identical. Report text and Word text are identical.
+  - Boot: `start.sh` starts the app and `/_stcore/health` answers `ok`. The check's container was removed afterwards; the image stays with the older `vam-llm` images.
+- **Follow-ups, not in this refactor's scope:**
+  - `market_monitor/nodes/data_agent.py:_select_default_commodities` is unused (`data_loader.py` has its own copy).
+  - The Market Monitor still reaches its tracer through a ContextVar (`runtime.llm_client`); explicit wiring stays the shared-layer plan's follow-up.
+  - Clean-up of the local `vam-llm` Docker images.
+- **Release:** unchanged. This branch ships after the shared-layer refactor, once the coherence refactor's Phase 7 is accepted on GCP and the D8 fixes are released (D9). A GCP revision of this branch needs nothing new: no environment variable, dependency, cloud resource or stored format changed.
