@@ -65,7 +65,9 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
 
 - `app/services/market_monitor/`, `app/services/mfi_drafter/`,
   `app/services/seasonal_outlook/` — one package per drafter (LangGraph graph
-  without checkpointer, FastAPI router, schemas). The Seasonal Outlook keeps an
+  without checkpointer, FastAPI router, schemas), each laid out the same way:
+  `graph.py` (the graph), `nodes/` (one module per node type), `prompts.py`
+  (prompt texts) and `service.py` (the entry point). The Seasonal Outlook keeps an
   analysis record for its analyst review; see `docs/app-overview.md`.
 - `app/services/price_cache/` — DataBridges price cache (SQLite or Cloud SQL)
   and its DataBridges client, behind the Price Bulletin Drafter.

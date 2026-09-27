@@ -26,7 +26,7 @@ Charts render alongside the drafts, so drafting never waits for them. Each corre
 
 Both reviewers receive both original drafts but review only their own sections. The correction drafter receives its original draft, reviewer report, evidence and substantive narrative restrictions. Authoritative evidence takes precedence over reviewer suggestions. A clean review promotes the original draft with no model call. The final summary awaits both definitive branches; assembly also awaits charts.
 
-A run keeps its bookkeeping in memory (`light_runtime.RunLedger`): phase status and progress, token counts cached by request fingerprint, and the status and issues of each work item. Its model calls are recorded by the run's tracer, the one every drafter uses; attempts per work item are counted from it. Nothing is checkpointed. A failed phase marks the whole report failed, and the analyst generates it again from the CSV; there is no resume and no partial-draft download.
+A run keeps its bookkeeping in memory (`runtime.RunLedger`): phase status and progress, token counts cached by request fingerprint, and the status and issues of each work item. Its model calls are recorded by the run's tracer, the one every drafter uses; attempts per work item are counted from it. Nothing is checkpointed. A failed phase marks the whole report failed, and the analyst generates it again from the CSV; there is no resume and no partial-draft download.
 
 ## Evidence and response handling
 

@@ -56,7 +56,7 @@ The application exposes **three services** through a Streamlit frontend (with a 
 
 The FastAPI routers are the only implementation of the endpoints: the Streamlit pages reach them in-process, through `app/streamlit_backend/dispatcher.py`, and HTTP clients through `main.py`, so both get the same validation, errors and responses.
 
-Each service is a self-contained FastAPI router whose workflow is a **LangGraph graph**: `market_monitor/graph.py`, `mfi_drafter/light_graph.py` and `seasonal_outlook/graph.py`. None of the graphs uses a checkpointer, and no service has a checkpoint or resume layer:
+Each service is a self-contained FastAPI router whose workflow is a **LangGraph graph**: `market_monitor/graph.py`, `mfi_drafter/graph.py` and `seasonal_outlook/graph.py`. The three drafters share one layout: `graph.py` holds only the graph (state where the nodes need none of it, node wiring, edges, routing), `nodes/` holds one module per node type, `prompts.py` holds the prompt texts and the functions that assemble them, `service.py` is the public entry point, and what several nodes share lives in modules named for it. No node module imports `graph.py`; a structural test (`tests/test_drafter_layout.py`) keeps it so. None of the graphs uses a checkpointer, and no service has a checkpoint or resume layer:
 
 - **Market Monitor and MFI** run a report in a background thread and keep only a run record (status, progress, result, artifacts). A failed report is run again. A report whose work stays silent for 30 minutes, for example because the server restarted, shows as interrupted, and its late work can no longer write to it. Their pages follow a run the same way (`follow_run` in `streamlit_shared.py`): the progress refreshes in place, the page stays usable, the page URL names the run so a reload picks it up again, and a run that failed keeps its final status on the page.
 - **Seasonal Outlook** has one graph with three entry points, one per phase: extraction (extraction, visual review, refinement), analyst feedback, and report (draft, review, redraft, export). Each phase is one run of the graph. The analyst's review happens *between* two runs, so the service keeps an **analysis record** in Firestore and GCS: inputs, immutable evidence versions, comments, the confirmation of one exact evidence version, and each operation's calls and final output. A failed phase is retried from the same inputs.
@@ -152,13 +152,18 @@ UNIFIED APP/
 
     services/
       mfi_drafter/             # MFI report generation
-        router.py, light_graph.py, light_service.py, light_runtime.py, schemas.py, data_loader.py, report_layout.py, ui.py
+        router.py, service.py, graph.py, nodes/ (prepare_analysis, context_retrieval, charts, draft, review,
+        correct, executive_summary, assemble_report), sections.py (what the drafting nodes share), prompts.py,
+        contracts.py, runtime.py, evidence.py, report.py, schemas.py, data_loader.py, report_layout.py, ui.py
       market_monitor/          # Market Monitor generation
-        router.py, graph.py, schemas.py, data_loader.py, report_blocks.py, basket_ui.py, ui.py
+        router.py, service.py, graph.py, nodes/ (one module per node), prompts.py with prompt_templates/
+        (localized templates and their hash manifest), state.py, runtime.py, text.py, basket_context.py, qa.py,
+        modules.py (optional report modules), schemas.py, data_loader.py, report_blocks.py, basket_ui.py, ui.py
       price_cache/             # DataBridges price cache used by Market Monitor
         config.py, sql_repository.py, databridges_adapter.py, refresh_worker.py, migrations/
       seasonal_outlook/        # Seasonal Outlook drafting
-        router.py, api.py, service.py, graph.py, runner.py, engine.py, calls.py, storage.py, ui.py, science/
+        router.py, api.py, service.py, graph.py, nodes/ (one module per stage, and export), engine.py (what the
+        stages share), prompts.py, runner.py, calls.py, exports.py, storage.py, ui.py, science/
 
     streamlit_backend/
       dispatcher.py            # Hands the pages' requests to the FastAPI application in-process
