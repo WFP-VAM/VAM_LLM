@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from app.shared.llm import LLMCallError, LLMClient, market_monitor_profile
 from app.services.market_monitor.report_blocks import build_market_monitor_report_blocks
-from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor.nodes import module_orchestrator as module_orchestrator_node
 from app.services.market_monitor.nodes import data_agent as data_agent_node
 from app.services.market_monitor.nodes import graph_designer as graph_designer_node
 from app.services.market_monitor import modules as mm_modules
@@ -729,7 +729,7 @@ def test_exchange_rate_module_falls_back_to_te_when_state_has_no_fx(monkeypatch)
 def test_exchange_rate_module_skip_warning_when_no_databridges_fx_or_te(monkeypatch):
     monkeypatch.delenv("TE_API_KEY", raising=False)
 
-    result = market_graph.node_module_orchestrator(
+    result = module_orchestrator_node.node_module_orchestrator(
         {
             "enabled_modules": ["exchange_rate"],
             "exchange_rate_data": None,

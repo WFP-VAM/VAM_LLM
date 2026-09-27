@@ -1,6 +1,8 @@
 import json
 
 from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor.nodes import module_orchestrator as module_orchestrator_node
+from app.services.market_monitor.nodes import trend_analyst as trend_analyst_node
 from app.services.market_monitor import basket_context as mm_basket_context
 from app.services.market_monitor import modules as mm_modules
 from app.services.market_monitor import qa as mm_qa
@@ -237,7 +239,7 @@ def test_trend_prompt_and_output_are_role_aware(monkeypatch):
     )
     monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
 
-    result = market_graph.node_trend_analyst(_basket_state())
+    result = trend_analyst_node.node_trend_analyst(_basket_state())
 
     assert "MEB Côte" in llm.prompts[0]
     assert "Panier pastoral" in llm.prompts[0]
@@ -357,7 +359,7 @@ def test_module_correction_reuses_data_and_regenerates_only_target(monkeypatch):
         }
     )
 
-    result = market_graph.node_module_orchestrator(state)
+    result = module_orchestrator_node.node_module_orchestrator(state)
 
     assert calls == ["fuel"]
     assert result["module_sections"] == {"fuel_energy": "Corrected fuel", "labour_market": "Keep labour"}
