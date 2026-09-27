@@ -254,10 +254,11 @@ def test_mfi_and_market_monitor_share_the_gaza_aware_seerist_retriever():
 
 def test_market_monitor_news_retrieval_combines_and_deduplicates(monkeypatch):
     market_graph = import_graph_module("app.services.market_monitor.graph")
+    mm_state = import_graph_module("app.services.market_monitor.state")
     monkeypatch.setattr(market_graph, "ReliefWebRetriever", FakeReliefWebRetriever)
     monkeypatch.setattr(market_graph, "SeeristRetriever", FakeSeeristRetriever)
 
-    state = market_graph.create_initial_state(
+    state = mm_state.create_initial_state(
         country="South Sudan",
         time_period="2025-01",
         commodity_list=[],

@@ -13,16 +13,13 @@ from __future__ import annotations
 import io
 import re
 import json
-import uuid
 import base64
 import random
 import logging
 import requests
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import TypedDict, Annotated, Literal, List, Dict, Any, Optional, Callable, Mapping
-
-import operator
+from typing import Literal, List, Dict, Any, Optional, Callable, Mapping
 
 import pandas as pd
 import numpy as np
@@ -31,11 +28,7 @@ from langgraph.graph import StateGraph, END
 
 from app.shared.llm import (
     LLMCallError,
-    LLMClient,
-    current_tracer,
-    default_provider,
     log_llm_run_summary,
-    market_monitor_profile,
     tracing_run,
 )
 from app.shared.context.news import gather_context
@@ -53,31 +46,19 @@ from .i18n import (
     format_month_label,
     format_percent_value,
     localize_axis_label,
-    normalize_generated_text,
     prompt_base_context,
     resolve_report_language,
     t,
 )
 from .prompt_registry import render_prompt
+from .state import MarketReportState, _state_currency_code, _state_language, create_initial_state
+from .runtime import llm_client
+from .text import _dedupe_text, _normalize_output_text, _plain_or_localized_number, _validated_prose, format_pct
 
 logger = logging.getLogger(__name__)
 
 OnStepCallback = Callable[[str, Dict[str, Any]], None]
 
-
-def llm_provider():
-    """The provider Market Monitor's calls go through; tests replace it."""
-    return default_provider()
-
-
-def llm_client(state: Dict[str, Any]) -> LLMClient:
-    """The model client of this report run, recording into the run's trace."""
-    tracer = current_tracer(
-        service="market-monitor",
-        run_id=str(state.get("run_id") or "market-monitor-direct"),
-        initial=state.get("llm_diagnostics"),
-    )
-    return LLMClient(market_monitor_profile(), tracer=tracer, provider=llm_provider())
 
 CURRENCY_SYMBOLS = {
     "SDG": "USDSDG:CUR",
@@ -112,165 +93,8 @@ TERMINOLOGY_THRESHOLDS = {
 
 
 # ============================================================================
-# STATE DEFINITION
-# ============================================================================
-
-class MarketReportState(TypedDict):
-    """Stato principale del grafo."""
-    
-    # ===== INPUTS =====
-    country: str
-    time_period: str
-    commodity_list: List[str]
-    basket_version_id: Optional[str]
-    primary_basket_version_id: Optional[str]
-    include_secondary_basket: bool
-    secondary_basket_version_id: Optional[str]
-    admin1_list: List[str]
-    previous_report_text: str
-    currency_code: str
-    use_mock_data: bool
-    language: str
-    locale: str
-    language_source: str
-    
-    # ===== MODULE CONFIG =====
-    enabled_modules: List[str]
-    
-    # ===== BRANCH 1 OUTPUTS (Data & Graphs) =====
-    time_series_data_national: Optional[str]  # JSON
-    time_series_data_regional: Optional[str]  # JSON
-    time_series_history_national: Optional[str]  # JSON
-    data_statistics: Optional[Dict[str, Any]]
-    databridges_rows: List[Dict[str, Any]]
-    cache_metadata: Dict[str, Any]
-    food_basket: Dict[str, Any]
-    food_baskets: Dict[str, Any]
-    basket_series_national: List[Dict[str, Any]]
-    basket_series_regional: List[Dict[str, Any]]
-    basket_statistics: Dict[str, Any]
-    visualizations: Dict[str, str]  # Base64 images
-
-    # ===== BRANCH 2 OUTPUTS (Contextual Intelligence) =====
-    documents: List[Dict[str, Any]]
-    document_references: List[Dict[str, Any]]
-    seerist_documents: List[Dict[str, Any]]
-    reliefweb_documents: List[Dict[str, Any]]
-    news_counts: Dict[str, int]
-    retriever_traces: List[Dict[str, Any]]
-    events: List[Dict[str, Any]]
-    trend_analysis: Optional[Dict[str, Any]]
-
-    # ===== MODULE OUTPUTS =====
-    exchange_rate_data: Optional[Dict[str, Any]]
-    fuel_energy_data: Optional[Dict[str, Any]]
-    livestock_animal_products_data: Optional[Dict[str, Any]]
-    labour_market_data: Optional[Dict[str, Any]]
-    module_sections: Dict[str, str]
-    
-    # ===== CENTRAL & QA OUTPUTS =====
-    report_draft_sections: Dict[str, str]
-    skeptic_flags: List[Dict[str, Any]]
-    qa_review: Dict[str, Any]
-    correction_targets: List[str]
-
-    # ===== CONTROL & METADATA =====
-    warnings: Annotated[List[str], operator.add]
-    run_id: str
-    correction_attempts: int
-    llm_calls: int
-    llm_diagnostics: Dict[str, Any]
-    current_node: str
-
-
-def create_initial_state(
-    country: str,
-    time_period: str,
-    commodity_list: List[str],
-    admin1_list: List[str],
-    currency_code: str,
-    enabled_modules: List[str],
-    basket_version_id: Optional[str] = None,
-    basket_selection: Optional[Mapping[str, Any]] = None,
-    previous_report_text: str = "",
-    use_mock_data: bool = False,
-    language: str = "en",
-    locale: str = "en_US",
-    language_source: str = "default",
-    run_id: Optional[str] = None,
-) -> MarketReportState:
-    """Crea stato iniziale per il grafo."""
-    selection = dict(basket_selection or {})
-    food_baskets = dict(selection.get("food_baskets") or {})
-    primary_snapshot = food_baskets.get("primary")
-    secondary_snapshot = food_baskets.get("secondary")
-    primary_version_id = selection.get("primary_basket_version_id") or basket_version_id
-    secondary_version_id = selection.get("secondary_basket_version_id")
-    secondary_included = bool(selection.get("secondary_basket_included", False))
-    return MarketReportState(
-        country=country,
-        time_period=time_period,
-        commodity_list=commodity_list,
-        basket_version_id=basket_version_id,
-        primary_basket_version_id=primary_version_id,
-        include_secondary_basket=secondary_included,
-        secondary_basket_version_id=secondary_version_id,
-        admin1_list=admin1_list,
-        previous_report_text=previous_report_text,
-        currency_code=currency_code,
-        use_mock_data=use_mock_data,
-        language=language,
-        locale=locale,
-        language_source=language_source,
-        enabled_modules=enabled_modules,
-        time_series_data_national=None,
-        time_series_data_regional=None,
-        time_series_history_national=None,
-        data_statistics=None,
-        databridges_rows=[],
-        cache_metadata={},
-        food_basket=dict(primary_snapshot or {}),
-        food_baskets={
-            "primary": primary_snapshot,
-            "secondary": secondary_snapshot if secondary_included else None,
-        },
-        basket_series_national=[],
-        basket_series_regional=[],
-        basket_statistics={"primary": None, "secondary": None},
-        visualizations={},
-        documents=[],
-        document_references=[],
-        seerist_documents=[],
-        reliefweb_documents=[],
-        news_counts={"Seerist": 0, "ReliefWeb": 0, "total": 0},
-        retriever_traces=[],
-        events=[],
-        trend_analysis=None,
-        exchange_rate_data=None,
-        fuel_energy_data=None,
-        livestock_animal_products_data=None,
-        labour_market_data=None,
-        module_sections={},
-        report_draft_sections={},
-        skeptic_flags=[],
-        qa_review={"status": "not_recorded", "correction_attempts": 0, "flags": []},
-        correction_targets=[],
-        warnings=[],
-        run_id=run_id or f"run_{uuid.uuid4().hex[:8]}",
-        correction_attempts=0,
-        llm_calls=0,
-        llm_diagnostics={},
-        current_node="init"
-    )
-
-
-# ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
-
-def _state_language(state: Dict[str, Any]) -> str:
-    return str(state.get("language") or "en").strip().lower() or "en"
-
 
 def _json_for_prompt(value: Any) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False)
@@ -278,30 +102,6 @@ def _json_for_prompt(value: Any) -> str:
 
 def _report_month_for_prompt(state: Dict[str, Any]) -> str:
     return format_month_label(state.get("time_period"), _state_language(state))
-
-
-def _normalize_output_text(text: Any, state: Dict[str, Any]) -> tuple[str, List[str]]:
-    refs = state.get("document_references") or []
-    titles = [str(ref.get("title") or "") for ref in refs if isinstance(ref, dict)]
-    return normalize_generated_text(text, _state_language(state), reference_titles=titles)
-
-
-def _validated_prose(text: str, state: Dict[str, Any]) -> str:
-    normalized, _warnings = _normalize_output_text(text, state)
-    if not normalized.strip():
-        raise ValueError("LLM prose is empty after normalization")
-    return normalized
-
-
-def _plain_or_localized_number(value: Any, language: str, *, decimals: int = 1) -> str:
-    if language == "en":
-        return str(value)
-    return format_decimal_value(value, language, decimals=decimals)
-
-
-def format_pct(value, language: str = "en") -> str:
-    """Format percentage deltas with direction arrows."""
-    return format_percent_value(value, language, include_arrow=True)
 
 
 def _is_auxiliary_series(name: str) -> bool:
@@ -368,21 +168,6 @@ def _chunk_list(items: List[str], size: int) -> List[List[str]]:
     return out
 
 
-def _dedupe_text(items: List[Any]) -> List[str]:
-    seen: set[str] = set()
-    out: List[str] = []
-    for item in items or []:
-        text_value = str(item or "").strip()
-        if not text_value:
-            continue
-        key = text_value.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(text_value)
-    return out
-
-
 def _commodity_importance_score(stats: Dict[str, Any], commodity: str) -> float:
     if not isinstance(stats, dict):
         return 0.0
@@ -406,13 +191,6 @@ def _commodity_importance_score(stats: Dict[str, Any], commodity: str) -> float:
     except Exception:
         pass
     return 0.0
-
-
-def _state_currency_code(state: Dict[str, Any]) -> str:
-    cache_metadata = state.get("cache_metadata") or {}
-    code = cache_metadata.get("currency_code") or state.get("currency_code") or "LCU"
-    code = str(code or "LCU").strip().upper()
-    return code or "LCU"
 
 
 def _mapping(value: Any) -> Dict[str, Any]:

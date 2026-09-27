@@ -1,6 +1,7 @@
 import json
 
 from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor import runtime as mm_runtime
 from app.shared.llm import LLMResponse
 from app.services.market_monitor.schemas import GenerateReportOutput
 
@@ -231,7 +232,7 @@ def test_trend_prompt_and_output_are_role_aware(monkeypatch):
             }
         )
     )
-    monkeypatch.setattr(market_graph, "llm_provider", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
 
     result = market_graph.node_trend_analyst(_basket_state())
 
@@ -244,7 +245,7 @@ def test_trend_prompt_and_output_are_role_aware(monkeypatch):
 
 def test_highlights_receives_context_and_exact_correction_flags(monkeypatch):
     llm = _CaptureLLM('{"HIGHLIGHTS": "Corrected highlights"}')
-    monkeypatch.setattr(market_graph, "llm_provider", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
     state = _basket_state()
     state["correction_targets"] = ["HIGHLIGHTS"]
     state["skeptic_flags"] = [
@@ -275,7 +276,7 @@ def test_narrative_correction_updates_only_target_and_uses_adaptive_ranges(monke
             }
         )
     )
-    monkeypatch.setattr(market_graph, "llm_provider", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
     state = _basket_state()
     state["report_draft_sections"] = {
         "MARKET_OVERVIEW": "Old overview",
@@ -338,7 +339,7 @@ def test_module_correction_reuses_data_and_regenerates_only_target(monkeypatch):
             return {"narrative": "Corrected fuel"}
 
     monkeypatch.setitem(market_graph.AVAILABLE_MODULES, "fuel_energy", FakeFuelModule)
-    monkeypatch.setattr(market_graph, "llm_provider", lambda: object())
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: object())
     state = _basket_state()
     state.update(
         {
@@ -378,7 +379,7 @@ def test_red_team_receives_basket_ground_truth_and_normalizes_flags(monkeypatch)
             }
         )
     )
-    monkeypatch.setattr(market_graph, "llm_provider", lambda: llm)
+    monkeypatch.setattr(mm_runtime, "llm_provider", lambda: llm)
     state = _basket_state()
     state["report_draft_sections"] = {
         "HIGHLIGHTS": "MEB Côte costs 70 while Panier pastoral costs 120."
