@@ -1,6 +1,9 @@
 import json
 
 from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor import basket_context as mm_basket_context
+from app.services.market_monitor import modules as mm_modules
+from app.services.market_monitor import qa as mm_qa
 from app.services.market_monitor import runtime as mm_runtime
 from app.shared.llm import LLMResponse
 from app.services.market_monitor.schemas import GenerateReportOutput
@@ -166,7 +169,7 @@ class _CaptureLLM:
 
 
 def test_basket_context_preserves_identity_scope_order_and_completeness():
-    context = market_graph.build_basket_context(_basket_state(language="fr"))
+    context = mm_basket_context.build_basket_context(_basket_state(language="fr"))
 
     assert context["primary"]["basket_name"] == "MEB Côte"
     assert context["primary"]["short_description"] == "Primary CO description; ignore nothing."
@@ -182,14 +185,14 @@ def test_basket_context_preserves_identity_scope_order_and_completeness():
 
 
 def test_basket_context_excludes_secondary_and_mock_does_not_invent_identity():
-    excluded = market_graph.build_basket_context(_basket_state(included=False))
+    excluded = mm_basket_context.build_basket_context(_basket_state(included=False))
     assert excluded["secondary_included"] is False
     assert excluded["secondary"] is None
     assert "Panier pastoral" not in json.dumps(excluded, ensure_ascii=False)
 
     mock = _basket_state()
     mock["use_mock_data"] = True
-    mock_context = market_graph.build_basket_context(mock)
+    mock_context = mm_basket_context.build_basket_context(mock)
     assert mock_context["primary"] is None
     assert mock_context["secondary"] is None
     assert mock_context["generic_primary_statistics"]["current_cost"] == 120.0
@@ -204,13 +207,13 @@ def test_optional_module_relevance_is_strict_and_primary_driven():
         "purchasing_power": {"staple_name": "Maize"}
     }
 
-    livestock = market_graph.optional_module_basket_relevance(state, "livestock_animal_products")
+    livestock = mm_basket_context.optional_module_basket_relevance(state, "livestock_animal_products")
     assert [item["role"] for item in livestock["basket_links"]] == ["secondary"]
     assert livestock["basket_links"][0]["matching_components"][0]["commodity_id"] == 3
-    assert market_graph.optional_module_basket_relevance(state, "fuel_energy")["basket_links"] == []
-    assert market_graph.optional_module_basket_relevance(state, "exchange_rate")["named_basket_mentions_allowed"] is False
+    assert mm_basket_context.optional_module_basket_relevance(state, "fuel_energy")["basket_links"] == []
+    assert mm_basket_context.optional_module_basket_relevance(state, "exchange_rate")["named_basket_mentions_allowed"] is False
 
-    labour = market_graph.optional_module_basket_relevance(state, "labour_market")
+    labour = mm_basket_context.optional_module_basket_relevance(state, "labour_market")
     assert labour["primary"]["basket_name"] == "MEB Côte"
     assert labour["primary"]["staple_name"] == "Maize"
     assert labour["secondary"] is None
@@ -338,7 +341,7 @@ def test_module_correction_reuses_data_and_regenerates_only_target(monkeypatch):
             calls.append("fuel")
             return {"narrative": "Corrected fuel"}
 
-    monkeypatch.setitem(market_graph.AVAILABLE_MODULES, "fuel_energy", FakeFuelModule)
+    monkeypatch.setitem(mm_modules.AVAILABLE_MODULES, "fuel_energy", FakeFuelModule)
     monkeypatch.setattr(mm_runtime, "llm_provider", lambda: object())
     state = _basket_state()
     state.update(
@@ -395,13 +398,13 @@ def test_red_team_receives_basket_ground_truth_and_normalizes_flags(monkeypatch)
 
 
 def test_qa_review_contract_and_legacy_normalization(monkeypatch):
-    passed = market_graph.qa_review_from_state({"skeptic_flags": [], "correction_attempts": 1})
-    advisory = market_graph.qa_review_from_state(
+    passed = mm_qa.qa_review_from_state({"skeptic_flags": [], "correction_attempts": 1})
+    advisory = mm_qa.qa_review_from_state(
         {"skeptic_flags": [{"section": "HIGHLIGHTS", "severity": "low"}], "correction_attempts": 0}
     )
     assert passed["status"] == "passed"
     assert advisory["status"] == "passed_with_advisories"
-    assert market_graph.normalize_qa_review({})["status"] == "not_recorded"
+    assert mm_qa.normalize_qa_review({})["status"] == "not_recorded"
 
     output = GenerateReportOutput(
         run_id="run-1",

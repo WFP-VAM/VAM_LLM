@@ -29,12 +29,12 @@ def __getattr__(name: str):
     if name in {
         "run_report_generation",
         "build_graph",
-        "AVAILABLE_MODULES",
-        "CURRENCY_SYMBOLS",
     }:
         return getattr(import_module(".graph", __name__), name)
     if name == "create_initial_state":
         return getattr(import_module(".state", __name__), name)
+    if name in {"AVAILABLE_MODULES", "CURRENCY_SYMBOLS"}:
+        return getattr(import_module(".modules", __name__), name)
     if name in {
         "ModuleOutput",
         "Document",

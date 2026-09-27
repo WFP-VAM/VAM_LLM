@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from app.shared.llm import LLMCallError, LLMClient, market_monitor_profile
 from app.services.market_monitor.report_blocks import build_market_monitor_report_blocks
 from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor import modules as mm_modules
 
 
 def _state_with_frames(df_national, df_history=None, df_regional=None):
@@ -637,7 +638,7 @@ def test_market_monitor_report_blocks_use_human_module_heading():
     ("module", "state"),
     [
         (
-            market_graph.FuelEnergyModule(),
+            mm_modules.FuelEnergyModule(),
             {
                 "fuel_energy_data": {
                     "available": True,
@@ -648,7 +649,7 @@ def test_market_monitor_report_blocks_use_human_module_heading():
             },
         ),
         (
-            market_graph.LivestockAnimalProductsModule(),
+            mm_modules.LivestockAnimalProductsModule(),
             {
                 "livestock_animal_products_data": {
                     "available": True,
@@ -658,7 +659,7 @@ def test_market_monitor_report_blocks_use_human_module_heading():
             },
         ),
         (
-            market_graph.LabourMarketModule(),
+            mm_modules.LabourMarketModule(),
             {
                 "labour_market_data": {
                     "available": True,
@@ -687,7 +688,7 @@ def test_optional_module_llm_failure_interrupts_instead_of_using_fallback(module
 
 
 def test_exchange_rate_module_uses_existing_databridges_data_without_te(monkeypatch):
-    module = market_graph.ExchangeRateModule(api_key=None)
+    module = mm_modules.ExchangeRateModule(api_key=None)
 
     def fail_fetch(*_args, **_kwargs):
         raise AssertionError("TradingEconomics should not be called when DataBridges FX exists")
@@ -705,7 +706,7 @@ def test_exchange_rate_module_uses_existing_databridges_data_without_te(monkeypa
 
 
 def test_exchange_rate_module_falls_back_to_te_when_state_has_no_fx(monkeypatch):
-    module = market_graph.ExchangeRateModule(api_key="key")
+    module = mm_modules.ExchangeRateModule(api_key="key")
     dates = pd.date_range("2024-01-01", "2025-02-28", freq="D")
     te_df = pd.DataFrame({"Close": range(1, len(dates) + 1)}, index=dates)
     monkeypatch.setattr(module, "_fetch_historical_series", lambda **_kwargs: te_df)

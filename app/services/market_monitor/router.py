@@ -14,7 +14,9 @@ import logging
 import threading
 import traceback
 
-from .graph import run_report_generation, AVAILABLE_MODULES, normalize_qa_review
+from .graph import run_report_generation
+from .modules import AVAILABLE_MODULES
+from .qa import normalize_qa_review
 from .price_backfill import PriceDataGateError
 from .basket_calculation import BasketScopeValidationError
 from .food_basket import (
