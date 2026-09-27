@@ -1,6 +1,6 @@
 # Drafter layout: one file layout for the three drafters
 
-**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). Phases 0 and 1 (MFI) done on `refactor/drafter-layout` (not pushed); Phase 2 (Seasonal Outlook) waits for the go-ahead.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
+**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). Phases 0, 1 (MFI) and 2 (Seasonal Outlook) done on `refactor/drafter-layout` (not pushed); Phase 3 (Market Monitor) waits for the go-ahead.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
 
 ---
 
@@ -299,6 +299,11 @@ Work happens on `refactor/drafter-layout`, based on `refactor/shared-layer` @ `6
     - `PROBE=module:name` replaces what a test patches there with a callable that raises and counts. Hit > 0 proves the patch is live.
     - `PROBE_WATCH=module:name` counts calls through the real name. It checks the patches that must never be called.
     - One pytest run per target, so one probe's exception cannot hide another's.
+  - `stage_diff.py [REV]` (Seasonal): loads the Seasonal package of `REV` under another package name and walks the seven stages for AFY, AMX and ASE, comparing, stage by stage, `REV`'s `engine.request_for`/`accept` with the working tree's:
+    - the requests, key order included;
+    - the outcome of the fake model's reply and of variants that reach every check of `accept`: blocked, incomplete, empty and invalid replies, missing fields, maps issued after the cutoff or valid over a reversed interval (on one map and on two, which fixes the order of the checks), unknown figures, maps without signals, reviews of unknown or missing maps, a review that raises an issue and the refinement decisions on it (none, one, twice, with a late map), non-verbatim feedback quotes, refused reports, unknown evidence and seasons, every season of the calendar, and both report validators forced to fail;
+    - an outcome is the resulting state, or the exception type and message.
+    A deliberate swap of the two map-date checks in a restored copy of `engine.py` made it report 12 differences.
   - `closure_bodies.py [REV]` (MFI step 3): compares the body of each closure of the old `build_graph` with the function that replaced it, adding the `runtime` and `ledger` arguments to the `generate_family` calls the closures made.
 
 ### 8.2 Per commit
@@ -377,3 +382,19 @@ Taken on 26 September 2026:
 - **Captures after each commit, identical to the base:** MFI wire (14 generation and 14 token-count calls), MFI snapshots including `effective_contract` (Benin, Haiti, Gaza, misc), `p5_outputs` (81 files), the preview (11 fixtures), `import_all`, the pages.
 - **Other drafters:** at the end of the phase, the MM wire (12 requests) and the Seasonal wire (21 requests, stored records) and snapshots are identical to the base.
 - **Tooling fix during the phase:** `snapshot_mfi.py`'s context fallback knew only the old and the final layouts. Step 1's first capture failed on its `misc` part, and passed once the intermediate layout was added (§8.1).
+
+**Phase 2 (Seasonal Outlook), done 2026-09-27**, two commits, each verified as §8.2 describes:
+- **`e2ca35a` — `prompts.py`.**
+  - `science/evidence_prompts.py` (`git mv`) and `science/report_prompts.py` were merged by script, with the texts copied, not retyped.
+  - The clashing names were renamed, each occurrence counted: `EVIDENCE_COMMON`/`REPORT_COMMON`, `EVIDENCE_REVIEW`/`REPORT_REVIEW`, `evidence_prompt`/`report_prompt`.
+  - The two files' docstrings are kept as section comments.
+  - `moved_code.py`: all 13 texts and functions identical under their new names. `engine.request_for` changed only in its two prompt calls.
+- **`5a0d469` — `nodes/`.**
+  - Seven stage modules with `request` and `accept`, a dispatcher in `nodes/__init__.py`, and `nodes/export.py`.
+  - `engine.py` now holds `EVIDENCE_STAGES`, `CHAINS`, `initial_state`, `evidence_context`, and the five shared pieces (§5.3). It no longer imports the report contract.
+  - `build_graph` changed only in its export node and its imports.
+  - `stage_diff.py 68cec22`: 448 requests and reply outcomes compared, 0 differences. Every outcome is the same as on the step 1 tree.
+- **Tests:** only the module of the dispatch calls changed, `engine` to `nodes` (ten calls and one docstring). After each commit: 912 tests, 909 passed, 3 skipped, no status changed. The two Seasonal probes are live after each commit: `runner.profile` 35/20, `runner.llm_provider` 1/1.
+- **Captures after each commit, identical to the base:** the Seasonal wire (21 requests over AFY, AMX and ASE, all seven stages, export included), the stored records (with call-id suffixes masked), the snapshots, `import_all` (129 modules) and the pages.
+- **Browser cycle:** not run. No page or `ui.py` changed, the condition the brief sets for it, and the wire and snapshot flows run extract → feedback → confirm → report → export through `run_phase` end to end.
+- **Other drafters:** at the end of the phase, the MM wire (12 requests), the MFI wire (28 calls), the MFI snapshots, `p5_outputs` (81 files) and the preview (11 fixtures) are identical to the base.
