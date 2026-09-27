@@ -2,7 +2,8 @@
 import copy
 import json
 from datetime import date
-from .science import evidence_contract as ec, report_contract as rc, evidence_prompts as ep, report_prompts as rp
+from .prompts import effective_rules, evidence_prompt, report_prompt
+from .science import evidence_contract as ec, report_contract as rc
 from .science.files import model_case
 from .science.profiles import profiles
 
@@ -35,7 +36,7 @@ def request_for(stage, state):
             payload['visual_review'] = ec.model_review(state['review'], lookup)
         if stage == 'feedback':
             payload['analyst_comments'] = state['analyst_comments']
-        system, effective = ep.prompt(state, stage)
+        system, effective = evidence_prompt(state, stage)
         reverse = {v: k for k, v in lookup['figures'].items()}
         images = [{**m, 'figure_id': reverse[m['figure_id']]} for m in state['images']]
         schema = ec.schema(stage, lookup)
@@ -47,7 +48,7 @@ def request_for(stage, state):
             payload['initial_analysis'] = rc.model_report(state['initial_analysis'], state['evidence'])
         if stage == 'redraft':
             payload['draft_review'] = rc.model_review(state['draft_review'], state['evidence'])
-        system, effective, images = rp.prompt(stage, state), rp.effective_rules(state), []
+        system, effective, images = report_prompt(stage, state), effective_rules(state), []
         schema = rc.review_schema(state) if stage == 'report_review' else rc.draft_schema(state)
         version = rc.VERSION
     return dict(stage=stage, system=system, payload=payload, images=images, schema=schema.model_json_schema(),
