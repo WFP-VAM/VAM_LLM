@@ -1,6 +1,6 @@
 # Drafter layout: one file layout for the three drafters
 
-**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). Phases 0, 1 (MFI) and 2 (Seasonal Outlook) done on `refactor/drafter-layout` (not pushed); Phase 3 (Market Monitor) waits for the go-ahead.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
+**Status: approved 26 September 2026 (the user's four layout decisions, then this plan and three further decisions, §9). Phases 0 to 3 (MFI, Seasonal Outlook, Market Monitor) done on `refactor/drafter-layout` (not pushed); Phase 4 (close-out) waits for the go-ahead.** Based on `refactor/shared-layer` @ `68cec22`, after the shared-layer rationalization (`shared_layer_rationalization.md`). Release gate unchanged (rule D9 of that plan): nothing is merged or deployed before the user accepts Phase 7 of the coherence refactor on GCP and releases the D8 fixes. This refactor ships after the shared-layer one.
 
 ---
 
@@ -304,6 +304,12 @@ Work happens on `refactor/drafter-layout`, based on `refactor/shared-layer` @ `6
     - the outcome of the fake model's reply and of variants that reach every check of `accept`: blocked, incomplete, empty and invalid replies, missing fields, maps issued after the cutoff or valid over a reversed interval (on one map and on two, which fixes the order of the checks), unknown figures, maps without signals, reviews of unknown or missing maps, a review that raises an issue and the refinement decisions on it (none, one, twice, with a late map), non-verbatim feedback quotes, refused reports, unknown evidence and seasons, every season of the calendar, and both report validators forced to fail;
     - an outcome is the resulting state, or the exception type and message.
     A deliberate swap of the two map-date checks in a restored copy of `engine.py` made it report 12 differences.
+  - `mm_move.py STEP` (Market Monitor): moves the definitions §5.1 assigns to a step's modules out of `graph.py`.
+    - Each definition is cut verbatim, with a comment attached directly above it; section banners left without a definition go.
+    - Each module's imports are derived from its code: `symtable`'s global names plus the names in annotations. They are rendered in `graph.py`'s groups, with one statement per module.
+    - The tests' `market_graph.<name>` references and `setattr(market_graph, "<name>")` patch targets are pointed at each moved name's module.
+    - A definition that would need a name still in `graph.py` stops the step. So would any module other than `service.py` importing `graph.py`.
+    - It does not see patches of names `graph.py` only imported: `resolve_report_price_data` in step 4, `build_graph` in step 7. Those were retargeted by hand, and the probes check them.
   - `closure_bodies.py [REV]` (MFI step 3): compares the body of each closure of the old `build_graph` with the function that replaced it, adding the `runtime` and `ledger` arguments to the `generate_family` calls the closures made.
 
 ### 8.2 Per commit
@@ -398,3 +404,26 @@ Taken on 26 September 2026:
 - **Captures after each commit, identical to the base:** the Seasonal wire (21 requests over AFY, AMX and ASE, all seven stages, export included), the stored records (with call-id suffixes masked), the snapshots, `import_all` (129 modules) and the pages.
 - **Browser cycle:** not run. No page or `ui.py` changed, the condition the brief sets for it, and the wire and snapshot flows run extract → feedback → confirm → report → export through `run_phase` end to end.
 - **Other drafters:** at the end of the phase, the MM wire (12 requests), the MFI wire (28 calls), the MFI snapshots, `p5_outputs` (81 files) and the preview (11 fixtures) are identical to the base.
+
+**Phase 3 (Market Monitor), done 2026-09-27**, seven commits, each verified as §8.2 describes (`moved_code.py`, lint, `import_all`, the suite, the MM wire, `p5_outputs`, the preview, the pages and the probes):
+- **`0e1d019` — `state.py`, `runtime.py`, `text.py`.** The five `llm_provider` patches target `runtime`, where `llm_client` looks the name up. The package's lazy `create_initial_state` reads `state`. `get_type_hints(MarketReportState)` resolves all 50 fields from `state.py`, as LangGraph needs.
+- **`8a7f517` — `prompts.py`.**
+  - `git mv` of `prompts/` to `prompt_templates/` (22 files) and of `prompt_registry.py` to `prompts.py`: 23 renames at 100% similarity. The templates are still LF in index and working tree, and the manifest test passes.
+  - The prompt inputs were copied from `graph.py`'s text.
+  - The two builders hold the nodes' f-strings: a check asserted that each builder contains the node's literal, with `{state['country']}` → `{country}` as the only edit.
+  - The MM wire (12 requests, event extraction and trend analysis in English and French) is identical.
+- **`34dbbb4` — `basket_context.py`, `qa.py`, `modules.py`.** The router imports `AVAILABLE_MODULES` and `normalize_qa_review` from their modules, and the lazy exports read `modules`. Four section banners left empty were dropped.
+- **`717cfd8` — nodes `data_agent`, `graph_designer` (873 lines with its 27 helpers), `news_retrieval`.** The Phase 7 QA script imports `node_graph_designer` from its node module, and `test_market_monitor_phase7` passes.
+- **`4ddd79a` — nodes `event_mapper`, `trend_analyst`, `module_orchestrator`.**
+- **`448bdba` — nodes `highlights_drafter`, `narrative_drafter`, `red_team`, `prepare_correction`.** Also removes three duplicate node imports that `4ddd79a` left in `graph.py` (see below).
+- **`d9ba22a` — `service.py` and the slim `graph.py` (109 lines).** The router and the lazy `run_report_generation` export read `service`. The test replaces `build_graph` in `service`. The guard against direct model calls reads `graph.py`, `service.py` and every node module.
+- **Evidence.**
+  - `moved_code.py 68cec22`: all 90 names of `graph.py` and the 12 of `prompt_registry.py` are identical in their new modules. The exceptions are the three intended changes (`PROMPT_ROOT`, and the two nodes calling the builders) and the two new builders.
+  - After each commit: 912 tests, 909 passed, 3 skipped, no status changed. MM wire: 12 requests, 0 differences. `p5_outputs`: 81 files, 0 differences. Preview: 11 fixtures identical. Pages: all render.
+  - The 8 MM patch sites are live at their final targets. That includes the router's own `run_report_generation` patch, whose target did not change.
+- **What went wrong and was caught.**
+  - The mover twice produced wrong imports on its first run of a step: duplicated names in step 2, and a node module path in step 4, where it stopped before writing. Each time its output was discarded, the mover fixed, and the step rerun from the committed tree.
+  - It also rendered a one-name statement on three lines. That was fixed before step 4 was committed.
+  - One slip reached a commit: `4ddd79a`'s `graph.py` imports three node functions twice. It is harmless, since the same objects are imported, but untidy. The mover then merged statements of the same module, `448bdba` removes the duplicates, and a scan finds no repeated import in any MM module.
+  - In step 4, a test failed because its `resolve_report_price_data` patch still targeted `graph.py`. It failed loudly, since no shim was left, and the probe pinpointed the target. It was retargeted before the commit.
+- **Phase-end check after `d9ba22a`:** every capture of all three drafters is identical to the base. That is MM, MFI (wire and snapshots), Seasonal (wire, stored records and snapshots), `p5_outputs`, the preview and the pages, with `stage_diff.py` at 448 comparisons and 0 differences.
