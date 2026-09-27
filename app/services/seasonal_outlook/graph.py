@@ -10,7 +10,9 @@ invocations, so the graph needs no checkpointer: the analysis record keeps what 
 from langgraph.graph import END, START, StateGraph
 
 from .calls import llm_request
-from .engine import CHAINS, accept, request_for
+from .engine import CHAINS
+from .nodes import accept, request_for
+from .nodes import export as export_node
 from .science.state import SeasonalState
 
 
@@ -40,7 +42,7 @@ def build_graph(llm, recorder, *, timeout, namespace, export):
             graph.add_node(name, stage(name))
         for current, following in zip(stages, stages[1:]):
             graph.add_edge(current, following)
-    graph.add_node('export', lambda state: {'artifacts': export(state)})
+    graph.add_node('export', lambda state: export_node.export(state, export))
     graph.add_conditional_edges(START, lambda state: state['phase'],
                                 {phase: stages[0] for phase, stages in CHAINS.items()})
     graph.add_edge(CHAINS['extract'][-1], END)

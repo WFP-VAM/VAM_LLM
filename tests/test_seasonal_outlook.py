@@ -12,7 +12,7 @@ from app.services.seasonal_outlook.config import Settings
 from app.services.seasonal_outlook.storage import MemoryStore, Conflict
 from app.services.seasonal_outlook.service import DEADLINE_MARGIN_SECONDS, Gone, Service, Unavailable, ordered
 from app.services.seasonal_outlook.runner import run_phase
-from app.services.seasonal_outlook import engine
+from app.services.seasonal_outlook import engine, nodes
 from app.services.seasonal_outlook.inputs import regions, inspect_image, season_mode
 from app.services.seasonal_outlook.calls import llm_request, profile, vertex_schema
 from app.services.seasonal_outlook import runner
@@ -88,7 +88,7 @@ class FakeProvider:
 
 
 def reply(provider, request):
-    """The fake's reply to an app-level stage request, as engine.accept reads it."""
+    """The fake's reply to an app-level stage request, as nodes.accept reads it."""
     response = provider.generate(None, llm_request(request, 600, 'test'))
     return dict(text=response.text, finish_reason=response.finish_reason)
 
@@ -428,15 +428,15 @@ def test_input_limits_dates_and_immutable_inputs(service):
 def test_unknown_ids_and_empty_json_rejected(service):
     run = prepared(service)
     state = engine.initial_state(service.validate(run['id']), run['maps'])
-    request = engine.request_for('extraction', state)
+    request = nodes.request_for('extraction', state)
     response = reply(FakeProvider(), request)
     value = json.loads(response['text'])
     value['maps'][0]['figure_id'] = 'invented'
     with pytest.raises(ValueError):
-        engine.accept('extraction', state, {**response, 'text': json.dumps(value)}, 'test')
+        nodes.accept('extraction', state, {**response, 'text': json.dumps(value)}, 'test')
     for text in ('', '{invalid', '{}'):
         with pytest.raises(ValueError):
-            engine.accept('extraction', state, {**response, 'text': text}, 'test')
+            nodes.accept('extraction', state, {**response, 'text': text}, 'test')
 
 
 def test_fastapi_and_local_dispatch_share_service(service, monkeypatch):
@@ -465,7 +465,7 @@ def test_gemini_configuration_and_gcs_images(service, vertex_wire):
     sent, _ = vertex_wire
     run = prepared(service)
     state = engine.initial_state(service.validate(run['id']), run['maps'])
-    request = engine.request_for('extraction', state)
+    request = nodes.request_for('extraction', state)
     llm = LLMClient(profile(service.settings, 1200), provider=VertexProvider())
     response = llm.generate(llm_request(request, 1200, 'test')).response
     call = sent[0]
@@ -485,7 +485,7 @@ def test_no_workstation_project_and_only_original_gcs_images(service):
     with pytest.raises(ValueError, match='Explicit Seasonal project required'):
         profile(replace(service.settings, project=''), 600)
     run = prepared(service)
-    request = engine.request_for('extraction', engine.initial_state(service.validate(run['id']), run['maps']))
+    request = nodes.request_for('extraction', engine.initial_state(service.validate(run['id']), run['maps']))
     request['images'][0]['uri'] = 'https://example.test/map.png'
     with pytest.raises(ValueError, match='original GCS objects'):
         llm_request(request, 600, 'test')
@@ -601,11 +601,11 @@ def test_real_sdk_wire_conversion_without_network(service, monkeypatch):
     llm = LLMClient(profile(service.settings, 600), provider=VertexProvider())
     fake = FakeProvider()
     for stage in ('extraction', 'review', 'refinement', 'draft', 'report_review', 'redraft'):
-        request = engine.request_for(stage, state)
+        request = nodes.request_for(stage, state)
         wire_response = dict(candidates=[dict(content=dict(role='model', parts=[dict(text=reply(fake, request)['text'])]), finishReason='STOP')],
                              modelVersion='gemini-3.1-pro-preview', usageMetadata=dict(promptTokenCount=10, candidatesTokenCount=20))
         result = llm.generate(llm_request(request, 600, 'wire-test')).response
-        state = engine.accept(stage, state, dict(text=result.text, finish_reason=result.finish_reason), 'wire-test')
+        state = nodes.accept(stage, state, dict(text=result.text, finish_reason=result.finish_reason), 'wire-test')
     assert len(calls) == 6
     assert calls[0]['generationConfig']['maxOutputTokens'] == 32768
     assert calls[-1]['generationConfig']['maxOutputTokens'] == 65536
@@ -620,7 +620,7 @@ def test_the_client_retries_a_server_error_once_and_never_a_refusal(service, ver
     calls, replies = vertex_wire
     replies += [httpx.Response(status, json={'error': {'code': status, 'message': 'Synthetic', 'status': code}})] * 2
     run = prepared(service)
-    request = engine.request_for('extraction', engine.initial_state(service.validate(run['id']), run['maps']))
+    request = nodes.request_for('extraction', engine.initial_state(service.validate(run['id']), run['maps']))
     llm = LLMClient(profile(service.settings, 600), provider=VertexProvider(), sleep=lambda _seconds: None)
     with pytest.raises(LLMCallError) as caught:
         llm.generate(llm_request(request, 600, 'test'))
