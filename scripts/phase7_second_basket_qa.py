@@ -40,7 +40,7 @@ from app.services.market_monitor.food_basket import (
     DEFAULT_PRIMARY_BASKET_DESCRIPTION,
     SqlCountryFoodBasketRepository,
 )
-from app.services.market_monitor.graph import node_graph_designer
+from app.services.market_monitor.nodes.graph_designer import node_graph_designer
 from app.services.price_cache.config import load_price_cache_config
 from app.services.price_cache.fixtures import seed_cache_snapshot
 from app.services.price_cache.migrations import apply_migrations
