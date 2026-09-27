@@ -1,6 +1,10 @@
 import json
 
 from app.services.market_monitor import graph as market_graph
+from app.services.market_monitor.nodes import highlights_drafter as highlights_drafter_node
+from app.services.market_monitor.nodes import narrative_drafter as narrative_drafter_node
+from app.services.market_monitor.nodes import prepare_correction as prepare_correction_node
+from app.services.market_monitor.nodes import red_team as red_team_node
 from app.services.market_monitor.nodes import module_orchestrator as module_orchestrator_node
 from app.services.market_monitor.nodes import trend_analyst as trend_analyst_node
 from app.services.market_monitor import basket_context as mm_basket_context
@@ -264,7 +268,7 @@ def test_highlights_receives_context_and_exact_correction_flags(monkeypatch):
         }
     ]
 
-    result = market_graph.node_highlights_drafter(state)
+    result = highlights_drafter_node.node_highlights_drafter(state)
 
     assert result["report_draft_sections"]["HIGHLIGHTS"] == "Corrected highlights"
     assert "Primary and secondary values were exchanged" in llm.prompts[0]
@@ -300,7 +304,7 @@ def test_narrative_correction_updates_only_target_and_uses_adaptive_ranges(monke
         }
     ]
 
-    result = market_graph.node_narrative_drafter(state)
+    result = narrative_drafter_node.node_narrative_drafter(state)
 
     assert result["report_draft_sections"]["MARKET_OVERVIEW"] == "Corrected overview"
     assert result["report_draft_sections"]["COMMODITY_ANALYSIS"] == "Keep commodity"
@@ -317,7 +321,7 @@ def test_correction_targets_material_flags_only_and_unknown_is_global():
 
     material = [{"section": "not-a-section", "severity": "high"}]
     assert market_graph.should_correct({"skeptic_flags": material, "correction_attempts": 0}) == "correct"
-    prepared = market_graph.node_prepare_correction(
+    prepared = prepare_correction_node.node_prepare_correction(
         {"skeptic_flags": material, "correction_attempts": 1}
     )
     assert prepared["correction_targets"] == ["GLOBAL"]
@@ -390,7 +394,7 @@ def test_red_team_receives_basket_ground_truth_and_normalizes_flags(monkeypatch)
         "HIGHLIGHTS": "MEB Côte costs 70 while Panier pastoral costs 120."
     }
 
-    result = market_graph.node_red_team(state)
+    result = red_team_node.node_red_team(state)
 
     assert '"current_cost": 120.0' in llm.prompts[0]
     assert '"current_cost": 70.0' in llm.prompts[0]
