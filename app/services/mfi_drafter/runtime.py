@@ -7,23 +7,12 @@ import logging
 import threading
 import time
 
-from app.shared.llm import (EMPTY, INVALID_JSON, TRUNCATED_FINISH_REASONS, LLMCallError, LLMRequest,
-    ModelProfile, is_transient, log_llm_run_summary)
+from app.shared.llm import EMPTY, INVALID_JSON, LLMCallError, LLMRequest, is_transient, log_llm_run_summary
 from .errors import MFIRunError
-from .reliable_contracts import fingerprint
-from .contracts import (MODEL, NODES, WORKFLOW, MAX_CHARACTERS, MAX_INPUT_TOKENS,
-    MAX_OUTPUT_TOKENS, ReviewResponse, dumps, inspect_sections,
-    parse_response, response_schema)
+from .contracts import NODES, WORKFLOW, ReviewResponse, dumps, inspect_sections, parse_response, response_schema
 from .prompts import instructions
 
 logger = logging.getLogger(__name__)
-
-# Each attempt is a single call: ModelRuntime chooses between retry and repair within two attempts.
-PROFILE = ModelProfile(service="mfi-drafter", model=MODEL, location="global", temperature=1.0,
-                       timeout_seconds=600, max_output_tokens=MAX_OUTPUT_TOKENS, candidate_count=1)
-SUMMARY_TIMEOUT_SECONDS = 180
-COUNT_TIMEOUT_SECONDS = 30
-
 
 class Oversized(MFIRunError):
     def __init__(self, characters, tokens=None):
@@ -88,7 +77,7 @@ def public_diagnostics(manifest, trace):
                    "reused": phases.get(name, {}).get("reused", False)} for name in NODES]
     counts = Counter(row["status"] for row in phase_rows)
     state = manifest["execution_state"]
-    return {"narrative_orchestration_version": "mfi-light-v1", "model": MODEL,
+    return {"narrative_orchestration_version": "mfi-light-v1", "model": manifest.get("runtime", {}).get("model"),
         "phases": phase_rows, "work_totals": {"planned": len(NODES), **{k: counts[k] for k in ("pending", "running", "succeeded", "failed")}},
         "progress_pct": int(100 * counts["succeeded"] / len(NODES)),
         "model_attempt_total": trace["total_calls"], "token_count_requests": manifest.get("light_token_count_requests", 0),
@@ -144,32 +133,16 @@ class ModelRuntime:
         manifest = self.ledger.read()
         if any(phase.get("status") == "failed" for phase in manifest.get("light_phases", {}).values()):
             raise Stopped()
-        payload = {"model": PROFILE.model, "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generation_config": {"response_schema": schema, "response_mime_type": "application/json",
-                                  "temperature": PROFILE.temperature, "max_output_tokens": PROFILE.max_output_tokens}}
-        characters, key = len(dumps(payload)), fingerprint(payload)
-        if characters > MAX_CHARACTERS:
-            raise Oversized(characters)
-        tokens = manifest.get("light_token_counts", {}).get(key)
-        if tokens is None:
-            request = LLMRequest(operation="mfi.light."+node+".v1", node=node, parts=[prompt], response_schema=schema,
-                                 json_output=True, timeout_seconds=COUNT_TIMEOUT_SECONDS)
-            for attempt in range(2):
-                self.ledger.change(lambda v: v.update(light_token_count_requests=v.get("light_token_count_requests", 0)+1))
-                try:
-                    tokens = self.llm.count_tokens(request)
-                    break
-                except Exception as exc:
-                    if attempt or not retryable(exc):
-                        raise
-                    time.sleep(1)
-            self.ledger.change(lambda v: v.setdefault("light_token_counts", {}).update({key: tokens}))
-        if tokens > MAX_INPUT_TOKENS:
-            raise Oversized(characters, tokens)
-        return characters, tokens, key
+        request = LLMRequest(operation="mfi.light."+node+".v1", node=node, parts=[prompt],
+                             response_schema=schema, json_output=True)
+        def counted():
+            self.ledger.change(lambda v: v.update(light_token_count_requests=v.get("light_token_count_requests", 0)+1))
+        measured = self.llm.measure(request, on_count=counted)
+        if not measured.allowed:
+            raise Oversized(measured.characters, measured.input_tokens)
+        return measured.characters, measured.input_tokens, measured.fingerprint
 
     def invoke(self, node, work_id, package, section_ids, *, review=False):
-        timeout = SUMMARY_TIMEOUT_SECONDS if node == "executive_summary" else PROFILE.timeout_seconds
         schema = response_schema(review)
         prompt = instructions(node) + "\nREQUEST:\n" + dumps(package)
         _, _, dependency = self.budget(prompt, schema, node)
@@ -178,9 +151,9 @@ class ModelRuntime:
             "status": "pending", "section_ids": section_ids, "issues": [], "node": node}))
         accepted, issues, notes = {}, [], []
 
-        def consume(payload, finish_reason, requested):
+        def consume(payload, outcome, requested):
             nonlocal issues
-            truncated = str(finish_reason).upper() in TRUNCATED_FINISH_REASONS
+            truncated = outcome == "truncated"
             if review:
                 if truncated:
                     raise InvalidResponse("Review output was truncated")
@@ -231,11 +204,11 @@ class ModelRuntime:
                 raise
             self.ledger.change(lambda v: v["light_work"][key].update(status="running"))
             request = LLMRequest(operation="mfi.light."+node+".v1", node=node, parts=[outgoing],
-                response_schema=schema, json_output=True, timeout_seconds=timeout, work_item=key,
+                response_schema=schema, json_output=True, work_item=key,
                 retry_of=None if repair else failed, repair_of=failed if repair else None)
             try:
                 result = self.llm.generate(request, parse=parse_response,
-                    validate=lambda payload, response: consume(payload, response.finish_reason, requested))
+                    validate=lambda payload, response: consume(payload, response.outcome, requested))
             except Exception as exc:
                 reason = rejection(exc)
                 self.ledger.change(lambda v: v["light_work"][key].update(status="failed", issues=[reason] if reason else []))

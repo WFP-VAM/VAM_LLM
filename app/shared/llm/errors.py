@@ -12,11 +12,7 @@ REQUEST_PERSISTENCE = "llm_request_persistence_error"
 RESPONSE_PERSISTENCE = "llm_response_persistence_error"
 
 # A reply came back but was unusable: the failures that run diagnostics count as contract failures.
-CONTRACT_FAILURES = frozenset({EMPTY, TRUNCATED, INVALID_JSON, CONTRACT})
-
-_TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
-_TRANSIENT_STATUSES = {"DEADLINE_EXCEEDED", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "INTERNAL", "ABORTED"}
-
+CONTRACT_FAILURES = frozenset({EMPTY, TRUNCATED, INVALID_JSON, CONTRACT, "llm_response_blocked", "llm_response_unknown"})
 
 class LLMCallError(RuntimeError):
     """A failed call. `failure_code` and `stage` are stable; the message never carries prompt or reply text."""
@@ -61,13 +57,8 @@ class LLMCallError(RuntimeError):
 
 def is_transient(error: BaseException) -> bool:
     """Timeouts, rate limits, server-side and network failures. Never permission, argument or not-found errors."""
-    try:
-        from google.genai import errors as genai_errors
-
-        if isinstance(error, genai_errors.APIError):
-            return error.code in _TRANSIENT_CODES or str(error.status or "").upper() in _TRANSIENT_STATUSES
-    except ImportError:
-        pass
+    if isinstance(error, ProviderError):
+        return error.transient
     try:
         import httpx
 
@@ -76,3 +67,10 @@ def is_transient(error: BaseException) -> bool:
     except ImportError:
         pass
     return isinstance(error, (TimeoutError, ConnectionError))
+
+
+class ProviderError(RuntimeError):
+    """Adapter failure independent of the SDK; never a content-repair target."""
+    def __init__(self, message: str, *, kind: str = "transport", transient: bool = False):
+        self.kind, self.transient = kind, transient
+        super().__init__(message)

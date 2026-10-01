@@ -103,7 +103,7 @@ def test_call_can_complete_after_sixty_seconds_with_a_longer_deadline(monkeypatc
 
     class Provider:
         def generate(self, _profile, _request):
-            return LLMResponse(text='{"flags": []}')
+            return LLMResponse(outcome="completed", text='{"flags": []}')
 
     profile = market_monitor_profile()
     client = LLMClient(profile, tracer=Tracer(service="market-monitor", run_id="long-review"), provider=Provider())

@@ -69,7 +69,7 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
   `graph.py` (the graph), `nodes/` (one module per node type), `prompts.py`
   (prompt texts) and `service.py` (the entry point). The Seasonal Outlook keeps an
   analysis record for its analyst review; see `docs/app-overview.md`.
-- `app/services/price_cache/` — DataBridges price cache (SQLite or Cloud SQL)
+- `app/services/price_cache/` — DataBridges price cache (SQLite or PostgreSQL)
   and its DataBridges client, behind the Price Bulletin Drafter.
 - `app/shared/` — process set-up (environment, logging, Google Cloud project),
   the LLM client (`llm/`: model profiles, the google-genai provider, call
@@ -90,6 +90,9 @@ python scripts/check_mfi_reliable.py   # MFI regression gate
   as a regression gate.
 
 ## Documentation
+
+- `docs/cloud-provider-boundary.md` — neutral service contracts, shared adapters, configuration,
+  record-version discontinuity and future AWS integration points.
 
 - `docs/app-overview.md` — architecture, integrations, pipelines.
 - `specs/` — dated design and assessment documents, including

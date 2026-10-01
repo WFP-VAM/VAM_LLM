@@ -1,0 +1,2 @@
+# Prompt manifests hash canonical bytes; preserve them on Windows checkouts.
+app/services/market_monitor/prompt_templates/**/*.txt text eol=lf

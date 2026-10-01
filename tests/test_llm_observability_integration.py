@@ -30,7 +30,7 @@ def mfi_csv_upload(monkeypatch):
 
 def _trace(service, run_id, status, total_calls=0):
     return {
-        "trace_schema_version": "1.0",
+        "trace_schema_version": "2.0",
         "service": service,
         "run_id": run_id,
         "status": status,

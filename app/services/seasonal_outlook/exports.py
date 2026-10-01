@@ -42,14 +42,14 @@ def word(state, maps, store, include_maps=False):
             document.add_heading(f'Figure {index} · {item["name"]}', 2)
             document.add_paragraph(figure['metadata_note'])
             data = store.read(item['object'])
-            # Word cannot embed WebP; preserve the original in GCS/ZIP and
+            # Word cannot embed WebP; preserve the original in object storage/ZIP and
             # convert only its rendered appendix representation.
             with Image.open(io.BytesIO(data)) as image:
                 width, height = image.size
                 if image.format == 'WEBP' or width > 1860 or height > 1800:
                     # Bound Word's embedded raster to 300 dpi at its page size.
                     # This prevents twelve large WebP maps expanding beyond the
-                    # worker's memory budget; originals remain in GCS and ZIP.
+                    # worker's memory budget; originals remain in object storage and ZIP.
                     image.thumbnail((1860, 1800), Image.Resampling.LANCZOS)
                     converted = io.BytesIO()
                     rgba = image.convert('RGBA')

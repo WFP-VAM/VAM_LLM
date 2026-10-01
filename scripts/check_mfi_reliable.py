@@ -6,7 +6,8 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 tests = sorted(str(path.relative_to(root)) for path in (root / "tests").glob("test_mfi*.py"))
-tests += ["tests/test_llm_observability.py", "tests/test_llm_observability_integration.py",
+tests += ["tests/test_vertex_mfi.py", "tests/test_vertex_llm.py", "tests/test_vertex_boundary.py",
+          "tests/test_cloud_neutral.py", "tests/test_runs.py", "tests/test_llm_observability.py", "tests/test_llm_observability_integration.py",
           "tests/test_live_async_visibility.py", "tests/test_streamlit_shared_timeouts.py",
           "tests/test_llm_runtime_config.py", "tests/test_streamlit_report_delivery.py"]
 (root / ".tmp").mkdir(exist_ok=True)

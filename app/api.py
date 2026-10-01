@@ -8,6 +8,8 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from app.shared.runs.store import UnsupportedRunVersion
 
 from app.services.market_monitor.router import router as market_monitor_router
 from app.services.mfi_drafter.router import router as mfi_drafter_router
@@ -63,3 +65,8 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+
+
+@app.exception_handler(UnsupportedRunVersion)
+async def unsupported_run_version(_request, exc):
+    return JSONResponse(status_code=410, content={"detail": str(exc)})

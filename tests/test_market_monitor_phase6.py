@@ -172,7 +172,7 @@ class _CaptureLLM:
 
     def generate(self, _profile, request):
         self.prompts.append(request.parts[0])
-        return LLMResponse(text=self.response)
+        return LLMResponse(outcome="completed", text=self.response)
 
 
 def test_basket_context_preserves_identity_scope_order_and_completeness():

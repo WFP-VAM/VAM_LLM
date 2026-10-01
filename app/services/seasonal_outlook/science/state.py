@@ -5,7 +5,7 @@ from typing import Literal, TypedDict
 class SeasonalState(TypedDict, total=False):
     phase: Literal['extract', 'feedback', 'report']
     pack: dict
-    images: list[dict]  # GCS references with figure notes, never the bytes
+    images: list[dict]  # Original object references with figure notes, never the bytes
     arm: Literal['rules']
     rules: list[dict]
     evidence_profile: dict

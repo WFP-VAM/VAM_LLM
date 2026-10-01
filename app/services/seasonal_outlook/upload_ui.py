@@ -46,7 +46,7 @@ def map_upload_panel(run, info, request_json):
     files = st.file_uploader('Map images — select all maps at once',
         type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True,
         max_upload_size=30, disabled=not info['enabled'], key=f'{prefix}_{generation}')
-    st.caption('Gemini identifies map products and reads titles, legends and periods during extraction. '
+    st.caption('The model identifies map products and reads titles, legends and periods during extraction. '
                'You can leave all optional map details unchanged.')
     pending, invalid = [], False
     try:
@@ -74,7 +74,7 @@ def map_upload_panel(run, info, request_json):
                 if suggestion != 'other':
                     st.caption('Category suggested from the filename prefix. Check it against the map.')
                 else:
-                    st.caption('Leave “Other / not yet identified” to let Gemini identify the product during extraction.')
+                    st.caption('Leave “Other / not yet identified” to let the model identify the product during extraction.')
                 issue = st.date_input('Issue date (optional)', value=None,
                     max_value=date.fromisoformat(run['report_date']), key=widget_key + '_issue')
                 note = st.text_area('Map note (optional)', max_chars=10000, key=widget_key + '_note')

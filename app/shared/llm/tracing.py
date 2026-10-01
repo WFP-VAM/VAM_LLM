@@ -29,7 +29,7 @@ from .errors import REQUEST_PERSISTENCE, RESPONSE_PERSISTENCE
 from .profiles import ModelProfile
 from .protocol import FilePart, LLMRequest, LLMResponse
 
-TRACE_SCHEMA_VERSION = "1.0"
+TRACE_SCHEMA_VERSION = "2.0"
 
 TransportStatus = Literal["not_started", "succeeded", "failed"]
 ProcessingStatus = Literal["not_requested", "passed", "failed"]
@@ -45,7 +45,7 @@ _CALL_FAILURE_STAGES = {"transport", *_PERSISTENCE_STAGES}
 class LLMCallDiagnostic(BaseModel):
     """Sanitized record of one attempt at a model call."""
 
-    trace_schema_version: Literal["1.0"] = TRACE_SCHEMA_VERSION
+    trace_schema_version: Literal["2.0"] = TRACE_SCHEMA_VERSION
     call_id: str
     sequence: int = Field(ge=1)
     service: str
@@ -55,7 +55,8 @@ class LLMCallDiagnostic(BaseModel):
     artifact_type: Optional[str] = None
     artifact_id: Optional[str] = None
     correction_attempt: int = Field(default=0, ge=0)
-    provider: str = "vertex_ai"
+    provider: str
+    parameters: Dict[str, Any] = Field(default_factory=dict)
     model: str
     location: str
     configured_timeout_seconds: float = 60.0
@@ -81,6 +82,9 @@ class LLMCallDiagnostic(BaseModel):
     response_character_count: Optional[int] = Field(default=None, ge=0)
     response_sha256: Optional[str] = None
     provider_response_id: Optional[str] = None
+    outcome: Optional[str] = None
+    contract_schema_hash: Optional[str] = None
+    transport_schema_hash: Optional[str] = None
     finish_reason: Optional[str] = None
     token_usage: Dict[str, Optional[int]] = Field(default_factory=dict)
     failure_code: Optional[str] = None
@@ -100,7 +104,7 @@ class LLMCallDiagnostic(BaseModel):
 class LLMRunDiagnostics(BaseModel):
     """Sanitized run-level summary propagated through APIs and live metadata."""
 
-    trace_schema_version: Literal["1.0"] = TRACE_SCHEMA_VERSION
+    trace_schema_version: Literal["2.0"] = TRACE_SCHEMA_VERSION
     service: str
     run_id: str
     status: Literal["not_started", "running", "completed", "failed"] = "not_started"
@@ -118,7 +122,7 @@ class LLMRunDiagnostics(BaseModel):
 
 
 class LLMObservabilityConfig(BaseModel):
-    trace_schema_version: Literal["1.0"] = TRACE_SCHEMA_VERSION
+    trace_schema_version: Literal["2.0"] = TRACE_SCHEMA_VERSION
     payload_capture_enabled: bool
     payload_storage_configured: bool
     configuration_status: Literal["disabled", "configured", "invalid"]
@@ -205,7 +209,7 @@ def _json_safe(value: Any) -> Any:
 def prompt_text(request: LLMRequest) -> str:
     """What prompt size and hash are computed over: system instruction (if any), text parts and file URIs."""
     pieces = [request.system] if request.system else []
-    pieces.extend(part.uri if isinstance(part, FilePart) else part for part in request.parts)
+    pieces.extend(json.dumps(part.reference, sort_keys=True) if isinstance(part, FilePart) else part for part in request.parts)
     return "\n".join(pieces)
 
 
@@ -260,7 +264,7 @@ def _persist_payload(
         for part in (
             prefix,
             "llm-traces",
-            "v1",
+            "v2",
             _safe_slug(service),
             _safe_slug(run_id),
             f"{sequence:04d}-{_safe_slug(call_id)}.json.gz",
@@ -307,11 +311,10 @@ class Tracer:
         self._calls: List[LLMCallDiagnostic] = []
         self._started: Dict[str, float] = {}
         if initial:
-            try:
-                parsed = LLMRunDiagnostics.model_validate(initial)
-                self._calls = [item.model_copy(deep=True) for item in parsed.calls]
-            except Exception:
-                self._calls = []
+            if initial.get("trace_schema_version") != TRACE_SCHEMA_VERSION:
+                raise ValueError("This trace uses an incompatible runtime format")
+            parsed = LLMRunDiagnostics.model_validate(initial)
+            self._calls = [item.model_copy(deep=True) for item in parsed.calls]
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -393,6 +396,7 @@ class Tracer:
         request: LLMRequest,
         *,
         retry_of: Optional[str] = None,
+        transport_schema_hash: Optional[str] = None,
     ) -> LLMCallDiagnostic:
         """Record a new call. A call that retries or repairs an earlier one is that call's next attempt."""
         text = prompt_text(request)
@@ -413,6 +417,13 @@ class Tracer:
                 artifact_type=request.artifact_type,
                 artifact_id=request.artifact_id,
                 correction_attempt=request.correction_attempt,
+                provider=profile.provider,
+                parameters={**{name: getattr(profile, name) for name in ("temperature", "thinking_level", "media_resolution",
+                                                                     "include_thoughts", "candidate_count")},
+                            "max_output_tokens": request.max_output_tokens or profile.max_output_tokens},
+                contract_schema_hash=_sha256(json.dumps(request.response_schema, ensure_ascii=False, sort_keys=True,
+                                                        separators=(",", ":"))) if request.response_schema is not None else None,
+                transport_schema_hash=transport_schema_hash,
                 model=profile.model,
                 location=profile.location,
                 configured_timeout_seconds=request.timeout_seconds or profile.timeout_seconds,
@@ -461,6 +472,7 @@ class Tracer:
         self.update(
             record,
             transport_status="succeeded",
+            outcome=response.outcome,
             finish_reason=response.finish_reason,
             token_usage=dict(response.usage),
             provider_response_id=response.response_id,

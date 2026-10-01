@@ -16,9 +16,6 @@ class PriceCacheConfig:
     sqlite_path: Path
     database_url: Optional[str]
     retain_versions: int
-    gcp_project: Optional[str]
-    gcp_region: str
-    gcp_cloud_sql_instance: Optional[str]
     refresh_enabled: bool
     refresh_lock_timeout_minutes: int
     validate_max_country_drop_ratio: float
@@ -51,9 +48,6 @@ def load_price_cache_config(
         sqlite_path=sqlite_path,
         database_url=database_url,
         retain_versions=retain_versions,
-        gcp_project=_blank_to_none(values.get("PRICE_CACHE_GCP_PROJECT")),
-        gcp_region=values.get("PRICE_CACHE_GCP_REGION", "europe-west1").strip() or "europe-west1",
-        gcp_cloud_sql_instance=_blank_to_none(values.get("PRICE_CACHE_GCP_CLOUD_SQL_INSTANCE")),
         refresh_enabled=_bool_or_default(values.get("PRICE_CACHE_REFRESH_ENABLED"), True),
         refresh_lock_timeout_minutes=_int_or_default(
             values.get("PRICE_CACHE_REFRESH_LOCK_TIMEOUT_MINUTES"),
@@ -123,13 +117,14 @@ def validate_price_cache_config(config: PriceCacheConfig) -> None:
 
 
 def _normalize_backend(raw: str) -> str:
-    value = (raw or "sqlite").strip().lower()
+    from app.shared.database import database_backend_alias
+    value = database_backend_alias(raw or "sqlite")
     if value in {"sqlite", "local", "file"}:
         return SQLITE_BACKEND
-    if value in {"postgres", "postgresql", "cloud_sql_postgres", "cloud-sql-postgres"}:
+    if value in {"postgres", "postgresql"}:
         return POSTGRES_BACKEND
     raise ValueError(
-        "Unsupported PRICE_CACHE_BACKEND. Expected sqlite, postgres, or cloud_sql_postgres."
+        "Unsupported PRICE_CACHE_BACKEND. Expected sqlite or postgres."
     )
 
 

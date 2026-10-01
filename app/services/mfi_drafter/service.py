@@ -4,26 +4,28 @@ import inspect
 import uuid
 from importlib.metadata import version
 from .errors import MFIRunError
-from .contracts import WORKFLOW, BUNDLE, MAX_CHARACTERS, MAX_INPUT_TOKENS, MAX_OUTPUT_TOKENS, NODES
-from .runtime import PROFILE, SUMMARY_TIMEOUT_SECONDS, Reporter, RunLedger
+from .contracts import WORKFLOW, BUNDLE, NODES
+from .runtime import Reporter, RunLedger
+from app.shared.llm import create_llm_client, describe_llm_config
 
 
-def effective_contract():
+def effective_contract(llm=None):
     from .contracts import response_schema
     from .prompts import instructions
     from .reliable_contracts import fingerprint
-    return {"workflow": WORKFLOW, "bundle": BUNDLE, "model": PROFILE.model, "location": PROFILE.location,
-        "temperature": PROFILE.temperature, "analysis_schema": "2.1", "narrative_schema": "3.0", "methodology": "databridge-current",
-        "timeout": PROFILE.timeout_seconds, "summary_timeout": SUMMARY_TIMEOUT_SECONDS, "max_attempts": 2, "sdk_retries": 0,
-        "max_characters": MAX_CHARACTERS, "max_input_tokens": MAX_INPUT_TOKENS, "max_output_tokens": MAX_OUTPUT_TOKENS,
+    runtime = llm.describe() if llm is not None else describe_llm_config("mfi-drafter")
+    main = runtime['profiles']['text']
+    return {"workflow": WORKFLOW, "bundle": BUNDLE, **runtime,
+        "temperature": main['temperature'], "analysis_schema": "2.1", "narrative_schema": "3.0", "methodology": "databridge-current",
+        "timeout": main['timeout_seconds'], "summary_timeout": runtime['profiles']['summary']['timeout_seconds'], "max_attempts": 2,
+        "max_characters": main['max_characters'], "max_input_tokens": main['max_input_tokens'], "max_output_tokens": main['max_output_tokens'],
         "schema_hashes": {"sections": fingerprint(response_schema()), "review": fingerprint(response_schema(True))},
         "prompt_hashes": {node: fingerprint(instructions(node)) for node in NODES if node.startswith(("draft_", "review_", "correct_")) or node == "executive_summary"},
-        "dependencies": {name:version(name) for name in ("pydantic", "langgraph", "google-genai")}}
+        "dependencies": {**runtime['dependencies'], **{name: version(name) for name in ("pydantic", "langgraph")}}}
 
 
 def runtime_status():
-    return {"status": "configured", "provider": "vertex_ai", **effective_contract(),
-            "access_validation": "performed_on_invocation"}
+    return {"status": "configured", **effective_contract(), "access_validation": "performed_on_invocation"}
 
 
 PHASE_DESCRIPTIONS = {
@@ -112,7 +114,7 @@ def validate_submission(csv_data):
 
 def run_mfi_report_generation(country, data_collection_start, data_collection_end, markets, csv_data,
         on_step=None, release_control=None, run_id=None, llm_trace_sink=None, *, provider=None):
-    from app.shared.llm import LLMClient, Tracer
+    from app.shared.llm import Tracer
     from .features import require_mfi_analysis_v2
     from .graph import build_graph
     from .map_basemap import preflight_maps
@@ -123,10 +125,12 @@ def run_mfi_report_generation(country, data_collection_start, data_collection_en
         markets=markets, csv_data=csv_data, run_id=run_id)
     ledger = RunLedger(run_id)
     ledger.change(lambda v: v.update(light_phases={name: {"status": "pending"} for name in NODES}))
-    tracer = Tracer(service=PROFILE.service, run_id=run_id)
+    tracer = Tracer(service="mfi-drafter", run_id=run_id)
     reporter = Reporter(ledger, tracer, on_step=on_step, trace_sink=llm_trace_sink)
     tracer.live = lambda _trace: reporter()
-    graph = build_graph(ledger, LLMClient(PROFILE, tracer=tracer, provider=provider), reporter)
+    llm = create_llm_client("mfi-drafter", tracer=tracer, provider=provider)
+    ledger.change(lambda v: v.update(runtime=llm.describe()))
+    graph = build_graph(ledger, llm, reporter)
     try:
         result = graph.invoke({"base": {**inputs, "release_control": control.model_dump()}}, config={"recursion_limit": 30})["report"]
     except Exception:
@@ -136,6 +140,6 @@ def run_mfi_report_generation(country, data_collection_start, data_collection_en
     result["llm_diagnostics"] = diagnostics.pop("llm_diagnostics")
     result["generation_diagnostics"] = diagnostics
     result["response_contract_bundle"] = BUNDLE
-    result["effective_contract"] = effective_contract()
+    result["effective_contract"] = effective_contract(llm)
     result["llm_calls"] = diagnostics["model_attempt_total"]
     return result

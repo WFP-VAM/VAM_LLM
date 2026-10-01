@@ -64,7 +64,7 @@ def create_price_cache_engine(
     if config.backend == POSTGRES_BACKEND:
         if not config.database_url:
             raise ValueError("PRICE_CACHE_DATABASE_URL is required for the postgres price cache backend.")
-        # Cloud Run silently drops idle TCP flows to Cloud SQL; without these
+        # Hosting networks may drop idle TCP flows; without these
         # libpq settings a checked-out dead socket blocks on TCP retransmission
         # for 15+ minutes instead of failing fast for retry_disconnected_read.
         connect_args: Dict[str, Any] = {

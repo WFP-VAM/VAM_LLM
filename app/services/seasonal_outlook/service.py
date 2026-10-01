@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from app.shared.runs.executor import expire_overdue, launch
 from .config import Settings
-from .storage import CloudStore, Conflict, Missing, encode
+from .storage import analysis_store, Conflict, Missing, encode
 from .inputs import prepare, inspect_image, PRODUCTS, regions
 from .engine import initial_state, CHAINS
 from .commands import Create, Upload, ACTIONS
@@ -34,7 +34,7 @@ def key(value):
 
 
 def ordered(operations):
-    """Operations oldest first. Firestore does not keep the insertion order of a map."""
+    """Operations oldest first, independently of the storage representation."""
     return sorted(operations.values(), key=lambda operation: operation['created_at'])
 
 
@@ -52,14 +52,16 @@ class Service:
 
     def info(self):
         errors = self.settings.errors()
+        from app.shared.llm import describe_llm_config
+        runtime = describe_llm_config('seasonal-outlook', settings=self.settings) if not errors else dict(model=None, location=None, profiles={})
         return dict(service='seasonal-outlook', enabled=self.settings.enabled and not errors,
-                    configuration_errors=errors, model=self.settings.model, location=self.settings.location,
+                    configuration_errors=errors, **runtime,
                     regions=regions(), products=PRODUCTS, limits=dict(maps=12, file_bytes=30_000_000, total_bytes=50_000_000, pixels=45_000_000))
 
     def get(self, run_id):
         key(run_id)
         run = self.store.get(run_id)
-        if run.get('workflow_revision') != WORKFLOW_REVISION:
+        if run.get('workflow_revision') != WORKFLOW_REVISION or run.get('runtime_contract_version') != 2:
             raise Gone('This analysis was created by a previous version of the Seasonal Outlook Drafter and '
                        'can no longer be opened. Create a new analysis.')
 
@@ -81,7 +83,7 @@ class Service:
         if set(filters) - {'region_id', 'report_date', 'status'}:
             raise ValueError('Unknown history filter')
         # Analyses of the previous workflow stay listed, but opening one explains that it is gone.
-        return [self.get(r['id']) if r.get('workflow_revision') == WORKFLOW_REVISION else r
+        return [self.get(r['id']) if r.get('workflow_revision') == WORKFLOW_REVISION and r.get('runtime_contract_version') == 2 else r
                 for r in self.store.list(limit=limit, before=before, **filters)]
 
     def _edit(self, run_id, request_id, expected_revision, payload, apply):
@@ -92,6 +94,8 @@ class Service:
         def update(current):
             if current is None:
                 raise Missing('Analysis not found')
+            if current.get('workflow_revision') != WORKFLOW_REVISION or current.get('runtime_contract_version') != 2:
+                raise Gone('This analysis uses a previous runtime. Create a new analysis.')
             if request_id in current['requests']:
                 if current['requests'][request_id]['fingerprint'] != fingerprint:
                     raise Conflict('Request identifier was already used for different input')
@@ -118,10 +122,12 @@ class Service:
 
         def create(current):
             if current:
+                if current.get('workflow_revision') != WORKFLOW_REVISION or current.get('runtime_contract_version') != 2:
+                    raise Gone('This analysis uses a previous runtime. Create a new analysis.')
                 if current['creation_fingerprint'] != fingerprint:
                     raise Conflict('Request identifier was already used for different input')
                 return current
-            return dict(id=run_id, workflow_revision=WORKFLOW_REVISION, revision=1, created_at=self.clock(), updated_at=self.clock(),
+            return dict(id=run_id, workflow_revision=WORKFLOW_REVISION, runtime_contract_version=2, revision=1, created_at=self.clock(), updated_at=self.clock(),
                 creation_fingerprint=fingerprint, region_id=body['region_id'], region=pack['region_label'], report_date=body['report_date'],
                 notes=body.get('notes', ''), status='preparing', maps=[], versions=[], current_evidence=None,
                 confirmation=None, active=None, operations={}, requests={}, artifacts={})
@@ -296,9 +302,11 @@ class Service:
 @lru_cache(maxsize=1)
 def get_service():
     settings = Settings.from_env()
-    if not settings.project or not settings.bucket:
-        raise Unavailable('Seasonal durable storage is not configured: set SEASONAL_PROJECT and SEASONAL_BUCKET')
-    return Service(settings, CloudStore(settings))
+    try:
+        store = analysis_store(settings)
+    except ValueError as exc:
+        raise Unavailable(str(exc)) from exc
+    return Service(settings, store)
 
 
 def service_info():

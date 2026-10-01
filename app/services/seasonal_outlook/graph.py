@@ -30,7 +30,7 @@ def build_graph(llm, recorder, *, timeout, namespace, export):
 
             def validate(_text, response):
                 # Runs after the recorder has stored the response.
-                return accept(name, state, dict(text=response.text, finish_reason=response.finish_reason),
+                return accept(name, state, dict(text=response.text, outcome=response.outcome),
                               f'{namespace}_{name}')
             accepted = llm.generate(llm_request(request, timeout, f'{namespace}_{name}'), validate=validate).value
             return {key: value for key, value in accepted.items() if state.get(key) != value}

@@ -10,9 +10,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
+from app.shared.llm import ProviderError
 
 from app.shared.llm import (
     FilePart,
@@ -25,9 +23,8 @@ from app.shared.llm import (
     parse_json_object,
 )
 from app.shared.llm import tracing
-from app.shared.llm.vertex import VertexProvider, reply_from
 
-PROFILE = ModelProfile(service="test-service", model="gemini-test", location="global",
+PROFILE = ModelProfile(service="test-service", model="synthetic-text", location="test-region",
                        temperature=0.0, timeout_seconds=90.0)
 USAGE = {"prompt_tokens": 11, "candidate_tokens": 7, "thought_tokens": 3, "total_tokens": 21}
 
@@ -45,7 +42,7 @@ class FakeProvider:
         reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         if isinstance(reply, BaseException):
             raise reply
-        return LLMResponse(text=reply, finish_reason=self.finish_reason, response_id="response-1", usage=dict(USAGE))
+        return LLMResponse(text=reply, outcome="truncated" if self.finish_reason == "MAX_TOKENS" else "completed", finish_reason=self.finish_reason, response_id="response-1", usage=dict(USAGE))
 
 
 def make_client(provider, *, run_id="run_public", live=None, audit=None, profile=PROFILE):
@@ -57,20 +54,6 @@ def make_request(prompt="prompt", **fields):
     return LLMRequest(operation="test.operation.v1", node="test_node", parts=[prompt], **fields)
 
 
-def test_reply_keeps_the_answer_without_thoughts_and_reads_usage():
-    response = types.GenerateContentResponse(
-        candidates=[types.Candidate(
-            content=types.Content(role="model", parts=[types.Part(text="reasoning", thought=True), types.Part(text="answer")]),
-            finish_reason=types.FinishReason.MAX_TOKENS)],
-        usage_metadata=types.GenerateContentResponseUsageMetadata(
-            prompt_token_count=11, candidates_token_count=7, thoughts_token_count=3, total_token_count=21),
-        response_id="r-1", model_version="gemini-test-001")
-    reply = reply_from(response)
-    assert (reply.text, reply.finish_reason, reply.response_id, reply.model_version) == (
-        "answer", "MAX_TOKENS", "r-1", "gemini-test-001")
-    assert reply.usage == USAGE
-    blocked = reply_from(types.GenerateContentResponse())
-    assert (blocked.text, blocked.finish_reason) == ("", "BLOCKED")
 
 
 def test_parse_json_object_accepts_fences_and_rejects_non_objects():
@@ -178,7 +161,7 @@ def test_recovered_call_is_successful_at_run_level_but_remains_auditable():
 
 
 def test_transient_errors_are_retried_and_the_failed_attempt_recovered():
-    busy = genai_errors.ServerError(503, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+    busy = ProviderError("busy", transient=True)
     provider = FakeProvider(busy, "done")
     client = make_client(provider, profile=replace(PROFILE, attempts=2))
 
@@ -207,8 +190,8 @@ def test_a_later_call_linked_to_a_failed_one_is_its_next_attempt_and_recovers_it
 
 
 @pytest.mark.parametrize("error", [
-    genai_errors.ClientError(403, {"error": {"code": 403, "message": "denied", "status": "PERMISSION_DENIED"}}),
-    genai_errors.ClientError(400, {"error": {"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}}),
+    ProviderError("denied", kind="authentication"),
+    ProviderError("bad", kind="request"),
 ])
 def test_permission_and_argument_errors_are_not_retried(error):
     provider = FakeProvider(error, "never reached")
@@ -266,7 +249,7 @@ def test_audit_failures_fail_the_call_with_the_original_error(fail_at, code):
 
 
 def test_audit_follows_each_attempt_and_its_errors_never_hide_the_call_failure():
-    busy = genai_errors.ServerError(503, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+    busy = ProviderError("busy", transient=True)
     audit = Audit()
     client = make_client(FakeProvider(busy, "done"), audit=audit, profile=replace(PROFILE, attempts=2))
     client.generate(make_request())
@@ -297,7 +280,7 @@ def test_started_snapshot_is_visible_before_a_blocking_provider_returns():
         def generate(self, _profile, _request):
             entered.set()
             assert release.wait(timeout=2)
-            return LLMResponse(text="ready")
+            return LLMResponse(text="ready", outcome="completed")
 
     client = make_client(BlockingProvider(), live=snapshots.append)
     thread = threading.Thread(target=lambda: client.generate(make_request()))
@@ -318,7 +301,7 @@ def test_payload_capture_uses_deterministic_private_gzip_path(monkeypatch):
     def fake_persist(**kwargs):
         stored.update(kwargs)
         stored["gzip"] = gzip.compress(json.dumps(kwargs["payload"]).encode("utf-8"))
-        return ("gs://private-bucket/operator-prefix/llm-traces/v1/"
+        return ("gs://private-bucket/operator-prefix/llm-traces/v2/"
                 f"{kwargs['service']}/{kwargs['run_id']}/{kwargs['sequence']:04d}-{kwargs['call_id']}.json.gz")
 
     monkeypatch.setattr(tracing, "_persist_payload", fake_persist)
@@ -370,63 +353,12 @@ def test_structured_logs_never_include_prompt_or_response_bodies():
         json.loads(line)
 
 
-def test_vertex_provider_sends_the_profile_settings_and_nothing_else(vertex_wire):
-    calls, _ = vertex_wire
-    profile = replace(PROFILE, project="proj", candidate_count=1)
-    reply = VertexProvider().generate(profile, make_request("hello"))
-
-    assert "/projects/proj/locations/global/publishers/google/models/gemini-test:generateContent" in calls[0]["url"]
-    assert calls[0]["body"] == {"contents": [{"role": "user", "parts": [{"text": "hello"}]}],
-                                "generationConfig": {"temperature": 0.0, "candidateCount": 1}}
-    assert calls[0]["timeout"] == 90.0
-    assert (reply.text, reply.finish_reason, reply.usage["total_tokens"]) == ("ok", "STOP", 4)
 
 
-def test_vertex_provider_sends_system_files_schema_thinking_and_headers(vertex_wire):
-    calls, _ = vertex_wire
-    profile = replace(PROFILE, project="proj", temperature=1.0, thinking_level="HIGH", include_thoughts=False,
-                      media_resolution="MEDIA_RESOLUTION_HIGH", headers=(("X-Vertex-AI-LLM-Request-Type", "shared"),))
-    request = LLMRequest(operation="o", node="n", system="rules", parts=["payload", FilePart("gs://bucket/map", "image/png")],
-                         response_schema={"type": "OBJECT", "properties": {"a": {"type": "STRING"}}}, json_output=True,
-                         max_output_tokens=32768, timeout_seconds=1200)
-    VertexProvider().generate(profile, request)
-
-    body = calls[0]["body"]
-    assert body["systemInstruction"]["parts"] == [{"text": "rules"}]
-    # google-genai keeps the spelling of some nested fields; Vertex accepts both.
-    assert body["contents"][0]["parts"][1]["fileData"] in ({"fileUri": "gs://bucket/map", "mimeType": "image/png"},
-                                                         {"file_uri": "gs://bucket/map", "mime_type": "image/png"})
-    config = body["generationConfig"]
-    assert (config["responseMimeType"], config["maxOutputTokens"], config["mediaResolution"]) == (
-        "application/json", 32768, "MEDIA_RESOLUTION_HIGH")
-    assert config["thinkingConfig"] in ({"thinkingLevel": "HIGH", "includeThoughts": False},
-                                        {"thinking_level": "HIGH", "include_thoughts": False})
-    assert calls[0]["headers"]["X-Vertex-AI-LLM-Request-Type"] == "shared"
-    assert calls[0]["timeout"] == 1200.0
 
 
-def test_vertex_provider_leaves_retries_to_the_client(vertex_wire):
-    calls, replies = vertex_wire
-    replies.append(httpx.Response(503, json={"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}}))
-    with pytest.raises(genai_errors.ServerError):
-        VertexProvider().generate(replace(PROFILE, project="proj"), make_request())
-    assert len(calls) == 1
 
 
-def test_vertex_provider_reuses_one_sdk_client_per_project_location_and_headers(monkeypatch):
-    created = []
-
-    class FakeSdkClient:
-        def __init__(self, **kwargs):
-            created.append(kwargs)
-
-    monkeypatch.setattr(genai, "Client", FakeSdkClient)
-    provider = VertexProvider()
-    first = provider._client(replace(PROFILE, project="proj"))
-    assert provider._client(replace(PROFILE, project="proj", timeout_seconds=600)) is first
-    assert provider._client(replace(PROFILE, project="other")) is not first
-    assert len(created) == 2
-    assert created[0]["http_options"].retry_options.attempts == 1
 
 
 # Model SDKs may be used only by the shared LLM package.

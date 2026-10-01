@@ -7,11 +7,11 @@ partial state); the analyst retries it from the same inputs.
 """
 import time
 
-from app.shared.llm import LLMCallError, LLMClient, Tracer, default_provider
+from app.shared.llm import LLMCallError, Tracer, create_llm_client
 from app.shared.runs.executor import fenced
 from app.shared.util import redact_secrets
 
-from .calls import TEMPERATURE, THINKING_LEVEL, digest, profile
+from .calls import digest
 from .exports import build
 from .graph import build_graph
 from .storage import Conflict
@@ -23,7 +23,7 @@ PUBLISHED_EVIDENCE = {'extract': (('extraction', 'evidence_v1'), ('refinement', 
 
 def llm_provider():
     """The provider Seasonal's calls go through; tests replace it."""
-    return default_provider()
+    return None  # The shared factory resolves the configured adapter; tests may inject a replacement.
 
 
 def _update(service, run_id, operation_id, change, expected='running'):
@@ -61,32 +61,32 @@ class Recorder:
         self.request = request
 
     def requested(self, record, _llm_request):
-        settings, request = self.service.settings, self.request
-        call = dict(stage=request['stage'], status='calling', started_at=self.service.clock(), model=settings.model,
-                    location=settings.location, timeout_seconds=self.timeout, call_id=record.call_id,
+        request = self.request
+        call = dict(stage=request['stage'], status='calling', started_at=self.service.clock(), model=record.model, provider=record.provider,
+                    location=record.location, parameters=record.parameters, timeout_seconds=record.configured_timeout_seconds, call_id=record.call_id,
                     attempt=record.attempt, prompt_version=request['prompt_version'],
                     contract_version=request['contract_version'], prompt_hash=digest(request['system']),
-                    schema_hash=digest(request['schema']), request=self.service.store.put_json(self.run_id, request))
+                    contract_schema_hash=record.contract_schema_hash, transport_schema_hash=record.transport_schema_hash, request=self.service.store.put_json(self.run_id, request))
         self._write(lambda run, operation: operation['calls'].append(call))
         self.started = time.monotonic()
 
     def responded(self, record, response):
         duration = self.elapsed()
-        settings = self.service.settings
-        diagnostic = dict(model=response.model_version or settings.model, requested_model=settings.model,
-                          location=settings.location, started_at=record.started_at, duration_seconds=duration,
-                          timeout_seconds=self.timeout, attempt=record.attempt, thinking=THINKING_LEVEL,
-                          temperature=TEMPERATURE, prompt_hash=digest(self.request['system']),
-                          schema_hash=digest(self.request['schema']),
-                          token_usage=response.raw.get('usage_metadata', {}), response_id=response.response_id)
-        reference = self.service.store.put_json(self.run_id, dict(text=response.text, finish_reason=response.finish_reason,
+        diagnostic = dict(model=response.model_version or record.model, requested_model=record.model,
+                          provider=record.provider, location=record.location, parameters=record.parameters,
+                          started_at=record.started_at, duration_seconds=duration,
+                          timeout_seconds=self.timeout, attempt=record.attempt,
+                          prompt_hash=digest(self.request['system']),
+                          contract_schema_hash=record.contract_schema_hash, transport_schema_hash=record.transport_schema_hash,
+                          token_usage=dict(response.usage), response_id=response.response_id)
+        reference = self.service.store.put_json(self.run_id, dict(text=response.text, outcome=response.outcome, finish_reason=response.finish_reason,
                                                                   raw=response.raw, diagnostic=diagnostic))
 
         def save(run, operation):
             operation['responses'].append(reference)
             operation['calls'][-1].update(diagnostic)
             operation['calls'][-1].update(status='response_saved', response=reference,
-                                          finish_reason=response.finish_reason, duration_seconds=duration)
+                                          outcome=response.outcome, finish_reason=response.finish_reason, duration_seconds=duration)
         self._write(save)
 
     def validated(self, record):
@@ -111,6 +111,7 @@ class Recorder:
 
 def run_phase(service, run_id, operation_id, provider=None):
     """Run the operation's phase to its end in the calling thread; re-raise its failure."""
+    service.get(run_id)  # Refuse previous runtime records before reserving or writing an operation.
     def start(run, op):
         op.update(status='running', started_at=service.clock())
         run['status'] = 'running'
@@ -120,7 +121,9 @@ def run_phase(service, run_id, operation_id, provider=None):
     try:
         # Seasonal's audit already keeps every request and response, so the trace never captures payloads.
         tracer = Tracer(service='seasonal-outlook', run_id=run_id, audit=recorder, capture_payloads=False)
-        llm = LLMClient(profile(service.settings, operation['timeout']), tracer=tracer, provider=provider or llm_provider())
+        llm = create_llm_client('seasonal-outlook', settings=service.settings, timeout=operation['timeout'],
+                                tracer=tracer, provider=provider or llm_provider(), store=service.store)
+        _update(service, run_id, operation_id, lambda run, op: op.update(runtime=llm.describe()))
         graph = build_graph(llm, recorder, timeout=operation['timeout'], namespace=operation_id[:8],
                             export=lambda state: build(state, service.get(run_id), service.store))
         state = graph.invoke({**service.store.json(operation['input']), 'phase': operation['phase']})

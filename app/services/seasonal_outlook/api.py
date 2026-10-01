@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from .service import get_service, ordered, service_info, Gone, Unavailable
 from .storage import Conflict, Missing
+from app.shared.runs.factory import inline_download_limit
 
 
 @dataclass
@@ -13,19 +14,8 @@ class Reply:
     filename: str = ''
 
 
-def _public(data):
-    """Drop storage URIs, which name the bucket; clients read objects through the API instead."""
-    if isinstance(data, dict):
-        return {key: _public(value) for key, value in data.items() if key != 'uri'}
-    if isinstance(data, list):
-        return [_public(value) for value in data]
-    return data
-
-
 def handle(method, parts, body=None, params=None, upload=None):
-    reply = _handle(method, parts, body, params, upload)
-    reply.data = _public(reply.data)
-    return reply
+    return _handle(method, parts, body, params, upload)
 
 
 def _handle(method, parts, body, params, upload):
@@ -70,15 +60,14 @@ def _handle(method, parts, body, params, upload):
                     return Reply(content=service.store.read(ref), mime=ref['mime'])
                 if rest == ['input-package']:
                     ref = service.artifact(run_id, 'input-package.zip')
-                    return Reply(data=dict(url=service.store.signed_url(ref, 'input-package.zip'), expires_in=600))
+                    return Reply(data=service.store.download_link(ref, 'input-package.zip'))
                 if len(rest) == 2 and rest[0] in ('artifacts', 'download-link'):
                     name = rest[1]
                     ref = service.artifact(run_id, name, params.get('operation_id'))
                     if rest[0] == 'download-link':
-                        return Reply(data=dict(url=service.store.signed_url(ref, name), expires_in=600))
-                    # Large exports are delivered directly from GCS, never through
-                    # Cloud Run's response-size ceiling.
-                    if ref['size'] > 20_000_000:
+                        return Reply(data=service.store.download_link(ref, name))
+                    # The shared delivery policy decides when a direct download is required.
+                    if ref['size'] > inline_download_limit('seasonal-outlook'):
                         raise ValueError('Use the download-link endpoint for this large export')
                     return Reply(content=service.store.read(ref), mime=ref['mime'], filename=name)
             if method == 'POST':

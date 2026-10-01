@@ -6,14 +6,13 @@ from typing import Dict, Any
 from app.shared.llm import (
     LLMClient,
     current_tracer,
-    default_provider,
-    market_monitor_profile,
+    create_llm_client,
 )
 
 
 def llm_provider():
     """The provider Market Monitor's calls go through; tests replace it."""
-    return default_provider()
+    return None  # The shared factory selects the adapter; tests may inject one.
 
 
 def llm_client(state: Dict[str, Any]) -> LLMClient:
@@ -23,4 +22,9 @@ def llm_client(state: Dict[str, Any]) -> LLMClient:
         run_id=str(state.get("run_id") or "market-monitor-direct"),
         initial=state.get("llm_diagnostics"),
     )
-    return LLMClient(market_monitor_profile(), tracer=tracer, provider=llm_provider())
+    with tracer._lock:
+        client = getattr(tracer, '_service_client', None)
+        if client is None:
+            client = create_llm_client('market-monitor', tracer=tracer, provider=llm_provider())
+            tracer._service_client = client
+        return client

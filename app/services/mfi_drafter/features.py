@@ -9,6 +9,7 @@ import os
 from typing import Mapping, Optional
 
 from .schemas import MFIReleaseControl
+from app.shared.config import deployment_identity
 
 
 MFI_DRAFTER_ANALYSIS_VERSION_ENV = "MFI_DRAFTER_ANALYSIS_VERSION"
@@ -68,20 +69,11 @@ def mfi_release_control(
         enabled = False
         configuration_status = "invalid"
 
-    deployment_revision = (
-        str(source.get("K_REVISION") or source.get("REVISION_ID") or "").strip()
-        or None
-    )
-    deployment_service = (
-        str(source.get("K_SERVICE") or MFI_DRAFTER_SERVICE_NAME).strip()
-        or MFI_DRAFTER_SERVICE_NAME
-    )
     return MFIReleaseControl(
         analysis_version=analysis_version,
         enabled=enabled,
         configuration_status=configuration_status,
-        service_name=deployment_service,
-        deployment_revision=deployment_revision,
+        **deployment_identity(MFI_DRAFTER_SERVICE_NAME, source),
     )
 
 

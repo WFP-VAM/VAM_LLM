@@ -13,7 +13,7 @@ CHAINS = {'extract': ['extraction', 'review', 'refinement'], 'feedback': ['feedb
 
 def initial_state(pack, maps):
     return dict(pack=pack, images=[dict(figure_id=f['figure_id'], metadata_note=f['metadata_note'],
-                uri=m['object']['uri'], mime=m['object']['mime']) for f, m in zip(pack['figures'], maps)], **profiles())
+                object=dict(m['object'])) for f, m in zip(pack['figures'], maps)], **profiles())
 
 
 def evidence_context(stage, state):
@@ -45,8 +45,8 @@ def stage_request(stage, system, payload, images, schema, version, effective):
 
 def parse_reply(response):
     """The reply's JSON value, refused when the reply is blocked, incomplete or empty."""
-    if response.get('finish_reason') not in ('STOP', 'stop'):
-        raise ValueError('Model response blocked or incomplete: ' + str(response.get('finish_reason')))
+    if response.get('outcome') != 'completed':
+        raise ValueError('Model response blocked or incomplete: ' + str(response.get('outcome')))
     if not response.get('text', '').strip():
         raise ValueError('Empty model response')
     return json.loads(response['text'])

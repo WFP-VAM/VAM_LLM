@@ -7,8 +7,40 @@ this process.
 import copy
 import hashlib
 import json
+import re
 import threading
 from datetime import timedelta
+from typing import Any, Callable, Protocol, TypedDict
+
+
+class ObjectRef(TypedDict):
+    namespace: str
+    key: str
+    sha256: str
+    size: int
+    mime: str
+
+
+class RunStore(Protocol):
+    namespace: str
+    def put(self, run_id: str, data: bytes, mime: str) -> ObjectRef: ...
+    def read(self, ref: ObjectRef) -> bytes: ...
+    def put_json(self, run_id: str, value: Any) -> ObjectRef: ...
+    def json(self, ref: ObjectRef) -> Any: ...
+    def get(self, run_id: str) -> dict: ...
+    def mutate(self, run_id: str, fn: Callable) -> dict: ...
+    def list(self, limit=50, before=None, **filters) -> list[dict]: ...
+    def download_link(self, ref: ObjectRef, filename: str) -> dict: ...
+
+
+class UnsupportedRunVersion(ValueError):
+    """Stored data predating this runtime is neither read nor rewritten."""
+
+
+def require_record_version(record):
+    if record.get("record_version") != 3:
+        raise UnsupportedRunVersion("This run uses a previous storage format. Create a new run.")
+    return record
 
 
 class Conflict(ValueError):
@@ -23,7 +55,27 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
 
 
+DOWNLOAD_TTL_SECONDS = 600
+
+
 class Objects:
+    def validate_ref(self, ref):
+        if not isinstance(ref, dict) or set(ref) != {'namespace', 'key', 'sha256', 'size', 'mime'}:
+            raise ValueError('Invalid object reference')
+        key = ref['key']
+        if (not isinstance(key, str) or not isinstance(ref['sha256'], str)
+                or not re.fullmatch('[0-9a-f]{64}', ref['sha256'])
+                or key.rsplit('/', 1)[-1] != ref['sha256']
+                or type(ref['size']) is not int or ref['size'] < 0
+                or not isinstance(ref['mime'], str) or not ref['mime']):
+            raise ValueError('Invalid object checksum, size or content type')
+        prefix = self.prefix.rstrip('/') + '/'
+        if ref.get('namespace') != self.namespace or not key.startswith(prefix) or any(p in ('', '.', '..') for p in key.split('/')) or '\\' in key:
+            raise ValueError("Object outside this store's namespace")
+
+    def download_link(self, ref, filename):
+        return dict(url=self.signed_url(ref, filename), expires_in=DOWNLOAD_TTL_SECONDS)
+
     def put_json(self, run_id, value):
         return self.put(run_id, encode(value), 'application/json')
 
@@ -33,7 +85,8 @@ class Objects:
 
 class MemoryStore(Objects):
     """Records and objects in this process; never shared with other instances."""
-    def __init__(self, prefix, *, missing='Record not found'):
+    def __init__(self, prefix, *, missing='Record not found', namespace=None):
+        self.namespace = namespace or prefix.strip('/')
         self.prefix, self.missing = prefix.strip('/'), missing
         self.runs, self.objects = {}, {}
         self.lock = threading.RLock()
@@ -43,13 +96,18 @@ class MemoryStore(Objects):
         key = f'{self.prefix}/{run_id}/{sha}'
         with self.lock:
             self.objects[key] = bytes(data)
-        return dict(key=key, sha256=sha, size=len(data), mime=mime, uri='gs://test/' + key)
+        return dict(key=key, sha256=sha, size=len(data), mime=mime, namespace=self.namespace)
 
     def read(self, ref):
+        self.validate_ref(ref)
         data = self.objects[ref['key']]
-        if hashlib.sha256(data).hexdigest() != ref['sha256']:
+        if len(data) != ref['size'] or hashlib.sha256(data).hexdigest() != ref['sha256']:
             raise ValueError('Object checksum mismatch')
         return data
+
+    def download_link(self, ref, filename):
+        self.validate_ref(ref)
+        raise ValueError('Direct download links are unavailable for in-process memory storage')
 
     def get(self, run_id):
         with self.lock:
@@ -79,7 +137,8 @@ class CloudStore(Objects):
     `signer` is the service account that signs download links.
     """
     def __init__(self, *, project, database, collection, bucket, prefix, signer=None,
-                 max_record_bytes=1_000_000, capacity='Record capacity reached', missing='Record not found'):
+                 max_record_bytes=1_000_000, capacity='Record capacity reached', missing='Record not found', namespace=None):
+        self.namespace = namespace or prefix.strip('/')
         from app.shared.cloud import firestore_client, storage_client
         self.db = firestore_client(project, database)
         self.collection = self.db.collection(collection)
@@ -98,25 +157,28 @@ class CloudStore(Objects):
         except PreconditionFailed:
             if hashlib.sha256(blob.download_as_bytes()).hexdigest() != sha:
                 raise ValueError('Immutable object collision')
-        return dict(key=key, sha256=sha, size=len(data), mime=mime, uri=f'gs://{self.bucket.name}/{key}')
+        return dict(key=key, sha256=sha, size=len(data), mime=mime, namespace=self.namespace)
 
     def blob(self, ref):
-        if not ref['key'].startswith(self.prefix) or '..' in ref['key'].split('/'):
-            raise ValueError("Object outside this store's namespace")
+        self.validate_ref(ref)
         return self.bucket.blob(ref['key'])
 
     def read(self, ref):
         data = self.blob(ref).download_as_bytes()
-        if hashlib.sha256(data).hexdigest() != ref['sha256']:
+        if len(data) != ref['size'] or hashlib.sha256(data).hexdigest() != ref['sha256']:
             raise ValueError('Object checksum mismatch')
         return data
+
+    def model_uri(self, ref):
+        self.read(ref)  # Verify the exact immutable original before handing its location to the model.
+        return f"gs://{self.bucket.name}/{ref['key']}"
 
     def signed_url(self, ref, filename):
         import google.auth
         from google.auth.transport.requests import Request
         credentials, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
         credentials.refresh(Request())
-        return self.blob(ref).generate_signed_url(version='v4', expiration=timedelta(minutes=10), method='GET',
+        return self.blob(ref).generate_signed_url(version='v4', expiration=timedelta(seconds=DOWNLOAD_TTL_SECONDS), method='GET',
             service_account_email=self.signer, access_token=credentials.token,
             response_disposition=f'attachment; filename="{filename}"')
 

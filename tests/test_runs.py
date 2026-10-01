@@ -1,5 +1,4 @@
 """The shared run infrastructure: the store, the executor's rules for late or dead work, and report runs."""
-import base64
 import logging
 import threading
 from datetime import datetime
@@ -82,7 +81,7 @@ def clock(monkeypatch):
     return now
 
 
-@pytest.mark.parametrize("backend", [None, "memory", " MEMORY ", "unknown"])
+@pytest.mark.parametrize("backend", [None, "memory", " MEMORY "])
 def test_memory_is_the_default_and_an_explicit_memory_backend_wins(monkeypatch, backend):
     for key in ("RUNS_BACKEND", "RUNS_GCS_URI"):
         monkeypatch.delenv(key, raising=False)
@@ -101,7 +100,8 @@ def test_durable_store_is_selected_by_name_or_by_a_gcs_uri(monkeypatch, backend)
         monkeypatch.setenv("RUNS_BACKEND", backend)
     monkeypatch.setenv("RUNS_GCS_URI", " gs://existing-runs/runs ")
     opened = {}
-    monkeypatch.setattr(report_runs, "CloudStore", lambda **kwargs: opened.update(kwargs) or "cloud")
+    from app.shared.runs import factory
+    monkeypatch.setattr(factory, "CloudStore", lambda **kwargs: opened.update(kwargs) or "cloud")
     assert report_runs._open_store() == "cloud"
     # The existing deployment settings keep their meaning: same database, collection, bucket and prefix.
     assert (opened["database"], opened["collection"], opened["bucket"], opened["prefix"]) == (
@@ -234,30 +234,20 @@ def test_add_and_get_run_artifact_and_a_new_artifact_replaces_its_namesake():
                                      download_path="/x", content="x")
 
 
-def test_records_of_the_previous_store_stay_readable(run_store, monkeypatch, clock):
-    objects = {"gs://old-runs/runs/legacy-gcs/result.json": b'{"country": "Old"}',
-               "gs://old-runs/runs/legacy-gcs/artifacts/a1/rows.csv": b"a,b"}
-    monkeypatch.setattr(report_runs, "read_gcs_uri", lambda uri: objects[uri])
-    common = {"current_node": "END", "progress_pct": 100, "warnings": ["old"], "metadata": {"language": "fr"},
-              "error": None, "traceback": None, "created_at": 900.0, "updated_at": 950.0}
-    artifact = {"artifact_id": "a1", "label": "Rows", "mime_type": "text/csv", "file_name": "rows.csv",
-                "download_path": "/market-monitor/artifacts/legacy/a1"}
-    run_store.runs.update({
-        "legacy-gcs": {**common, "status": "completed", "result": None,
-                       "result_gcs_uri": "gs://old-runs/runs/legacy-gcs/result.json",
-                       "artifacts": [{**artifact, "storage_uri": "gs://old-runs/runs/legacy-gcs/artifacts/a1/rows.csv"}]},
-        "legacy-inline": {**common, "status": "completed", "result": {"country": "Inline"}, "result_gcs_uri": None,
-                          "artifacts": [{**artifact, "inline_content_b64": base64.b64encode(b"x,y").decode()}]},
-        "legacy-running": {**common, "status": "running", "current_node": "news_retrieval", "artifacts": []},
-    })
+@pytest.mark.parametrize("version", [None, 1, 2])
+def test_records_of_previous_versions_are_gone_without_mutation(run_store, version):
+    from copy import deepcopy
+    from app.shared.runs.store import UnsupportedRunVersion
+    old = {"record_version": version, "status": "running", "updated_at": 0, "artifacts": []}
+    run_store.runs["legacy"] = deepcopy(old)
+    with pytest.raises(UnsupportedRunVersion):
+        report_runs.get_run("legacy")
+    with pytest.raises(UnsupportedRunVersion):
+        report_runs.get_run_artifact("legacy", "anything")
+    assert run_store.runs["legacy"] == old
 
-    old = report_runs.get_run("legacy-gcs")
-    assert (old.status, old.warnings, old.metadata, old.result) == ("completed", ["old"], {"language": "fr"}, {"country": "Old"})
-    assert report_runs.get_run_artifact("legacy-gcs", "a1").content == b"a,b"
-    assert report_runs.get_run("legacy-inline").result == {"country": "Inline"}
-    assert report_runs.get_run_artifact("legacy-inline", "a1").content == b"x,y"
 
-    # A run the previous store left "running" forever reads as interrupted once its silence is long enough.
-    assert report_runs.get_run("legacy-running").status == "running"
-    clock[0] = 950.0 + report_runs.DEFAULT_SILENCE_SECONDS
-    assert report_runs.get_run("legacy-running").status == "interrupted"
+def test_unknown_storage_backend_is_not_an_implicit_memory_fallback(monkeypatch):
+    monkeypatch.setenv("RUNS_BACKEND", "unknown")
+    with pytest.raises(ValueError, match="Unknown run storage backend"):
+        report_runs._open_store()

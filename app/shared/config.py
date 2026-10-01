@@ -23,14 +23,9 @@ def configure_logging() -> None:
 
 def resolve_project() -> str:
     """The Google Cloud project for Vertex AI: VERTEX_PROJECT_ID, the usual project variables, then ADC."""
-    project_id = (os.getenv("VERTEX_PROJECT_ID") or "").strip()
+    project_id = configured_project()
     if project_id:
         return project_id
-
-    for key in ("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCP_PROJECT"):
-        candidate = (os.getenv(key) or "").strip()
-        if candidate:
-            return candidate
 
     try:
         import google.auth  # type: ignore
@@ -45,3 +40,26 @@ def resolve_project() -> str:
         "Missing Vertex project id. Set VERTEX_PROJECT_ID (recommended) or "
         "ensure GOOGLE_CLOUD_PROJECT is set."
     )
+
+
+def configured_project():
+    """Explicit project settings, without credential discovery or network access."""
+    project_id = (os.getenv("VERTEX_PROJECT_ID") or "").strip()
+    if project_id:
+        return project_id
+
+    for key in ("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCP_PROJECT"):
+        candidate = (os.getenv(key) or "").strip()
+        if candidate:
+            return candidate
+
+    return None
+
+
+def deployment_identity(service: str, environ=None) -> dict:
+    """Non-secret deployment metadata, with platform aliases confined to shared code."""
+    source = os.environ if environ is None else environ
+    return {
+        "deployment_revision": str(source.get("K_REVISION") or source.get("REVISION_ID") or "").strip() or None,
+        "service_name": str(source.get("K_SERVICE") or service).strip() or service,
+    }

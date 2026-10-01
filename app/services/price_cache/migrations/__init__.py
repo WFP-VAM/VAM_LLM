@@ -69,10 +69,11 @@ def _ensure_migration_table(conn, dialect: str) -> None:
 
 
 def _normalize_dialect(dialect: str) -> str:
-    value = (dialect or "").strip().lower()
+    from app.shared.database import database_backend_alias
+    value = database_backend_alias(dialect)
     if value in {"sqlite", "sqlite3"}:
         return "sqlite"
-    if value in {"postgres", "postgresql", "cloud_sql_postgres"}:
+    if value in {"postgres", "postgresql"}:
         return "postgres"
     raise ValueError(f"Unsupported migration dialect {dialect!r}.")
 

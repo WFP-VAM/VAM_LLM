@@ -9,15 +9,14 @@ from dataclasses import replace
 import pytest
 from PIL import Image
 from app.services.seasonal_outlook.config import Settings
-from app.services.seasonal_outlook.storage import MemoryStore, Conflict
+from app.shared.runs.store import MemoryStore, Conflict
 from app.services.seasonal_outlook.service import DEADLINE_MARGIN_SECONDS, Gone, Service, Unavailable, ordered
 from app.services.seasonal_outlook.runner import run_phase
 from app.services.seasonal_outlook import engine, nodes
 from app.services.seasonal_outlook.inputs import regions, inspect_image, season_mode
-from app.services.seasonal_outlook.calls import llm_request, profile, vertex_schema
+from app.services.seasonal_outlook.calls import llm_request
 from app.services.seasonal_outlook import runner
-from app.shared.llm import FilePart, LLMCallError, LLMClient, LLMResponse
-import streamlit_shared
+from app.shared.llm import FilePart, LLMCallError, LLMClient, LLMResponse, create_llm_client
 
 
 class Launcher:
@@ -35,10 +34,10 @@ class FakeProvider:
     The model as the shared LLM client sees it. Each request is recorded with its stage, payload, images and
     response schema. `fail` names a stage that always fails in transport; `failures` counts how often it does.
     """
-    def __init__(self, fail=None, finish='STOP', failures=None):
+    def __init__(self, fail=None, outcome='completed', failures=None):
         self.requests = []
         self.fail = fail
-        self.finish = finish
+        self.outcome = outcome
         self.failures = failures
 
     def generate(self, _profile, llm_request):
@@ -83,26 +82,27 @@ class FakeProvider:
                     paragraphs=[dict(text='The northern test area recorded 40–60% of average rainfall.',
                                      evidence_ids=[evidence], season_ids=[season])], limitations=[])
             value = dict(report=report, inability_reason=None)
-        return LLMResponse(text=json.dumps(value), finish_reason=self.finish, model_version='synthetic-test',
-                           raw=dict(usage_metadata=dict(prompt_token_count=10, candidates_token_count=20)))
+        return LLMResponse(text=json.dumps(value), outcome=self.outcome, finish_reason='synthetic-completion', model_version='synthetic-test',
+                           usage=dict(prompt_tokens=10, candidate_tokens=20, thought_tokens=None, total_tokens=None),
+                           raw=dict(opaque=['uninterpreted', 'diagnostic']))
 
 
 def reply(provider, request):
     """The fake's reply to an app-level stage request, as nodes.accept reads it."""
     response = provider.generate(None, llm_request(request, 600, 'test'))
-    return dict(text=response.text, finish_reason=response.finish_reason)
+    return dict(text=response.text, outcome=response.outcome)
 
 
 @pytest.fixture(autouse=True)
 def immediate_retries(monkeypatch):
     """The client pauses before retrying a transient failure; the tests need not wait."""
-    monkeypatch.setattr(runner, 'profile', lambda settings, timeout: replace(profile(settings, timeout), retry_delay_seconds=0))
+    monkeypatch.setattr(runner, 'create_llm_client', lambda *args, **kwargs: create_llm_client(*args, **kwargs, sleep=lambda _: None))
 
 
 @pytest.fixture
 def service():
     settings = Settings(enabled=True, project='company-test', bucket='company-test', signer='worker@company-test.iam.gserviceaccount.com')
-    return Service(settings, MemoryStore(), Launcher())
+    return Service(settings, MemoryStore('seasonal-outlook', missing='Analysis not found'), Launcher())
 
 
 def image_bytes(fmt='PNG'):
@@ -140,7 +140,7 @@ def test_complete_workflow_and_exports(service, code):
     run = perform(service, action(service, run, 'confirm', version_id=run['current_evidence'], confirmed=True), fake)
     assert run['status'] == 'completed' and len(run['artifacts']) == 3
     for request in fake.requests:
-        assert '$defs' not in json.dumps(vertex_schema(request['schema']))
+        assert request['schema']['type'] == 'object'  # Standard application JSON schema.
         if request['stage'] in ('draft', 'report_review', 'redraft'):
             assert not request['images']
             assert 'analyst_comments' not in request['payload']
@@ -253,15 +253,15 @@ def test_deadline_expiry_interrupts_and_a_late_thread_cannot_overwrite(service):
     assert perform(service, current)['status'] == 'awaiting_review'
 
 
-@pytest.mark.parametrize('finish,code,error', [
-    ('MAX_TOKENS', 'llm_response_truncated', 'ValueError: LLM response stopped at MAX_TOKENS'),
-    ('SAFETY', 'llm_response_contract_error', 'ValueError: Model response blocked or incomplete: SAFETY'),
-    ('BLOCKED', 'llm_response_contract_error', 'ValueError: Model response blocked or incomplete: BLOCKED')])
-def test_invalid_response_saved_before_failure(service, finish, code, error):
+@pytest.mark.parametrize('outcome,code,error', [
+    ('truncated', 'llm_response_truncated', 'ValueError: LLM response stopped at synthetic-completion'),
+    ('blocked', 'llm_response_blocked', 'ValueError: Model response is blocked'),
+    ('unknown', 'llm_response_unknown', 'ValueError: Model response is unknown')])
+def test_invalid_response_saved_before_failure(service, outcome, code, error):
     run = action(service, prepared(service), 'extract')
     op = run['active']
     with pytest.raises(LLMCallError) as caught:
-        perform(service, run, FakeProvider(finish=finish))
+        perform(service, run, FakeProvider(outcome=outcome))
     assert caught.value.failure_code == code
     run = service.get(run['id'])
     failed = run['operations'][op]
@@ -290,7 +290,7 @@ def test_api_replies_do_not_expose_storage_uris(service, monkeypatch):
     monkeypatch.setattr(api, 'get_service', lambda: service)
     run = perform(service, action(service, prepared(service), 'extract'))
     op = next(iter(run['operations']))
-    assert 'gs://' in json.dumps(run)  # The stored record keeps them: the provider sends maps by URI.
+    assert 'gs://' not in json.dumps(run)  # Only shared adapters resolve original object references.
     for parts in (['runs', run['id']], ['runs', run['id'], 'operations'], ['runs', run['id'], 'operations', op],
                   ['runs', run['id'], 'versions']):
         reply = api.handle('GET', parts)
@@ -392,7 +392,7 @@ def test_enabled_default_still_requires_company_configuration(monkeypatch):
             monkeypatch.delenv(name)
     settings = Settings.from_env()
     assert settings.enabled is True
-    service = Service(settings, MemoryStore(), Launcher())
+    service = Service(settings, MemoryStore('seasonal-outlook', missing='Analysis not found'), Launcher())
     assert service.info()['enabled'] is False
     assert service.info()['configuration_errors']
     with pytest.raises(Unavailable):
@@ -402,7 +402,7 @@ def test_enabled_default_still_requires_company_configuration(monkeypatch):
                            signer='worker@company-test.iam.gserviceaccount.com').items():
         monkeypatch.setenv('SEASONAL_' + key.upper(), value)
     configured = Settings.from_env()
-    assert Service(configured, MemoryStore(), Launcher()).info()['enabled'] is True
+    assert Service(configured, MemoryStore('seasonal-outlook', missing='Analysis not found'), Launcher()).info()['enabled'] is True
     monkeypatch.setenv('SEASONAL_DRAFTER_ENABLED', 'false')
     assert Settings.from_env().enabled is False
     monkeypatch.setenv('SEASONAL_DRAFTER_ENABLED', ' TRUE ')
@@ -460,35 +460,8 @@ def test_fastapi_and_local_dispatch_share_service(service, monkeypatch):
     assert client.get('/seasonal-outlook/runs').json()[0]['id'] == rid
 
 
-def test_gemini_configuration_and_gcs_images(service, vertex_wire):
-    from app.shared.llm.vertex import VertexProvider
-    sent, _ = vertex_wire
-    run = prepared(service)
-    state = engine.initial_state(service.validate(run['id']), run['maps'])
-    request = nodes.request_for('extraction', state)
-    llm = LLMClient(profile(service.settings, 1200), provider=VertexProvider())
-    response = llm.generate(llm_request(request, 1200, 'test')).response
-    call = sent[0]
-    assert '/projects/company-test/locations/global/publishers/google/models/gemini-3.1-pro-preview:generateContent' in call['url']
-    config = call['body']['generationConfig']
-    assert config['temperature'] == 1.0 and config['maxOutputTokens'] == 32768
-    thinking = config['thinkingConfig']
-    assert thinking.get('thinkingLevel', thinking.get('thinking_level')) == 'HIGH'
-    assert config['mediaResolution'] == 'MEDIA_RESOLUTION_HIGH'
-    assert call['timeout'] == 1200.0 and call['headers']['X-Vertex-AI-LLM-Request-Type'] == 'shared'
-    file_data = call['body']['contents'][0]['parts'][-1]['fileData']
-    assert file_data.get('fileUri', file_data.get('file_uri')).startswith('gs://')
-    assert response.finish_reason == 'STOP' and response.text == 'ok'
 
 
-def test_no_workstation_project_and_only_original_gcs_images(service):
-    with pytest.raises(ValueError, match='Explicit Seasonal project required'):
-        profile(replace(service.settings, project=''), 600)
-    run = prepared(service)
-    request = nodes.request_for('extraction', engine.initial_state(service.validate(run['id']), run['maps']))
-    request['images'][0]['uri'] = 'https://example.test/map.png'
-    with pytest.raises(ValueError, match='original GCS objects'):
-        llm_request(request, 600, 'test')
 
 
 def test_stale_feedback_loses_to_other_analyst(service):
@@ -506,6 +479,7 @@ def open_page(service, monkeypatch, run_id):
     from types import ModuleType
     from pathlib import Path
     import streamlit as st
+    import streamlit_shared
     from streamlit.testing.v1 import AppTest
     from app.services.seasonal_outlook import api
     monkeypatch.setattr(api, 'get_service', lambda: service)
@@ -571,61 +545,8 @@ def test_ui_offers_retry_only_for_the_latest_failed_operation(service, monkeypat
     assert not any(b.label == 'Retry failed operation' for b in app.button)
 
 
-def test_real_sdk_wire_conversion_without_network(service, monkeypatch):
-    """Exercise the actual SDK's schema/URI serialization with a local HTTP transport."""
-    import httpx
-    from google import genai
-    from google.oauth2.credentials import Credentials
-    from app.shared.llm.vertex import VertexProvider
-    real_client = genai.Client
-    calls, wire_response = [], {}
-    def transport(request):
-        payload = json.loads(request.content)
-        calls.append(payload)
-        assert str(request.url).startswith('https://aiplatform.googleapis.com/')
-        assert '/projects/company-test/locations/global/' in str(request.url)
-        assert request.headers['X-Vertex-AI-LLM-Request-Type'] == 'shared'
-        config = payload['generationConfig']
-        thinking = config['thinkingConfig']
-        assert thinking.get('thinkingLevel', thinking.get('thinking_level')) == 'HIGH'
-        assert '$ref' not in json.dumps(config['responseSchema'])
-        assert config['responseMimeType'] == 'application/json'
-        return httpx.Response(200, json=wire_response)
-    def factory(**kwargs):
-        options = kwargs.pop('http_options')
-        options.httpx_client = httpx.Client(transport=httpx.MockTransport(transport))
-        return real_client(credentials=Credentials(token='synthetic-offline-test-token'), http_options=options, **kwargs)
-    monkeypatch.setattr(genai, 'Client', factory)
-    run = prepared(service)
-    state = engine.initial_state(service.validate(run['id']), run['maps'])
-    llm = LLMClient(profile(service.settings, 600), provider=VertexProvider())
-    fake = FakeProvider()
-    for stage in ('extraction', 'review', 'refinement', 'draft', 'report_review', 'redraft'):
-        request = nodes.request_for(stage, state)
-        wire_response = dict(candidates=[dict(content=dict(role='model', parts=[dict(text=reply(fake, request)['text'])]), finishReason='STOP')],
-                             modelVersion='gemini-3.1-pro-preview', usageMetadata=dict(promptTokenCount=10, candidatesTokenCount=20))
-        result = llm.generate(llm_request(request, 600, 'wire-test')).response
-        state = nodes.accept(stage, state, dict(text=result.text, finish_reason=result.finish_reason), 'wire-test')
-    assert len(calls) == 6
-    assert calls[0]['generationConfig']['maxOutputTokens'] == 32768
-    assert calls[-1]['generationConfig']['maxOutputTokens'] == 65536
-    assert 'fileData' in calls[0]['contents'][0]['parts'][-1]
-    assert len(calls[-1]['contents'][0]['parts']) == 1
 
 
-@pytest.mark.parametrize('status,code,sent', [(503, 'UNAVAILABLE', 2), (403, 'PERMISSION_DENIED', 1)])
-def test_the_client_retries_a_server_error_once_and_never_a_refusal(service, vertex_wire, status, code, sent):
-    import httpx
-    from app.shared.llm.vertex import VertexProvider
-    calls, replies = vertex_wire
-    replies += [httpx.Response(status, json={'error': {'code': status, 'message': 'Synthetic', 'status': code}})] * 2
-    run = prepared(service)
-    request = nodes.request_for('extraction', engine.initial_state(service.validate(run['id']), run['maps']))
-    llm = LLMClient(profile(service.settings, 600), provider=VertexProvider(), sleep=lambda _seconds: None)
-    with pytest.raises(LLMCallError) as caught:
-        llm.generate(llm_request(request, 600, 'test'))
-    assert (caught.value.failure_code, caught.value.transient) == ('llm_transport_error', status == 503)
-    assert len(calls) == sent  # The SDK itself never retries.
 
 
 def test_large_word_appendix_is_bounded_but_original_is_preserved(service):

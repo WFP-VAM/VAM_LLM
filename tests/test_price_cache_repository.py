@@ -47,7 +47,7 @@ def test_config_defaults_to_local_sqlite(monkeypatch):
     assert config.backend == "sqlite"
     assert config.sqlite_path == Path(".tmp/price_cache.sqlite3")
     assert config.retain_versions == 3
-    assert config.gcp_region == "europe-west1"
+    assert not hasattr(config, "gcp_region")
 
 
 def test_config_rejects_postgres_without_database_url(monkeypatch):

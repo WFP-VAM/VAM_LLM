@@ -43,7 +43,7 @@ class Provider:
             response = {"needs_revision":family in self.changes,"review_markdown":"Check the evidence and correct the affected passage."}
         else:
             response = {"sections":[{"section_id":sid,"text_markdown":f"{kind}: supported analysis for {sid}."} for sid in ids],"notes":[]}
-        return LLMResponse(text=json.dumps(response), usage={"prompt_tokens":100,"candidate_tokens":50,"total_tokens":150})
+        return LLMResponse(outcome="completed", text=json.dumps(response), usage={"prompt_tokens":100,"candidate_tokens":50,"total_tokens":150})
 
 
 RELEASE = MFIReleaseControl(analysis_version="2",enabled=True,configuration_status="configured")

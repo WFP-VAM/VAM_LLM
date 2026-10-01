@@ -7,30 +7,27 @@ The run's own work may write only while the run is pending or running and within
 accepted write moves the deadline on. A run whose work falls silent for longer than its drafter allows, for
 example because the server restarted, reads as interrupted, and its work can no longer write to it.
 
-The result and the artifacts are immutable objects, read only when asked for. Records written by the
-previous run store (`async_runs`) stay readable.
+The result and the artifacts are immutable objects, read only when asked for. Records from previous storage formats must be regenerated.
 """
 from __future__ import annotations
 
-import base64
 import json
 import logging
-import os
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional
 
-from app.shared.cloud import parse_gcs_uri, read_gcs_uri
+from .factory import create_store
 
 from .executor import Superseded, expire_overdue, fenced
-from .store import CloudStore, MemoryStore, Missing
+from .store import Missing, UnsupportedRunVersion, require_record_version
 
 RunStatus = Literal["pending", "running", "completed", "failed", "interrupted"]
 
 ACTIVE = ("pending", "running")
-RECORD_VERSION = 2
+RECORD_VERSION = 3
 # How long a run's work may go without writing to it before the run reads as interrupted.
 DEFAULT_SILENCE_SECONDS = 1800
 INTERRUPTED = "The report stopped before it finished, for example because the server restarted. Generate it again."
@@ -52,8 +49,6 @@ class RunArtifactDescriptor:
 @dataclass
 class RunArtifact(RunArtifactDescriptor):
     content: bytes = b""
-    storage_uri: Optional[str] = None
-    inline_content_b64: Optional[str] = None
 
 
 class RunRecord:
@@ -106,21 +101,7 @@ _STORE_LOCK = threading.Lock()
 
 
 def _open_store() -> Any:
-    backend = (os.getenv("RUNS_BACKEND") or "").strip().lower()
-    uri = (os.getenv("RUNS_GCS_URI") or "").strip()
-    durable = backend in {"firestore_gcs", "firestore", "gcs"} or (backend == "" and bool(uri))
-    if not durable:
-        return MemoryStore("runs", missing="Run not found")
-    bucket, prefix = parse_gcs_uri(uri, name="RUNS_GCS_URI")
-    return CloudStore(
-        project=None,
-        database=(os.getenv("RUNS_FIRESTORE_DATABASE") or "").strip() or "vam-llm-async",
-        collection=(os.getenv("RUNS_FIRESTORE_COLLECTION") or "").strip() or "async_runs",
-        bucket=bucket,
-        prefix=prefix or "runs",
-        capacity="The run record is too large to store",
-        missing="Run not found",
-    )
+    return create_store("report-runs")
 
 
 def _store() -> Any:
@@ -167,8 +148,7 @@ def _plain(value: Any) -> Any:
 def _deadline(record: Dict[str, Any]) -> float:
     if record.get("deadline"):
         return float(record["deadline"])
-    # A record of the previous store: its last write is the last sign of life.
-    return float(record.get("updated_at") or record.get("created_at") or 0) + DEFAULT_SILENCE_SECONDS
+    return float(record["updated_at"]) + DEFAULT_SILENCE_SECONDS
 
 
 def _overdue(record: Optional[Dict[str, Any]]) -> bool:
@@ -182,6 +162,7 @@ def _interrupt(record: Dict[str, Any]) -> None:
 def _work_write(run_id: str, change: Callable[[Dict[str, Any]], None]) -> Dict[str, Any]:
     """A write by the run's own work: refused once the run has ended or is overdue; accepted, it moves the deadline."""
     def apply(current: Dict[str, Any]) -> None:
+        require_record_version(current)
         change(current)
         current["deadline"] = clock() + int(current.get("silence_seconds") or DEFAULT_SILENCE_SECONDS)
 
@@ -255,7 +236,14 @@ def create_run(run_id: str, *, service: str, silence_seconds: int = DEFAULT_SILE
         "deadline": now + silence_seconds,
     }
     try:
-        _store().mutate(run_id, lambda _current: record)
+        def create(current):
+            if current is not None:
+                require_record_version(current)
+                raise ValueError("Run identifier already exists")
+            return record
+        _store().mutate(run_id, create)
+    except UnsupportedRunVersion:
+        raise
     except Exception as exc:
         logger.exception("Run %s could not be created", run_id)
         raise RunStoreUnavailable("Run storage is unavailable; the run was not started.") from exc
@@ -265,7 +253,9 @@ def get_run(run_id: str) -> Optional[RunRecord]:
     """The run, or None if it does not exist or cannot be read. Overdue work reads as interrupted."""
     try:
         store = _store()
-        record = store.get(run_id)
+        record = require_record_version(store.get(run_id))
+    except UnsupportedRunVersion:
+        raise
     except Missing:
         return None
     except Exception:
@@ -293,12 +283,8 @@ def get_run(run_id: str) -> Optional[RunRecord]:
 
 
 def _read_result(store: Any, record: Dict[str, Any]) -> Any:
-    if record.get("result_object"):
-        return store.json(record["result_object"])
-    uri = record.get("result_gcs_uri")  # written by the previous store
-    if isinstance(uri, str) and uri.strip():
-        return json.loads(read_gcs_uri(uri))
-    return record.get("result")
+    require_record_version(record)
+    return store.json(record["result_object"]) if record.get("result_object") else None
 
 
 def update_run(
@@ -409,7 +395,9 @@ def add_run_artifact(
 def get_run_artifact(run_id: str, artifact_id: str) -> Optional[RunArtifact]:
     try:
         store = _store()
-        record = store.get(run_id)
+        record = require_record_version(store.get(run_id))
+    except UnsupportedRunVersion:
+        raise
     except Missing:
         return None
     except Exception:
@@ -419,19 +407,9 @@ def get_run_artifact(run_id: str, artifact_id: str) -> Optional[RunArtifact]:
                  if isinstance(item, dict) and str(item.get("artifact_id") or "") == artifact_id), None)
     if item is None:
         return None
-    storage_uri, inline = item.get("storage_uri"), item.get("inline_content_b64")
     try:
-        if item.get("object"):
-            content = store.read(item["object"])
-        elif isinstance(storage_uri, str) and storage_uri.strip():  # written by the previous store
-            content = read_gcs_uri(storage_uri)
-        elif isinstance(inline, str) and inline:
-            content = base64.b64decode(inline)
-        else:
-            return None
+        content = store.read(item["object"])
     except Exception:
         logger.exception("Artifact %s of run %s could not be read", artifact_id, run_id)
         return None
-    return RunArtifact(**asdict(_descriptor(item)), content=content,
-                       storage_uri=storage_uri if isinstance(storage_uri, str) else None,
-                       inline_content_b64=inline if isinstance(inline, str) else None)
+    return RunArtifact(**asdict(_descriptor(item)), content=content)

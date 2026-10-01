@@ -1,4 +1,4 @@
-"""Small operational GLM contracts; identifiers and provenance belong to Python."""
+"""Small operational report contracts; identifiers and provenance belong to Python."""
 import copy
 from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, create_model, model_validator

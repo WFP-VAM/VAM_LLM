@@ -9,7 +9,8 @@ app/services/market_monitor/data/
 app/docker.env
 app/price_data.csv
 
-docs/
+docs/*
+!docs/cloud-provider-boundary.md
 
 # Local-only Full MFI regression benchmarks (never commit assessment data).
 MFI Test Databases/

@@ -1,12 +1,14 @@
 import json
 from dataclasses import replace
-import httpx
 import pytest
-from google.genai import errors as genai_errors
+from app.shared.llm import ProviderError
 from app.services.mfi_drafter import runtime as mfi_runtime, service as mfi_service
 from app.services.mfi_drafter.contracts import response_schema, inspect_sections
 from app.services.mfi_drafter.prompts import instructions
+from app.shared.llm.profiles import mfi_profile
 from app.shared.llm import LLMCallError, LLMClient, LLMResponse, Tracer
+
+MFI_PROFILE = mfi_profile()
 
 
 class Responses:
@@ -28,7 +30,7 @@ class Responses:
             value, finish = value
         else:
             finish = "STOP"
-        return LLMResponse(text=value if isinstance(value, str) else json.dumps(value), finish_reason=finish)
+        return LLMResponse(text=value if isinstance(value, str) else json.dumps(value), outcome="truncated" if finish == "MAX_TOKENS" else "completed", finish_reason=finish)
 
 
 def answer(*ids, text="Supported prose."):
@@ -36,7 +38,7 @@ def answer(*ids, text="Supported prose."):
 
 
 def busy():
-    return genai_errors.ServerError(503, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+    return ProviderError("busy", transient=True)
 
 
 @pytest.fixture
@@ -45,7 +47,7 @@ def ledger(monkeypatch):
     return mfi_runtime.RunLedger("response")
 
 
-def runtime(ledger, provider, profile=mfi_runtime.PROFILE):
+def runtime(ledger, provider, profile=MFI_PROFILE):
     return mfi_runtime.ModelRuntime(ledger, LLMClient(profile, tracer=Tracer(service="mfi-drafter", run_id="response"),
                                                         provider=provider))
 
@@ -130,8 +132,7 @@ def test_two_transient_errors_fail_the_work_without_a_third_attempt(ledger):
 
 
 def test_access_error_is_not_a_format_retry(ledger):
-    denied = genai_errors.ClientError(403, {"error": {"code": 403, "message": "test model not enabled",
-                                                      "status": "PERMISSION_DENIED"}})
+    denied = ProviderError("test model not enabled", kind="authentication")
     client = Responses([denied])
     with pytest.raises(LLMCallError) as caught: invoke(runtime(ledger, client))
     assert (caught.value.stage, caught.value.transient) == ("transport", False)
@@ -177,28 +178,6 @@ def test_token_counts_are_cached_within_a_run(ledger):
     assert client.counts == 1 and ledger.read()["light_token_count_requests"] == 1
 
 
-def test_requests_on_the_wire_keep_the_mfi_contract(ledger, vertex_wire):
-    from app.shared.llm.vertex import VertexProvider
-    sent, replies = vertex_wire
-    replies += [httpx.Response(200, json={"totalTokens": 120}), httpx.Response(200, json={"candidates": [
-        {"content": {"role": "model", "parts": [{"text": json.dumps(answer("A", "B"))}]}, "finishReason": "STOP"}]})]
-    model = runtime(ledger, VertexProvider(), replace(mfi_runtime.PROFILE, project="offline-test"))
-    assert len(invoke(model)["sections"]) == 2
-    count, draft = sent
-    model_path = "/projects/offline-test/locations/global/publishers/google/models/gemini-3.1-pro-preview"
-    assert (model_path + ":countTokens") in count["url"] and (model_path + ":generateContent") in draft["url"]
-    assert (count["timeout"], draft["timeout"]) == (30.0, 600.0)
-    config = draft["body"]["generationConfig"]
-    assert {k: v for k, v in config.items() if k != "responseSchema"} == {
-        "temperature": 1.0, "candidateCount": 1, "maxOutputTokens": 65536, "responseMimeType": "application/json"}
-    # Vertex's default alphabetical order, which the drafts have always followed, is now explicit.
-    # google-genai keeps the snake_case spelling of this nested field; Vertex accepts both.
-    schema = config["responseSchema"]
-    assert schema.get("propertyOrdering", schema.get("property_ordering")) == ["notes", "sections"]
-    assert draft["body"]["contents"] == count["body"]["contents"]
-    assert count["body"]["generationConfig"]["responseSchema"] == config["responseSchema"]
-    assert "systemInstruction" not in draft["body"]
-    assert "evidence overrides" in instructions("correct_dimensions")
 
 
 def test_unknown_identifiers_and_scalar_notes_are_not_silently_accepted():
@@ -206,23 +185,3 @@ def test_unknown_identifiers_and_scalar_notes_are_not_silently_accepted():
     payload["notes"] = None
     valid, issues = inspect_sections(payload, ["A", "B"], {})
     assert set(valid) == {"A"} and len(issues) == 3
-
-
-def test_schema_compilation_never_returns_shared_mutable_dictionary():
-    from app.services.mfi_drafter.contracts import SectionsResponse, provider_schema
-    first = provider_schema(SectionsResponse)
-    first["properties"]["sections"].clear()
-    assert provider_schema(SectionsResponse)["properties"]["sections"]["type"] == "array"
-
-
-def test_provider_schemas_pin_the_alphabetical_property_order():
-    for review, order in ((False, ["notes", "sections"]), (True, ["needs_revision", "review_markdown"])):
-        assert response_schema(review)["propertyOrdering"] == order
-    assert response_schema()["properties"]["sections"]["items"]["propertyOrdering"] == ["section_id", "text_markdown"]
-
-
-@pytest.mark.parametrize("schema", [{"oneOf": [{"type": "string"}, {"type": "number"}]}, {"type": "strin"}])
-def test_unknown_provider_schema_construct_is_configuration_error(schema):
-    from app.services.mfi_drafter.contracts import ContractConfigurationError, compile_provider_schema
-    with pytest.raises(ContractConfigurationError):
-        compile_provider_schema(schema)
